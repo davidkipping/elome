@@ -177,6 +177,61 @@ def test_fp32_model_matches_fp64(kw):
     assert np.abs(d32 - d64).max() < 3e-7
 
 
+
+def _count_ring_calls(m, monkeypatch):
+    """The number of times each ring-graph call sees, per call."""
+    sizes, orig = [], m._ring_fn
+
+    def spy(orbit):
+        fn = orig(orbit)
+
+        def run(tt, *a):
+            sizes.append(tt.shape[-1])
+            return fn(tt, *a)
+        return run
+    monkeypatch.setattr(m, "_ring_fn", spy)
+    return sizes
+
+
+@pytest.mark.parametrize("pkw,mkw", [
+    ({}, {}), (dict(ecc=0.3, w=40.0), {}), (dict(f=0.2, ring_tau=0.4), {}),
+    ({}, dict(integration="contact", exp_time=EXP)),
+    ({}, dict(supersample_factor=3, exp_time=EXP)),
+    (dict(ecc=0.2, w=40.0), dict(dtype=mx.float32, use_metal=False))],
+    ids=["circular", "eccentric", "oblate, translucent", "contact", "supersampled",
+         "fp32 graph"])
+def test_long_grids_are_evaluated_in_blocks(pkw, mkw, monkeypatch):
+    """The ring graph holds ~20 KB per time point until evaluated, so
+    light_curve and light_curves evaluate it in blocks of _RING_BLOCK times:
+    the same curve, bit for bit."""
+    from elome import api
+    p = P(**pkw)
+    m = el.TransitModel(p, T, **mkw)
+    sets = [p, P(**{**pkw, "ring_f": 0.9, "ring_tau": 0.3, "theta": 80.0})]
+    whole, whole_sets = m.light_curve(p), m.light_curves(sets)
+    monkeypatch.setattr(api, "_RING_BLOCK", 50)
+    sizes = _count_ring_calls(m, monkeypatch)
+    n = m._t_mx.size
+    nb = -(-n // 50)
+    blocks = [-(-n // nb)] * nb            # equal blocks, the last padded
+    assert np.array_equal(m.light_curve(p), whole)
+    assert sizes == blocks
+    assert np.array_equal(m.light_curves(sets), whole_sets)
+    assert sizes == 2 * blocks
+
+
+@pytest.mark.skipif(not el.metal_available(), reason="needs Metal")
+def test_ring_kernels_are_not_blocked(monkeypatch):
+    """The fp32 ring kernels hold no per-point graph: one call."""
+    from elome import api
+    monkeypatch.setattr(api, "_RING_BLOCK", 50)
+    p = P()
+    m = el.TransitModel(p, T, dtype=mx.float32)
+    sizes = _count_ring_calls(m, monkeypatch)
+    m.light_curve(p)
+    m.light_curves([p, P(rp=0.07)])
+    assert sizes == [T.size, T.size]
+
 def test_errors():
     with pytest.raises(ValueError, match="hybrid law"):
         el.TransitModel(P(limb_dark="quadratic", u=[0.4, 0.2]), T)

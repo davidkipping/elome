@@ -5,6 +5,17 @@ every release is tagged `vX.Y.Z` in git.
 
 ## [Unreleased]
 
+## [0.18.4] — 2026-10-18
+
+### Changed
+- **Ringed planets in float64: memory capped at about 1 GB.** The ring
+  graph holds about 20 KB per time point until it is evaluated, so a
+  10^6-point light curve needed about 34 GB. `light_curve` and
+  `light_curves` now evaluate it in blocks of 32,768 times: about 1 GB at
+  any length, bit for bit the same light curve, no slower (10^6 points:
+  43 s -> 41 s). `light_curve_mx`, whose graph the caller evaluates, is
+  unchanged. The float32 GPU ring kernels were not affected.
+
 ## [0.18.3] — 2026-10-18
 
 ### Changed
