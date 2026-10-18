@@ -973,9 +973,10 @@ class TransitModel:
     # The oblate route's structure, with rings_tau's graph: time since each
     # point's own mid-transit, then metal.flux_dev_from_tau(ring_in=, ...).
     # An fp32 GPU model takes the ring Metal kernels (metal_rings); fp64 and
-    # use_metal=False the graph -- uncompiled: MLX 0.32's mx.compile fails
-    # on it (an internal "unordered_map::at" error once two outlines' arc
-    # weights are in one graph; the eager graph is exact).
+    # use_metal=False the graph -- not compiled whole: MLX 0.32's mx.compile
+    # fails on it (an internal "unordered_map::at" error once the orbit and
+    # the ring's columns are in one graph). On the CPU the columns alone
+    # run compiled (rings._shape_cols_compiled).
 
     def _ring_fn(self, orbit: str):
         """The compiled ringed-planet model; ``orbit`` as _oblate_fn's."""

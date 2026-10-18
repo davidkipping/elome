@@ -416,10 +416,37 @@ def shape_cols_ring(x0, y0, rp, f, ring_in, ring_out, ring_f, ring_tau, law) -> 
     dt = x0.dtype
     _check_ring(f, ring_in, ring_out, ring_f, ring_tau)
     args = [_to_dtype(v, dt) for v in (y0, rp, f, ring_in, ring_out, ring_f, ring_tau)]
-    gen = generator_cols_ring(x0, *args, law)
+    from .metal import _gpu_stream_active
+    if _gpu_stream_active():
+        return _shape_cols(law)(x0, *args)
+    return _shape_cols_compiled(law)(x0, *args)
+
+
+def _shape_cols(law):
     S = law.generator_matrix()
-    cols = [gen[0]] + [_combine(gen, S[j]) for j in range(law.n_w)]
-    return mx.stack(cols, axis=-1)
+
+    def cols(x0, y0, rp, f, ring_in, ring_out, ring_f, ring_tau):
+        gen = generator_cols_ring(x0, y0, rp, f, ring_in, ring_out, ring_f,
+                                  ring_tau, law)
+        return mx.stack([gen[0]] + [_combine(gen, S[j]) for j in range(law.n_w)],
+                        axis=-1)
+    return cols
+
+
+# On the CPU the columns' graph is compiled once per law (fused: ~2x faster
+# in float64, ~3x for short light curves). Only this piece: MLX 0.32's
+# mx.compile fails ("unordered_map::at") when the orbit feeding it is traced
+# in the same graph, so the callers around it stay eager. Not on the GPU,
+# where MLX's fused Metal kernels for this graph abort (the float32 GPU
+# route is metal_rings' own kernels; the graph there is use_metal=False).
+_COMPILED = {}
+
+
+def _shape_cols_compiled(law):
+    fn = _COMPILED.get(law.definition)
+    if fn is None:
+        fn = _COMPILED[law.definition] = mx.compile(_shape_cols(law))
+    return fn
 
 
 @fp64_on_cpu(any_arg=True)

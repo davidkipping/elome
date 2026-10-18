@@ -5,6 +5,18 @@ every release is tagged `vX.Y.Z` in git.
 
 ## [Unreleased]
 
+## [0.18.3] — 2026-10-18
+
+### Changed
+- **Ringed planets in float64 (and the float32 graph on the CPU): about
+  2x faster.** The ring's limb-darkening columns now run as one compiled
+  MLX graph per law (10^5 points: 7.6 s -> 4.1 s for one light curve).
+  The orbit around them stays uncompiled -- MLX 0.32's `mx.compile` still
+  fails when both are in one graph (0.32.4 included) -- and so does the
+  float32 graph on the GPU (`use_metal=False`), where MLX's fused kernels
+  for it abort. The GPU kernels and spherical and oblate models are
+  unchanged.
+
 ## [0.18.2] — 2026-10-17
 
 ### Changed
