@@ -23,7 +23,9 @@ limb-darkened star. Everything Elómë offers is available for it:
    integration.
 4. {doc}`fitting`: sampling the posterior with anvil, emcee or your
    own sampler.
-5. If you write your own likelihood:
+5. {doc}`accuracy-and-cost`: against batman, PyTransit, jaxoplanet and
+   exoplanet-core.
+6. If you write your own likelihood:
    {doc}`../guides/batching`, {doc}`../guides/gradients-and-precision`
    and {doc}`../guides/sampler-api`.
 

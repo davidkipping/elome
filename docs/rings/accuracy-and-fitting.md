@@ -55,6 +55,69 @@ An oblate planet with the same ring costs 10–20% more. The gradients
 are in every input, the ring's included; the contact-rule times include
 finding each chain's kinks.
 
+## Against other ringed-planet codes
+
+The other public codes for ringed planets are
+[pyPplusS](https://github.com/edanrein/pyPplusS),
+[squishyplanet](https://github.com/ben-cassese/squishyplanet)'s
+`RingedSystem`, [JoJo](https://github.com/Flippedx/JoJo)'s `ring_lc` and
+[pryngles](https://github.com/seap-udea/pryngles-public)' `RingedPlanet`.
+
+| | Elómë | pyPplusS | squishyplanet | JoJo | pryngles |
+|---|---|---|---|---|---|
+| limb darkening | hybrid2/4/5 | nonlinear (four coefficients), quadratic | polynomial of any order | quadratic | linear, quadratic, nonlinear |
+| ring | optical depth | blocked fraction | opaque only | blocked fraction | optical depth |
+| planet | spherical or oblate | spherical | triaxial | spherical | spherical |
+| method | Green's theorem, closed forms | areas of polygons and segments, quadrature over the limb darkening | Green's theorem; the planet's arc by quadrature | Green's theorem; the $\mu$ term by a 300-step sum | sampling by points ("spangles") |
+| precision | float64 (CPU), float32 (GPU) | float64 | float64 | float64 | float64, sampling-limited |
+| input | orbit (circular, eccentric), or sky positions | sky positions | orbit | orbit | orbit |
+| finite exposures | contact rule, supersampling | none | oversampling | none | none |
+| gradients | analytic, every parameter | none | automatic (JAX) | none | none |
+| many parameter sets | native batch | loop | `jax.vmap` | loop | loop |
+| also | | any convex occultor (in its paper) | | contact times | reflected light, shadows, polarisation, moons |
+
+The benchmark is the spherical transit of {doc}`../spherical/accuracy-and-cost`
+with a ring from 1.4 to 2.6 planet radii, `ring_f = 0.7` and its long
+axis at 25° to the motion, so the ring crosses the planet's disc; and
+the one limb-darkening profile every code expresses exactly,
+$I(\mu) = 1 - 0.5\,(1 - \mu^2)$. The reference is an independent float64
+ray integral (`benchmarks/ring_compare/`):
+
+| | Elómë float32 (GPU) | pyPplusS | squishyplanet | JoJo | pryngles | Elómë float64 (CPU) |
+|---|---:|---:|---:|---:|---:|---:|
+| error, opaque ring | $1.0\times10^{-7}$ | $5.6\times10^{-7}$ | $5.6\times10^{-16}$ | $1.1\times10^{-14}$ | $4.7\times10^{-3}$ | $2.2\times10^{-16}$ |
+| error, translucent ($\tau = 0.6$) | $1.1\times10^{-7}$ | $4.8\times10^{-7}$ | opaque only | $9.7\times10^{-15}$ | $4.1\times10^{-3}$ | $1.1\times10^{-16}$ |
+| error, nearly edge-on (`ring_f = 0.95`) | $1.0\times10^{-7}$ | $4.5\times10^{-6}$ | $7.8\times10^{-16}$ | $8.6\times10^{-15}$ | $9.6\times10^{-4}$ | $1.1\times10^{-16}$ |
+| one light curve, $N = 10^3$ | 1.6 ms | 0.46 s | 43 ms | 69 ms | 0.12 s | 73 ms |
+| one light curve, $N = 10^5$ | 4.0 ms | 38 s | 4.1 s | 7.2 s | 12 s | 4.1 s |
+| one light curve, $N = 10^6$ | 34 ms | | 40 s | 86 s | | 41 s |
+| 512 sets × $10^4$ points | 0.21 s | about 2,000 s | about 510 s | about 350 s | about 2,700 s | |
+| value + gradient, $N = 10^5$ | 17 ms | no gradients | 20 s | no gradients | no gradients | 11 s |
+| memory, $N = 10^5$ | 13 MB | 111 MB | 255 MB | 125 MB | 75 MB | 1.1 GB |
+| memory, $N = 10^6$ | 34 MB | | 548 MB | 26 GB | | 1.4 GB |
+
+The batches of the slower codes were timed on 8 to 32 sets and scaled to
+512. pyPplusS is shown at its default order; at order 20 its error is
+$4\times10^{-10}$ and it takes about 3.5 times as long. pryngles samples
+5,000 points on the planet and 5,000 on the ring. Memory is measured as
+for oblate planets (see {doc}`../oblate/accuracy-and-cost`); Elómë's
+float64 path evaluates long light curves in blocks of 32,768 points,
+which caps it near 1.4 GB.
+
+Two of these codes have limitations worth knowing, in the versions
+benchmarked (pryngles 1.0.2, JoJo 0.1.0):
+
+- **pryngles** adds the ring's blocked light to the planet's even where
+  the ring lies over the planet's disc, so that area counts twice; that
+  is most of its error above. Against an exact model with the same
+  double count it agrees to its sampling noise ($3\times10^{-5}$), and
+  where the ring does not cross the planet's disc it is accurate to
+  that noise.
+- **JoJo** is exact when the planet's disc crosses the ring band, as
+  here. When the planet sits inside the ring's gap, `ring_lc` makes the
+  ring $1/\sqrt{1 - f_r}$ too large, about 1% of the flux for
+  $f_r = 0.2$.
+
 ## Fitting a ringed planet
 
 Everything in {doc}`../oblate/fitting` about oblate planets applies:

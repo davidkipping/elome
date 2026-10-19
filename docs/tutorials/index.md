@@ -8,7 +8,7 @@ with their outputs, and the notebooks themselves are in the repository's
 |---|---|---|
 | {doc}`01_elome_with_anvil` | A tour of the forward model (orbits, limb darkening, exposures, batching), then a fit of Kepler-like photometry with anvil's gradient-based HMC. | `elome`, `anvil` |
 | {doc}`02_joint_transit_and_gp` | A transit and correlated stellar variability fitted together: Elómë as the mean model and a Gaussian process over the residual, all twelve parameters sampled at once. | `elome`, `anvil`, `anvilgp` (not yet public) |
-| {doc}`03_spherical_and_oblate_planets` | Spherical and oblate planets side by side: light curves, hybrid limb darkening, exposures, gradients, batching and the sampler API for each, then what is new for an oblate planet. | `elome` |
+| {doc}`03_spherical_and_oblate_planets` | Spherical, oblate and ringed planets side by side: light curves, hybrid limb darkening, exposures, gradients, batching and the sampler API, then what is new for an oblate planet and for a ring. | `elome` |
 
 `matplotlib` is optional: every cell also prints its numbers.
 

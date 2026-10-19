@@ -1,4 +1,4 @@
-"""Regenerate docs/tutorials/03_spherical_and_oblate_planets.ipynb.
+"""Regenerate docs/tutorials/03_spherical_and_oblate_planets.ipynb (and ringed).
 
     python docs/tutorials/build_03.py docs/tutorials/03_spherical_and_oblate_planets.ipynb
 
@@ -18,27 +18,27 @@ def code(text): CELLS.append(("code", text.strip("\n")))
 
 
 md(r"""
-# Spherical and oblate planets with Elómë
+# Spherical, oblate and ringed planets with Elómë
 
 Elómë computes transit light curves -- `(parameters, times) -> flux` --
 and that map's derivatives, on the CPU in float64 or on an Apple GPU in
 float32. The planet may be **spherical** (a disc on the sky) or
 **oblate** (an ellipse on the sky: a rotationally flattened planet, or one
-seen with its pole tilted).
+seen with its pole tilted), and either may carry a flat **ring**.
 
-The two cases share one API, but they are worth learning separately,
+The cases share one API, but they are worth learning separately,
 because they differ in what they can do and in what they cost:
 
-| | spherical planet | oblate planet |
-|---|---|---|
-| shape on the sky | disc, radius `rp` | ellipse: area-equivalent radius `rp`, flattening `f`, angle `theta` |
-| limb darkening | uniform, linear, quadratic, polynomial, hybrid2/4/5 | hybrid2/4/5 |
-| cost (fp32 GPU) | ~0.2 ns per point | tens of times more (B8) |
-| switch | leave `f` as `None` (the default) | set `f` |
+| | spherical planet | oblate planet | ringed planet |
+|---|---|---|---|
+| shape on the sky | disc, radius `rp` | ellipse: area-equivalent radius `rp`, flattening `f`, angle `theta` | the planet, plus an elliptical annulus: `ring_in`, `ring_out`, `ring_f`, `ring_tau`, angle `theta` |
+| limb darkening | uniform, linear, quadratic, polynomial, hybrid2/4/5 | hybrid2/4/5 | hybrid2/4/5 |
+| cost (fp32 GPU) | ~0.2 ns per point | tens of times more (B8) | 10-20x an oblate planet (C4) |
+| switch | leave `f` as `None` (the default) | set `f` | set `ring_in` |
 
 **Part A** walks through a spherical planet; **Part B** repeats the same
-steps for an oblate one and adds what is new. Everything runs in about a
-minute. Figures need `matplotlib`; without it every cell still prints its
+steps for an oblate one and adds what is new; **Part C** adds a ring.
+Everything runs in about a minute. Figures need `matplotlib`; without it every cell still prints its
 numbers.
 """)
 
@@ -523,7 +523,7 @@ evaluations, and the spherical kernel is so cheap per evaluation that the
 oblate one is ~60x it there. In absolute terms an oblate planet
 on the GPU is still far faster than the CPU codes for oblate planets -- see
 [Accuracy and cost](../oblate/accuracy-and-cost.md) (squishyplanet, JoJo,
-GreenLantern).
+GreenLantern, eclipsoid).
 """)
 
 md("""
@@ -592,28 +592,162 @@ for bad in (dict(limb_dark="quadratic", u=[0.4, 0.25]), dict(rp=0.6, f=0.5)):
         print(f"{bad}: ValueError: {err}")
 """)
 
+md(r"""
+# Part C -- a ringed planet
+
+## C1. A first ringed light curve
+
+A ring is a flat annulus around the planet's equator, seen as an
+elliptical annulus on the sky. Its radii `ring_in` and `ring_out` are in
+**planet radii**; `ring_f` is its projected flattening, $1 - |\cos i|$
+for a ring tilted by $i$ from face-on (0 face-on, near 1 edge-on);
+`theta` turns it on the sky, as it turns an oblate planet; and
+`ring_tau` is its normal optical depth (`None` for opaque). Below, the
+spherical hybrid5 planet of B2 with a Saturn-like ring.
+""")
+
+code("""
+pr = copy.copy(ps)                       # the spherical hybrid5 planet of B2 ...
+pr.ring_in, pr.ring_out = 1.4, 2.6       # ... with a ring, in planet radii
+pr.ring_f, pr.theta = 0.7, 25.0          # |cos i| = 0.3; long axis 25 deg from the motion
+pr.ring_tau = None                       # opaque
+
+mr = el.TransitModel(pr, t_hr)
+flux_ring = mr.light_curve(pr)
+hours = lambda f_: (f_ < 1).sum() * (t_hr[1] - t_hr[0]) * 24
+print(f"depth: ringed {(1 - flux_ring.min()) * 1e6:.0f} ppm, bare planet {(1 - flux_sph.min()) * 1e6:.0f} ppm")
+print(f"duration: ringed {hours(flux_ring):.2f} h, bare planet {hours(flux_sph):.2f} h")
+
+if HAVE_PLT:
+    fig, ax = plt.subplots(1, 2, figsize=(10, 3.4))
+    ax[0].plot(t_hr * 24, flux_sph, label="bare planet")
+    ax[0].plot(t_hr * 24, flux_ring, label="with the ring")
+    ax[0].set_xlabel("time from mid-transit [h]"); ax[0].set_ylabel("flux"); ax[0].legend()
+    from matplotlib.patches import Circle, Ellipse
+    A_o, A_i = 2.6 * 0.1, 1.4 * 0.1
+    ax[1].add_patch(Circle((0, 0), 1, color="gold", alpha=0.6))
+    ax[1].add_patch(Ellipse((0, -0.46), 2 * A_o, 2 * A_o * 0.3, angle=25.0, color="k", alpha=0.5))
+    ax[1].add_patch(Ellipse((0, -0.46), 2 * A_i, 2 * A_i * 0.3, angle=25.0, color="gold"))
+    ax[1].add_patch(Circle((0, -0.46), 0.1, color="k"))
+    ax[1].set_xlim(-1.1, 1.1); ax[1].set_ylim(-1.1, 1.1); ax[1].set_aspect("equal"); ax[1].axis("off")
+    ax[1].set_title("at mid-transit")
+    plt.tight_layout(); plt.show()
+""")
+
+md(r"""
+## C2. Optical depth and tilt
+
+A translucent ring blocks the fraction $T = 1 - e^{-\tau/|\cos i|}$ of
+the light behind it, so the light curve is exactly linear in $T$, between
+the bare planet ($T = 0$) and the opaque ring ($T = 1$). Tilting the ring
+towards edge-on shrinks its area but raises $T$. The ring's values change
+between calls on one model; only whether a ring is present is fixed.
+""")
+
+code("""
+def with_ring(**kw):
+    q = copy.copy(pr)
+    for k, v in kw.items():
+        setattr(q, k, v)
+    return mr.light_curve(q)
+
+print(f"ring_tau = 0 (transparent) vs the bare planet: {np.abs(with_ring(ring_tau=0.0) - flux_sph).max():.1e}")
+T = -math.expm1(-0.6 / (1 - pr.ring_f))
+lin = flux_sph + T * (flux_ring - flux_sph)
+print(f"ring_tau = 0.6 (T = {T:.3f}) vs the linear mix of bare and opaque: "
+      f"{np.abs(with_ring(ring_tau=0.6) - lin).max():.1e}")
+for rf in (0.0, 0.5, 0.7, 0.9, 0.99):
+    f_ = with_ring(ring_f=rf, ring_tau=0.1)
+    T_ = -math.expm1(-0.1 / (1 - rf))
+    print(f"ring_tau = 0.1, ring_f = {rf:4.2f}: T = {T_:.3f}, "
+          f"depth beyond the bare planet {(flux_sph.min() - f_.min()) * 1e6:5.0f} ppm")
+""")
+
+md(r"""
+## C3. Gradients in the ring
+
+`light_curve_mx` differentiates in every ring field and in `theta`, as in
+every other parameter. A translucent ring here, so `ring_tau` has a
+gradient too (an opaque ring is `ring_tau = None`, a constant).
+""")
+
+code("""
+t_g = np.linspace(-0.12, 0.12, 401)
+names = ("ring_in", "ring_out", "ring_f", "ring_tau", "theta")
+x0 = [1.4, 2.6, 0.7, 0.6, 25.0]
+pg = copy.copy(pr)
+pg.ring_tau = 0.6
+mg = el.TransitModel(pg, t_g)
+
+with mx.stream(mx.cpu):
+    def loss(*vals):
+        q = copy.copy(pg)
+        for k, v in zip(names, vals):
+            setattr(q, k, v)
+        return mx.sum(mg.light_curve_mx(q))
+    arr64 = lambda v: mx.array(v, dtype=mx.float64)
+    g = mx.grad(loss, argnums=tuple(range(len(names))))(*map(arr64, x0))
+    for i, name in enumerate(names):
+        h = 1e-6 * max(1.0, x0[i])
+        up, dn = list(x0), list(x0)
+        up[i] += h; dn[i] -= h
+        fd = (float(loss(*map(arr64, up))) - float(loss(*map(arr64, dn)))) / (2 * h)
+        print(f"d(sum flux)/d {name:8s}: autodiff {float(g[i]):+.6e}  finite difference {fd:+.6e}")
+""")
+
+md("""
+## C4. The GPU, and the cost
+
+A float32 model runs fused Metal kernels for ringed planets too. Every
+outline -- the planet and both ring edges -- is integrated, each split
+into arcs where it crosses the others, so a ring costs about 10-20 times
+an oblate planet.
+""")
+
+code("""
+mr32 = el.TransitModel(pr, t_big, dtype=mx.float32)
+print("fp32 vs fp64, one ringed set:",
+      f"{np.abs(mr32.light_curve(pr) - el.TransitModel(pr, t_big).light_curve(pr)).max():.1e}")
+k_r = timeit(lambda: mx.eval(el.flux_dev_from_tau(tau_b, 3.456, 8.8, b_b, rp_b,
+                                                  limb_dark="hybrid5", u=w_b, theta=th_b,
+                                                  ring_in=1.4, ring_out=2.6, ring_f=0.7)))
+print(f"flux_dev_from_tau on the GPU, {n_sets} sets x {t_big.size:,} points: "
+      f"spherical {k_s:.2f} ms, oblate {k_o:.1f} ms, ringed {k_r:.1f} ms "
+      f"({k_r / k_o:.0f}x oblate)")
+""")
+
+md("""
+In float64 on the CPU, a ringed light curve takes about 40 microseconds
+per point -- seconds for $10^5$ points -- which is fine for a single
+curve but not for a sampler; use float32 on the GPU for fitting. See
+[Ringed planets](../rings/index.md) for the geometry, exposures and
+fitting, and [Accuracy, cost and fitting](../rings/accuracy-and-fitting.md)
+for the comparison with other ringed-planet codes.
+""")
+
 md("""
 # Summary
 
-| | spherical | oblate |
-|---|---|---|
-| turn on | default (`f = None`) | `p.f`, `p.theta` [deg]; `flux_dev_from_tau(f=, theta=)` [rad] |
-| limb darkening | any | hybrid2 / hybrid4 / hybrid5 |
-| float64 accuracy | ~1e-16 | ~1e-16 (vs a 30-digit integral) |
-| float32 (GPU) accuracy | ~1e-7 | ~1e-7 |
-| exposures, eccentric orbits, gradients, batching, `ld_basis` | yes | yes |
-| cost (fp32 GPU) | ~0.2 ns per point | tens of times that (15-32x; B8 measures this notebook's case); ~60x under the contact rule |
+| | spherical | oblate | ringed |
+|---|---|---|---|
+| turn on | default (`f = None`) | `p.f`, `p.theta` [deg]; `flux_dev_from_tau(f=, theta=)` [rad] | `p.ring_in`, `ring_out`, `ring_f`, `ring_tau`, `theta`; the same keywords in `flux_dev_from_tau` |
+| limb darkening | any | hybrid2 / hybrid4 / hybrid5 | hybrid2 / hybrid4 / hybrid5 |
+| float64 accuracy | ~1e-16 | ~1e-16 (vs a 30-digit integral) | ~1e-16 (vs brute-force integrals) |
+| float32 (GPU) accuracy | ~1e-7 | ~1e-7 | ~1e-7 |
+| exposures, eccentric orbits, gradients, batching, `ld_basis` | yes | yes | yes |
+| cost (fp32 GPU) | ~0.2 ns per point | tens of times that (15-32x; B8 measures this notebook's case); ~60x under the contact rule | 10-20x an oblate planet (C4) |
 
 ## Where to go next
 
 * [Oblate planets](../oblate/index.md) -- the geometry, light curves,
   accuracy and cost, and fitting.
+* [Ringed planets](../rings/index.md) -- the same for a planet with a ring.
 * [The hybrid limb-darkening laws](../reference/hybrid-laws.md) -- their
   definitions and priors.
 * [Many parameter sets at once](../guides/batching.md) -- batching for
   samplers.
 * [Accuracy and cost](../oblate/accuracy-and-cost.md) -- against
-  squishyplanet, JoJo and GreenLantern.
+  squishyplanet, JoJo, GreenLantern and eclipsoid.
 * [Tutorial 1](01_elome_with_anvil.ipynb) -- fitting a transit with anvil's HMC.
 """)
 

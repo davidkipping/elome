@@ -98,6 +98,7 @@ spherical/index
 spherical/light-curves
 spherical/limb-darkening
 spherical/large-occultors
+spherical/accuracy-and-cost
 spherical/fitting
 ```
 
