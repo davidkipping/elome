@@ -5,6 +5,8 @@ every release is tagged `vX.Y.Z` in git.
 
 ## [Unreleased]
 
+## [0.18.6] — 2026-10-19
+
 ### Fixed
 - **Gradients at a round planet and a face-on ring.** `f = 0` and
   `ring_f = 0` are the edges of the uniform priors and where fits start,
