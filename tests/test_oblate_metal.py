@@ -5,7 +5,7 @@ an independent quadrature (test_oblate.py, test_oblate_tau.py). Here: the
 device functions point by point on the oblate stress sets (columns and
 the dual-number gradient); the tau kernels against the fp64 graph under every rule, orbit
 and law, scalar and basis; the hand-assembled VJP against fp64 autodiff in
-every input; the documented d/df = 0 below the fp32 switch; per-chain
+every input; d/df below the fp32 switch, down to f = 0; per-chain
 independence; a no-NaN sweep; and the kernel routing.
 """
 
@@ -232,21 +232,22 @@ def test_vjp_matches_fp64_autodiff(law, basis, integration, extra):
         for name, a64, a32 in zip(_NAMES, g64, g32):
             if basis and name == "w":
                 continue
-            if name == "f" and case[2] < F_SW:
-                continue                      # documented: zero below f_sw
             assert np.isfinite(a32).all(), (name, case)
             scale = max(np.abs(a64).max(), 1e-3 * np.abs(g64[4]).max())
             assert np.abs(a32 - a64).max() <= 1e-3 * scale, (name, case)
 
 
-def test_d_df_is_zero_below_the_switch():
-    """Below f_sw = 1e-5 a chain takes the spherical columns, so d/df is 0
-    there (the flattening moves the flux by < 4e-8, fp32's noise)."""
-    g = _grads(mx.float32, "none", {}, 0.4, 0.1, 0.5 * F_SW, 0.4, None,
-               "hybrid4", False)
-    assert float(np.abs(g[5]).max()) == 0.0
-    g = _grads(mx.float32, "none", {}, 0.4, 0.1, 0.1, 0.4, None, "hybrid4", False)
-    assert float(np.abs(g[5]).max()) > 0.0
+@pytest.mark.parametrize("integration,extra", [("none", {}), ("contact", {"exp_time": EXP})])
+@pytest.mark.parametrize("f", [0.0, 0.5 * F_SW])
+def test_d_df_below_the_switch(f, integration, extra):
+    """Below f_sw = 1e-5 a chain's value is the spherical columns' (the
+    flattening moves the flux by < 4e-8, fp32's noise), but its slope in f
+    is not 0: d/df is the ellipse's at f_sw, the graph's at f = 0 to O(f_sw)
+    -- a fit can start at the sphere."""
+    g64 = _grads(mx.float64, integration, extra, 0.4, 0.1, f, 0.4, None, "hybrid4", False)
+    g32 = _grads(mx.float32, integration, extra, 0.4, 0.1, f, 0.4, None, "hybrid4", False)
+    assert float(np.abs(g64[5]).max()) > 0.0
+    assert np.abs(g32[5] - g64[5]).max() <= 1e-3 * np.abs(g64[5]).max()
 
 
 # ---------------------------------------------------------------------------

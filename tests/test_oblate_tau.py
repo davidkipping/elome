@@ -35,6 +35,26 @@ def flux(tau, b, r, law="hybrid5", **kw):
                       dtype=np.float64)
 
 
+@pytest.mark.parametrize("dtype", [mx.float64, mx.float32], ids=["fp64", "fp32"])
+def test_d_df_at_the_sphere(dtype):
+    """f = 0 (a prior's edge, a fit's natural start): the value is the
+    sphere's, but d/df is the oblate slope, not 0, in both precisions of the
+    graph -- against a one-sided difference in fp64."""
+    ct = np.random.default_rng(1).normal(size=TAU.size)
+
+    def L(f, dt):
+        return mx.sum(mx.array(ct, dtype=dt) * el.flux_dev_from_tau(
+            mx.array(TAU, dtype=dt), P, A_RS, 0.3, 0.08, limb_dark="hybrid5",
+            u=W["hybrid5"], f=f, theta=0.4))
+    with mx.stream(mx.cpu):
+        h = 1e-6
+        v = [L(x, mx.float64).item() for x in (0.0, h, 2 * h)]
+        fd = (-3.0 * v[0] + 4.0 * v[1] - v[2]) / (2 * h)
+        g = mx.grad(lambda f: L(f, dtype))(mx.array(0.0, dtype=dtype)).item()
+    assert abs(fd) > 1e-5
+    assert abs(g - fd) < (1e-6 if dtype == mx.float64 else 1e-4) * abs(fd)
+
+
 def kh(e, w):
     return math.sqrt(e) * math.cos(w), math.sqrt(e) * math.sin(w)
 

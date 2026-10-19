@@ -31,9 +31,10 @@ forward computes, with the same frozen pieces as the graph's autodiff. The
 orbit, the principal frame and the axes then chain by hand.
 
 Below f_sw = 1e-5 a chain takes the spherical hybrid columns (the reference
-graph's switch in fp32), with d/df = 0 there: the flattening's own effect,
-~4e-3 f of a column, is under 4e-8 below the switch -- fp32 noise -- so a
-sampler loses nothing it could resolve.
+graph's switch in fp32): the flattening's own effect, ~4e-3 f of a column,
+is under 4e-8 below the switch -- fp32 noise. Its slope is not, so the VJP
+takes d/df there from the ellipse at f = f_sw (an O(f_sw) bias, as the
+graph): a fit can start at f = 0.
 """
 
 from __future__ import annotations
@@ -920,7 +921,8 @@ inline void ob_cols_bd(float X, float Y, float r, float fl, float cth,
                        float sth, float sqf, thread const float *wct,
                        thread float *Bc, thread float *g) {
     for (int c = 0; c < 5; ++c) g[c] = 0.0f;
-    if (fl < OB_FSW) {
+    bool sph = fl < OB_FSW;
+    if (sph) {
         float z2 = X * X + Y * Y;
         float z = metal::precise::sqrt(max(z2, KITE_FLOOR));
         float Bz[HYB_NCOL], Br[HYB_NCOL];
@@ -929,10 +931,12 @@ inline void ob_cols_bd(float X, float Y, float r, float fl, float cth,
         for (int c = 0; c < HYB_NCOL; ++c) { gz += wct[c] * Bz[c]; fr += wct[c] * Br[c]; }
         if (z2 > KITE_FLOOR) { g[0] = gz * X / z; g[1] = gz * Y / z; }
         g[2] = fr;
-        return;
     }
+    // the ellipse; below f_sw only for d/df, taken at f = f_sw (an O(f_sw)
+    // bias): a sphere's light curve has a nonzero slope in f
+    float sq = sph ? metal::precise::sqrt(1.0f - OB_FSW) : sqf;
     float x0 = X * cth + Y * sth, y0 = -X * sth + Y * cth;
-    float A = r / sqf, B = r * sqf;
+    float A = r / sq, B = r * sq;
     ob_frozen fz;
     ob_solve(x0, y0, A, B, fz);
     dv gen[HYB_NGEN];
@@ -941,20 +945,21 @@ inline void ob_cols_bd(float X, float Y, float r, float fl, float cth,
                 dv(A, float4(0.0f, 0.0f, 1.0f, 0.0f)),
                 dv(B, float4(0.0f, 0.0f, 0.0f, 1.0f)),
                 fz, x0, y0, A, B, gen);
-    float gv[HYB_NGEN];
-    for (int c = 0; c < HYB_NGEN; ++c) gv[c] = gen[c].v;
-    ob_shape(gv, Bc);
     // d(wct . B)/d(x0, y0, A, B): B = -[G_0, S G]
     float4 t = -wct[0] * gen[0].d;
     for (int j = 0; j < HYB_NW; ++j)
         for (int c = 0; c < HYB_NGEN; ++c)
             t -= (wct[j + 1] * HYB_SMAT[j * HYB_NGEN + c]) * gen[c].d;
-    // chain: x0 = X c + Y s, y0 = -X s + Y c; A = r/sqf, B = r sqf
+    // chain: x0 = X c + Y s, y0 = -X s + Y c; A = r/sq, B = r sq
+    float omf = sq * sq;
+    g[3] = (t.z * A - t.w * B) / (2.0f * omf);
+    if (sph) return;
+    float gv[HYB_NGEN];
+    for (int c = 0; c < HYB_NGEN; ++c) gv[c] = gen[c].v;
+    ob_shape(gv, Bc);
     g[0] = t.x * cth - t.y * sth;
     g[1] = t.x * sth + t.y * cth;
-    g[2] = t.z / sqf + t.w * sqf;
-    float omf = sqf * sqf;
-    g[3] = (t.z * A - t.w * B) / (2.0f * omf);
+    g[2] = t.z / sq + t.w * sq;
     g[4] = t.x * y0 - t.y * x0;
 }
 """

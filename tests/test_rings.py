@@ -32,6 +32,7 @@ CASES = {
     "oblate planet": (0.4, 0.3, 0.08, 0.1, 1.2, 2.2, 0.7, np.inf),
     "oblate planet on the limb": (0.9, -0.3, 0.07, 0.2, 1.3, 2.5, 0.85, 0.3),
     "face-on ring": (0.3, 0.1, 0.08, 0.0, 1.5, 2.5, 0.0, np.inf),
+    "face-on ring, centred": (0.0, 0.0, 0.08, 0.0, 1.5, 2.5, 0.0, 0.6),
     "ring covers the star": (0.1, 0.05, 0.4, 0.0, 1.2, 6.0, 0.2, 0.4),
 }
 
@@ -183,7 +184,8 @@ def test_shape_columns_and_flux():
 
 
 GRAD_CASES = ["inner edge cut", "both edges cut, translucent", "four limb crossings",
-              "planet off the star", "centred", "oblate planet on the limb"]
+              "planet off the star", "centred", "oblate planet on the limb",
+              "face-on ring", "face-on ring, centred"]
 
 
 def _grads(cs, corners=True):
@@ -199,15 +201,17 @@ def _grads(cs, corners=True):
         with mx.stream(mx.cpu):
             ad = np.array([g.item() for g in mx.grad(F, argnums=list(range(8)))(*args)])
             fd = np.zeros(8)
+            at = lambda i, d: F(*[arr(v + (d if j == i else 0.0), mx.float64)
+                                  for j, v in enumerate(cs)]).item()
             for i in range(8):
-                if not np.isfinite(cs[i]) or (i in (3, 6) and cs[i] == 0.0):
-                    continue                    # f = 0 / ring_f = 0: the circle switch
+                if not np.isfinite(cs[i]):
+                    continue
                 h = 1e-6 * max(abs(cs[i]), 0.1)
-                up, dn = list(cs), list(cs)
-                up[i] += h
-                dn[i] -= h
-                fd[i] = (F(*[arr(v, mx.float64) for v in up]).item()
-                         - F(*[arr(v, mx.float64) for v in dn]).item()) / (2 * h)
+                if i in (3, 6) and cs[i] == 0.0:
+                    # f = 0 / ring_f = 0, a circle (the prior's edge): one-sided
+                    fd[i] = (-3.0 * at(i, 0.0) + 4.0 * at(i, h) - at(i, 2 * h)) / (2 * h)
+                else:
+                    fd[i] = (at(i, h) - at(i, -h)) / (2 * h)
     finally:
         rings._h = saved
     return ad, fd
@@ -217,8 +221,7 @@ def _grads(cs, corners=True):
 def test_gradients_match_finite_differences(name):
     cs = CASES[name]
     ad, fd = _grads(cs)
-    skip = [i for i in range(8) if not np.isfinite(cs[i]) or (i in (3, 6) and cs[i] == 0.0)]
-    keep = [i for i in range(8) if i not in skip]
+    keep = [i for i in range(8) if np.isfinite(cs[i])]
     assert np.isfinite(ad).all()
     assert np.max(np.abs(ad - fd)[keep]) < 1e-7 * np.max(np.abs(fd[keep]))
 

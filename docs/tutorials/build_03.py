@@ -381,10 +381,10 @@ md("""
 
 At `f = 0` the oblate model equals the spherical one to rounding, and for
 small `f` it departs smoothly and linearly (in float64, checked below).
-One caveat for float32: below `f = 1e-5` the GPU kernels use the spherical
-forms -- the flattening changes the flux by under 4e-8 there -- so the
-gradient in `f` is exactly 0 in that band. A float32 sampler should start
-`f` at a small positive value (1e-4 is plenty), not at 0.
+Below `f = 1e-5` in float32 (1e-10 in float64) the value is the spherical
+closed form -- the flattening changes the flux by under 4e-8 there -- but
+the gradient in `f` is the oblate one, so a sampler or optimiser can start
+`f` at 0.
 """)
 
 code("""
@@ -575,8 +575,6 @@ md(r"""
 * **f and theta are degenerate on central transits.** With b near 0 an
   aligned oblate planet and a smaller-b round one can look alike; that is a
   sampling problem (priors, parameterisation), not a model one.
-* **fp32 below f = 1e-5** uses the spherical forms (the flattening changes
-  the flux by under 4e-8 there), so d/df is 0 in that band.
 * The model is fixed as spherical or oblate when you build it; switching
   `f` between `None` and a value afterwards raises -- build a new model.
 """)

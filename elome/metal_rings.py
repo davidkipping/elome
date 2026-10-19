@@ -230,13 +230,17 @@ inline void rg_arc(T x0, T y0, T A, T S0, cx<T> S1, T S2, T K0, cx<T> K1,
     for (int k = 0; k < HYB_K; ++k) {
         float p = 1.0f + HYB_POLE[k];
         if (cen) {
-            // a circle centred on the star: first order in the offset
-            T R2 = A * A;
+            // a circle centred on the star: first order in the offset and
+            // in A - B, A B h(s) integrated with s = A^2 cos^2 + B^2 sin^2
+            // about R^2 = A B -- the arc's own d/dA, d/dB (A^2 - B^2 = 4 S2)
+            T R2 = K0;
             T c0v = R2 / (2.0f * p * (p - R2));
             T c1v = A * (p + R2) / (2.0f * p * (p - R2) * (p - R2));
+            T c2v = R2 / (2.0f * p * (p - R2) * (p - R2));
             float sl = metal::precise::sin(lo), cl = metal::precise::cos(lo);
             float sh = metal::precise::sin(hi), ch = metal::precise::cos(hi);
-            out[3 + k] = c0v * (hi - lo) + c1v * (x0 * (sh - sl) + y0 * (cl - ch));
+            out[3 + k] = c0v * (hi - lo) + c1v * (x0 * (sh - sl) + y0 * (cl - ch))
+                       + c2v * (2.0f * S2) * (sh * ch - sl * cl);
             continue;
         }
         thread const float2 *z0 = &zall[4 * k];
@@ -545,21 +549,17 @@ inline void rg_cols_bd(float X, float Y, float r, float fl, float cth,
     g[0] = gx * cth - gy * sth;
     g[1] = gx * sth + gy * cth;
     g[4] = gx * G.y0 - gy * G.x0;
-    // the planet: A = r / sqf, B = r sqf (a circle below f_sw: A = B = r)
-    if (G.circ[0]) {
-        g[2] = gA[0] + gB[0];
-    } else {
-        g[2] = gA[0] / sqf + gB[0] * sqf;
-        g[3] = (gA[0] * G.A[0] - gB[0] * G.B[0]) / (2.0f * sqf * sqf);
-    }
-    // the edges: A = q r, B = q r c (a circle when face-on: B = A)
+    // the planet: A = r / sqf, B = r sqf; the edges: A = q r, B = q r c.
+    // A circle's outline (below f_sw) still carries separate d/dA, d/dB,
+    // so f and ring_f keep their gradients face-on
+    g[2] = gA[0] / sqf + gB[0] * sqf;
+    g[3] = (gA[0] * G.A[0] - gB[0] * G.B[0]) / (2.0f * sqf * sqf);
     for (int e = 1; e < 3; ++e) {
         float q = (e == 1) ? ri : ro;
-        float ce = G.circ[e] ? 1.0f : cr;
-        float gR = gA[e] + ce * gB[e];
+        float gR = gA[e] + cr * gB[e];
         g[2] += q * gR;
         g[4 + e] = r * gR;
-        if (!G.circ[e]) g[7] += q * r * gB[e];
+        g[7] += q * r * gB[e];
     }
     g[8] = gT;
 }

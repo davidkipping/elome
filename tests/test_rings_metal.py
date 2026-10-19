@@ -71,10 +71,6 @@ def test_point_columns_and_gradients(name, law):
         B64 = np.array([b.item() for b in F(*args)[1]])
         g64 = np.array([g.item() for g in
                         mx.grad(lambda *v: F(*v)[0], argnums=list(range(9)))(*args)])
-    if f == 0.0:
-        g64[3] = 0.0                # below f_sw the kernel's d/df is 0 by design
-    if rf == 0.0:
-        g64[7] = 0.0                # a face-on ring: d/dc is 0 below the switch
     assert np.max(np.abs(B32[0] - B64) / hybrid_norms(law)) < 1e-7
     assert np.max(np.abs(g32[0] - g64)) < 1e-5 * np.max(np.abs(g64))
 
@@ -113,6 +109,32 @@ def test_vjp_matches_fp64_autodiff(exp_time):
     scale = max(np.abs(v).max() for v in g64.values())
     for k in vals:
         assert np.abs(g32[k] - g64[k]).max() < 1e-6 * scale, k
+
+
+@pytest.mark.parametrize("b", [0.0, 0.3])
+def test_face_on_gradients(b):
+    """ring_f = 0 and f = 0 -- a uniform prior's edge, both outlines
+    circles (and, at b = 0, centred on the star mid-transit): d/d ring_f
+    and d/df from the kernel's VJP match fp64 autodiff, and the fp32 graph
+    is finite and agrees."""
+    ct = np.random.default_rng(1).normal(size=TAU.size)
+    vals = dict(r=0.08, ring_f=0.0, f=0.0)
+
+    def grads(dt, stream):
+        def L(d):
+            out = el.flux_dev_from_tau(
+                mx.array(TAU, dtype=dt), PER, 8.8, b, d["r"], limb_dark="hybrid5",
+                u=W5, theta=0.4, ring_in=1.4, ring_out=2.6, ring_f=d["ring_f"],
+                ring_tau=0.6, f=d["f"])
+            return mx.sum(out * mx.array(ct, dtype=dt))
+        with mx.stream(stream):
+            g = mx.grad(L)({k: mx.array(v, dtype=dt) for k, v in vals.items()})
+            return {k: float(v.item()) for k, v in g.items()}
+    g64 = grads(mx.float64, mx.cpu)
+    for g32 in (grads(mx.float32, mx.gpu), grads(mx.float32, mx.cpu)):
+        for k in ("ring_f", "f"):
+            assert abs(g64[k]) > 1e-5 * abs(g64["r"]), k
+            assert abs(g32[k] - g64[k]) < 2e-4 * abs(g64[k]), (k, g32[k], g64[k])
 
 
 def test_ld_basis_contract_and_its_vjp():

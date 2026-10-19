@@ -1678,8 +1678,9 @@ def flux_dev_from_tau(tau: mx.array, period, a, b, r, u1=None, u2=None, *,
             convention: ``oblate_tau``); the contacts are solved per side.
             fp32 data on the GPU takes the oblate Metal kernels
             (``metal_oblate``); fp64 the MLX graph on the CPU stream. In
-            fp32, below f = 1e-5 a chain takes the spherical forms and
-            d/df is 0 there (the flattening's effect is under 4e-8).
+            fp32, below f = 1e-5 a chain's value is the spherical forms'
+            (the flattening's effect is under 4e-8), with d/df taken from
+            the ellipse at f = 1e-5, so a fit can start at f = 0.
         ring_in, ring_out, ring_f, ring_tau: a ring in the planet's
             equatorial plane (``elome.rings``): inner and outer radii in
             units of ``r``, projected flattening ring_f = 1 - |cos i| of the

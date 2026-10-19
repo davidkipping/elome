@@ -31,10 +31,13 @@ Three regimes, as masks:
   domain r <= (1 - f)^(3/2) makes A^2/B <= 1), one ellipse arc and one
   star arc.
 
-Below a flattening f_sw (1e-10 fp64, 1e-5 fp32) the spherical closed forms
-are used: the quartic's leading coefficient S2 ~ r^2 f / 2 vanishes there
-and two roots run to 0 and infinity, and the flattening's effect, ~1e-3 f,
-is below rounding.
+Below a flattening f_sw (1e-10 fp64, 1e-5 fp32) the value is the spherical
+closed forms': the quartic's leading coefficient S2 ~ r^2 f / 2 vanishes
+there and two roots run to 0 and infinity, and the flattening's effect,
+~1e-3 f, is below rounding. Its slope is not 0, though (fits start at
+f = 0): d/df there is the ellipse's at f = f_sw, an O(f_sw) bias. A root
+beyond |z| = 2 is taken through its partner 1/conj(z) inside the disc: a
+nearly circular outline's far root is ~1/S2, whose tangents overflow.
 
 Gradients by autodiff, structured as the reference's: roots are found
 under stop_gradient and given exact implicit derivatives by one live
@@ -641,15 +644,26 @@ def _pole_arc(S0, S1, S2, K0, K1, p, z0, lo, hi):
         for k in range(4):
             used[k] = used[k] | (((jj == k) | (ll == k)) & good)
         pairs.append((jj, ll, good))
-    # isolated roots: live Newton step, residue, continued log
-    z = _live_roots(z0, S0, S1, S2, p)
+    # isolated roots: live Newton step, residue, continued log. An outer
+    # root (|z| > 2) is taken through its partner w = 1/conj(z) inside the
+    # disc, as the kernels do (N and D are self-reciprocal: w is a root,
+    # N/D'(z) = -conj(N/D'(w)), and 1 - W/z = 1 - W conj(w)): a nearly
+    # circular outline's far root is ~1/S2, whose live tangents overflow
     ell = _C(0.0 * S0, 0.0 * S0)
     for k in range(4):
-        dD = _dD(z[k], S0, S1, S2, p)
+        zf = z0[k]
+        a2 = zf.abs2()
+        far = a2 > 4.0
+        sc = mx.where(far, 1.0 / mx.where(far, a2, 1.0), 1.0)
+        zeta = _live_roots([_C(zf.re * sc, zf.im * sc)], S0, S1, S2, p)[0]
+        dD = _dD(zeta, S0, S1, S2, p)
         live = ~used[k] & (dD.abs() > 0)
-        R = -(_N(z[k], K0, K1) / (_C(0.0, 1.0) * _cwhere(live, dD, 1.0)))
-        dl = _dlog(z[k], lo, hi, inner0[k], w1, w2)
-        ell = ell + _cwhere(live, R * dl, 0.0)
+        R = -(_N(zeta, K0, K1) / (_C(0.0, 1.0) * _cwhere(live, dD, 1.0)))
+        b2, b1 = 1.0 - w2 * zeta.conj(), 1.0 - w1 * zeta.conj()
+        dlw = _C(mx.log(b2.abs()) - mx.log(b1.abs()), b2.arg() - b1.arg())
+        dln = _dlog(zeta, lo, hi, inner0[k] | far, w1, w2)
+        ell = (ell + _cwhere(live & ~far, R * dln, 0.0)
+               + _cwhere(live & far, R.conj() * dlw, 0.0))
     # pairs as one quadratic factor (sigma, pi)
     dc = (_C(S2 + 0.0 * S0, 0.0 * S0), S1.conj(), _C(S0 - p, 0.0 * S0), S1,
           _C(S2 + 0.0 * S0, 0.0 * S0))
@@ -773,14 +787,15 @@ def _with_safe_roots(m, z, geom, p):
 def generator_cols_oblate(x0, y0, r, f, law):
     """Generator deviation columns [E0, E1, E2, P_k...] (minus the occulted
     flux of mu^0, mu^2, mu^4 and each pole of ``law``), elementwise over
-    broadcast (x0, y0, r, f). Lanes with f below f_sw are not filled
-    (shape_cols_oblate takes the spherical forms there)."""
+    broadcast (x0, y0, r, f). Lanes with f below f_sw are evaluated at
+    f = f_sw with f's tangent kept (shape_cols_oblate takes the spherical
+    forms' value there, and only d/df from these)."""
     law = get_law(law)
     dt = x0.dtype
     zero = x0 * 0.0 + y0 * 0.0 + r * 0.0 + f * 0.0
     x0, y0, r, f = x0 + zero, y0 + zero, r + zero, f + zero
     small = f < _F_SW[dt]
-    fs = mx.where(small, 0.1, f)                       # sanitized for the regimes
+    fs = mx.where(small, _F_SW[dt] + (f - _sg(f)), f)
     A, B = axes(r, fs)
     # -- regimes (frozen) ----------------------------------------------------
     gx0, gy0, gA, gB = _sg(x0), _sg(y0), _sg(A), _sg(B)
@@ -791,8 +806,8 @@ def generator_cols_oblate(x0, y0, r, f, law):
     sx, sy, sa_, sb_ = _SAFE_PART
     cnt, phi_a, phi_b = _crossings(_safe(general, gx0, sx), _safe(general, gy0, sy),
                                    _safe(general, gA, sa_), _safe(general, gB, sb_), dt)
-    partial = general & (cnt == 2) & ~small
-    inside = (fast_in | (general & (cnt != 2) & (d < 1.0))) & ~small
+    partial = general & (cnt == 2)
+    inside = fast_in | (general & (cnt != 2) & (d < 1.0))
     # -- inside: the whole-ellipse closed forms ---------------------------------
     ix0, iy0 = _safe(inside, x0, _SAFE_IN[0]), _safe(inside, y0, _SAFE_IN[1])
     iA, iB = _safe(inside, A, _SAFE_IN[2]), _safe(inside, B, _SAFE_IN[3])
@@ -853,10 +868,14 @@ def shape_cols_oblate(x0, y0, r, f, law) -> mx.array:
     dt = x0.dtype
     _check_domain(r, f)
     y0, r, f = (_to_dtype(v, dt) for v in (y0, r, f))
-    gen = generator_cols_oblate(x0, y0, r, f, law)
+    # below f_sw the value is the sphere's, but d/df is not 0 (a sphere's
+    # light curve has a slope in f, and fits start there): it comes from
+    # the ellipse at f = f_sw (an O(f_sw) bias), its other tangents cut
+    small = (f + 0.0 * x0) < _F_SW[dt]
+    gx0, gy0, gr = (mx.where(small, _sg(v), v) for v in (x0, y0, r))
+    gen = generator_cols_oblate(gx0, gy0, gr, f, law)
     S = law.generator_matrix()
     obl = [gen[0]] + [_combine(gen, S[j]) for j in range(law.n_w)]
-    small = (f + 0.0 * x0) < _F_SW[dt]
     rr = r + 0.0 * x0
     # floored like the orbit's separations: sqrt's VJP is infinite at a
     # centred planet, and the spherical branch is evaluated (then masked)
@@ -865,7 +884,8 @@ def shape_cols_oblate(x0, y0, r, f, law) -> mx.array:
     z = mx.sqrt(mx.maximum(x0 * x0 + y0 * y0, tiny))
     sph = _sph_cols(z, rr, law)
     ok = _in_domain(rr, f + 0.0 * x0)
-    cols = [mx.where(ok, mx.where(small, sph[..., k], obl[k]), mx.nan)
+    cols = [mx.where(ok, mx.where(small, sph[..., k] + (obl[k] - _sg(obl[k])), obl[k]),
+                     mx.nan)
             for k in range(law.n_col)]
     return mx.stack(cols, axis=-1)
 

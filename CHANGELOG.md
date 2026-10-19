@@ -5,6 +5,29 @@ every release is tagged `vX.Y.Z` in git.
 
 ## [Unreleased]
 
+### Fixed
+- **Gradients at a round planet and a face-on ring.** `f = 0` and
+  `ring_f = 0` are the edges of the uniform priors and where fits start,
+  and the gradients there were wrong:
+  - oblate planets: d/df was 0 below the spherical switch (f < 1e-5 in
+    float32, f = 0 in float64) on every path, so a fit started at a
+    sphere never moved in f. The value there is still the sphere's; d/df
+    is now the oblate slope, taken at the switch (a bias of about 1e-5
+    relative). Tutorial 3's advice to start f at 1e-4 in float32 is gone.
+  - ringed planets, float32 GPU kernel: within 1e-5 of face-on, d/d ring_f
+    lost the ring's geometric term (the wrong sign in the test case), and
+    d/df was 0 for a round planet.
+  - ringed planets, float32 graph (the CPU stream, or `use_metal=False`):
+    NaN gradients in ring_f and f within 1e-5 of face-on or round.
+  - float64: d/d ring_f and d/df off by 0.3% and 3% at exactly 0, and
+    wrong for a circular outline centred on the star.
+
+  The graph now takes a nearly circular outline's far root (about
+  1/(r^2 f)) through its partner inside the disc, as the kernels already
+  did; that also fixes float32-graph errors in d/df of up to a factor 2.4
+  just above the switch. Cost: about 5% on float64 oblate and ring
+  gradients.
+
 ## [0.18.5] — 2026-10-19
 
 ### Fixed

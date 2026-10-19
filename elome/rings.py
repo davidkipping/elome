@@ -356,10 +356,15 @@ def _region_cols(x0, y0, conics, T, law, dt):
             z0 = [_C(mx.broadcast_to(z.re[..., None], shp), mx.broadcast_to(z.im[..., None], shp))
                   for z in _outline_roots(gx0, gy0, ga, gb, circ[k], p, dt)]
             v = _pole_arc(*pS, p, z0, LO, HI)
-            R = A
-            c0 = R * R / (2.0 * p * (p - R * R))
-            c1 = R * (p + R * R) / (2.0 * p * (p - R * R) ** 2)
-            vc = c0 * (HI - LO) + c1 * (X0 * (sh - sl) + Y0 * (cl - ch))
+            # a centred circle, first order in the offset and in A - B:
+            # A B h(s) integrated with s = A^2 cos^2 + B^2 sin^2 about
+            # R^2 = A B -- the arc's own d/dA, d/dB
+            R2 = A * B
+            c0 = R2 / (2.0 * p * (p - R2))
+            c1 = A * (p + R2) / (2.0 * p * (p - R2) ** 2)
+            c2 = R2 / (2.0 * p * (p - R2) ** 2)
+            vc = (c0 * (HI - LO) + c1 * (X0 * (sh - sl) + Y0 * (cl - ch))
+                  + c2 * (0.5 * (A * A - B * B)) * (sh * ch - sl * cl))
             cols.append(mx.where(cen, vc, v))
         # gradient-only corner terms at both ends of every arc
         gX0, gY0, gA, gB = _sg(X0), _sg(Y0), _sg(A), _sg(B)
