@@ -2,8 +2,10 @@
 
 Elómë's oblate-planet model against the other public oblate transit
 codes: [squishyplanet](https://github.com/ben-cassese/squishyplanet)
-(Cassese et al. 2024), [JoJo](https://github.com/Flippedx/JoJo) and
-[GreenLantern](https://github.com/emprice/greenlantern) (Price). Results:
+(Cassese et al. 2024), [JoJo](https://github.com/Flippedx/JoJo),
+[GreenLantern](https://github.com/emprice/greenlantern) (Price) and
+[eclipsoid](https://github.com/shashankdholakia/eclipsoid) (Dholakia,
+Dholakia & Pope 2024). Results:
 [RESULTS.md](RESULTS.md) (generated).
 
 ## Files
@@ -31,6 +33,7 @@ BENCH_SCENARIO=graze .venv/bin/python run_oblate_compare.py --graze
 | squishyplanet | `projected_effective_r`, `projected_f`, `projected_theta` = theta | 1e-15 |
 | JoJo | `rp_me` = r_eff, obliquity = -theta (its Y axis is ours reversed), a/R* via the stellar density | 1e-14 |
 | GreenLantern | semi-axes (B, A, A), third angle = theta, beta = -(pi/2 - i), (q1, q2) | 3-5e-6 (fp32) |
+| eclipsoid | `limb_dark_oblate_lightcurve` on jaxoplanet's Keplerian `System`; radius = r_eff, oblateness = f, obliquity = -theta | 1.6e-9 (near second contact; 1e-15 elsewhere) |
 
 Limb darkening is I(mu) = 1 - w (1 - mu^2): Elómë's hybrid2 with its
 pole weight at 0, and the quadratic law (2w, -w) for the others.
@@ -83,3 +86,15 @@ After the shims GreenLantern agrees with Elómë's spherical model to
   dual kernel (all 12 parameter derivatives per point) contracted with the
   cotangent on the host.
 - Elómë's fp32 route includes its per-call contact solve.
+
+**eclipsoid** pins jaxlib <= 0.4.32 (and jaxoplanet < 0.1), which conflicts
+with squishyplanet's JAX, so it runs under its own interpreter
+(`adapters_oblate.PYTHON`):
+
+```bash
+python3.11 -m venv .venv-eclipsoid
+.venv-eclipsoid/bin/pip install eclipsoid "jaxoplanet<0.1" numpy scipy mpmath matplotlib
+```
+
+Every worker also records the peak memory of one call (`../memwatch.py`:
+the process's physical footprint, standard library only).

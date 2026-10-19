@@ -22,6 +22,11 @@ import math
 
 import numpy as np
 
+# what each code imports, loaded before the memory baseline (memwatch.py)
+IMPORTS = {"elome": ["mlx.core", "elome"], "batman": ["batman"],
+           "pytransit": ["pytransit"], "exoplanet": ["exoplanet_core"],
+           "jaxoplanet": ["jax", "jaxoplanet.core.limb_dark"]}
+
 from scenario import (A_RS, B_IMPACT, ECC, INC_DEG, INC_ECC_DEG,
                       OMEGA_DEG, PER, RP, T0, U1, U2, batch_params,
                       mean_anomaly_at_transit, time_grid, time_grid_ecc,
@@ -283,6 +288,85 @@ def jaxoplanet_batch_prepare(_n=None):
 def jaxoplanet_batch_run(state):
     f, args = state
     return np.asarray(f(*args).block_until_ready())
+
+
+# ---------------------------------------------------------------------------
+# value + gradient of sum(ct * flux) in (rp, t0, per, a, b, u1, u2): the
+# differentiable codes only (Elómë, jaxoplanet)
+# ---------------------------------------------------------------------------
+
+def _elome_grad_prepare(n, dtype):
+    import mlx.core as mx
+    import elome
+    p = _mp_params()
+    stream = mx.cpu if dtype == mx.float64 else mx.gpu
+    m = elome.TransitModel(p, time_grid(n), dtype=dtype)
+    ct = mx.array(np.random.default_rng(0).normal(size=n), dtype=dtype)
+    x0 = [mx.array(v, dtype=dtype) for v in (RP, T0, PER, A_RS, B_IMPACT, U1, U2)]
+
+    def loss(rp, t0, per, a, b, u1, u2):
+        q = _mp_params()
+        q.rp, q.t0, q.per, q.a = rp, t0, per, a
+        q.inc = mx.arccos(b / a) * (180.0 / math.pi)
+        q.u = [u1, u2]
+        return mx.sum(ct * m.light_curve_mx(q))
+    vg = mx.value_and_grad(loss, argnums=tuple(range(7)))
+    state = (vg, x0, stream)
+    elome_grad_run(state)
+    return state
+
+
+def elome_grad_run(state):
+    import mlx.core as mx
+    vg, x0, stream = state
+    with mx.stream(stream):
+        val, g = vg(*x0)
+        mx.eval(val, *g)
+    return np.array([float(x) for x in g])
+
+
+def elome_fp32_grad_prepare(n):
+    import mlx.core as mx
+    return _elome_grad_prepare(n, mx.float32)
+
+
+def elome_fp64_grad_prepare(n):
+    import mlx.core as mx
+    return _elome_grad_prepare(n, mx.float64)
+
+
+elome_fp32_grad_run = elome_grad_run
+elome_fp64_grad_run = elome_grad_run
+
+
+def jaxoplanet_grad_prepare(n, order=10):
+    import jax
+    import jax.numpy as jnp
+    from jaxoplanet.core.limb_dark import light_curve
+    jax.config.update("jax_enable_x64", True)
+    t = jnp.asarray(time_grid(n))
+    ct = jnp.asarray(np.random.default_rng(0).normal(size=n))
+
+    def loss(rp, t0, per, a, b, u1, u2):
+        phi = 2.0 * jnp.pi * (t - t0) / per
+        cosi = b / a
+        z = a * jnp.sqrt(jnp.sin(phi) ** 2 + cosi ** 2 * jnp.cos(phi) ** 2)
+        z = jnp.where(jnp.cos(phi) > 0, z, 2.0 + z)
+        return jnp.sum(ct * (1.0 + light_curve(jnp.stack([u1, u2]), z, rp,
+                                               order=order)))
+    vg = jax.jit(jax.value_and_grad(loss, argnums=tuple(range(7))))
+    x0 = tuple(jnp.asarray(v) for v in (RP, T0, PER, A_RS, B_IMPACT, U1, U2))
+    state = (vg, x0)
+    jaxoplanet_grad_run(state)
+    return state
+
+
+def jaxoplanet_grad_run(state):
+    import jax
+    vg, x0 = state
+    val, g = vg(*x0)
+    jax.block_until_ready(g)
+    return np.array([float(x) for x in g])
 
 
 # ---------------------------------------------------------------------------

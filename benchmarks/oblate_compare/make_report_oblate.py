@@ -8,9 +8,21 @@ from scenario_oblate import (A_RS, B_IMPACT, BATCH_NPT, BATCH_NPV, F, N_PREC,
 HERE = os.path.dirname(os.path.abspath(__file__))
 NAMES = {"elome_fp64": "Elómë fp64 (CPU)",
          "elome_fp32": "Elómë fp32 (GPU, Metal)",
-         "squishyplanet": "squishyplanet 0.5.0 (JAX, fp64, CPU)",
+         "squishyplanet": "squishyplanet 0.6.0 (JAX, fp64, CPU)",
          "jojo": "JoJo 0.1.0 (numpy, fp64)",
-         "greenlantern": "GreenLantern 1.6 (OpenCL GPU, fp32)"}
+         "greenlantern": "GreenLantern 1.6 (OpenCL GPU, fp32)",
+         "eclipsoid": "eclipsoid 0.0.2 (JAX, fp64, CPU)"}
+
+
+def mem(r, mode, code, n=None):
+    """Peak memory of one call above the process's level after importing
+    the code (../memwatch.py: the physical footprint, every code alike)."""
+    m = r.get("mem", {}).get(mode, {}).get(code)
+    if m is not None and n is not None:
+        m = m.get(str(n))
+    if not m or "peak_mb" not in m:
+        return "--"
+    return f"{m['peak_mb']:,.0f} MB"
 
 
 def ms(s):
@@ -33,15 +45,17 @@ def main():
          "Circular orbit, instantaneous fluxes. Every code's parameter mapping "
          "was checked against the others before timing.", "",
          "## What each code covers", "",
-         "| | Elómë | squishyplanet | JoJo | GreenLantern |",
-         "|---|---|---|---|---|",
-         "| limb darkening, oblate planet | hybrid2/4/5 (even powers of mu + double poles) | polynomial, any order | quadratic | quadratic |",
-         "| method | analytic (Green's theorem, partial fractions) | analytic (ALFM20 extension) | Green's theorem, numerical line integral (100 steps) | Green's theorem, Simpson's rule (2048 steps) |",
-         "| precision | fp64 (CPU) and fp32 (GPU) | fp64 | fp64 | fp32 |",
-         "| gradients | analytic VJP (fp32 kernel), autodiff (fp64) | JAX (forward Jacobian) | none | forward-mode duals |",
-         "| planet shape | projected ellipse (r, f, theta) | triaxial, 3-D orientation; projected ellipse | oblate spheroid | triaxial ellipsoid |",
-         "| exposures | contact rule, supersampling | oversampling | supersampling | binning |",
-         "| many parameter sets | native batch | jax.vmap | Python loop | native batch |", "",
+         "| | Elómë | squishyplanet | JoJo | GreenLantern | eclipsoid |",
+         "|---|---|---|---|---|---|",
+         "| limb darkening, oblate planet | hybrid2/4/5 (even powers of mu + double poles) | polynomial, any order | quadratic | quadratic | polynomial, any order |",
+         "| method | Green's theorem, closed forms | Green's theorem: star arc analytic, planet arc by 48-node Gauss-Legendre | Green's theorem, closed forms but the mu^1 term (midpoint rule, 100 steps) | Green's theorem, Simpson's rule (2048 steps) | Green's theorem: star arc analytic, planet arc by 30-node Gauss-Legendre |",
+         "| precision | fp64 (CPU) and fp32 (GPU) | fp64 | fp64 | fp32 | fp64 |",
+         "| gradients | analytic VJP (fp32 kernel), autodiff (fp64) | JAX | none | forward-mode duals, circular orbits | JAX, reverse mode |",
+         "| planet shape | projected ellipse (r, f, theta) | triaxial, 3-D orientation; or projected ellipse | projected ellipse | triaxial ellipsoid | projected ellipse; or 3-D ellipsoid |",
+         "| orbit | Keplerian, circular and eccentric | Keplerian, circular and eccentric | Keplerian, circular and eccentric | circular (eccentric: value only) | jaxoplanet's orbits |",
+         "| exposures | contact rule, supersampling | oversampling | supersampling | binning | via jaxoplanet's integrate |",
+         "| many parameter sets | native batch | jax.vmap | Python loop | native batch | jax.vmap |",
+         "| hardware | Apple GPU (Metal), CPU | CPU | CPU | OpenCL GPU | CPU |", "",
          "The odd powers of mu (the standard quadratic law) are not available "
          "to Elómë for an oblate planet -- they have no elementary form "
          "along an ellipse; the hybrid laws are as accurate as the four-"
@@ -87,23 +101,41 @@ def main():
               "is mostly the GPU dispatch floor."]
     L += ["",
           f"## Many parameter sets: {BATCH_NPV} sets x {BATCH_NPT:,d} points", "",
-          "| code | wall | curves/s | how |", "|---|---:|---:|---|"]
+          "| code | wall | curves/s | peak memory | how |", "|---|---:|---:|---:|---|"]
     how = {"elome_fp32": "TransitModel.light_curves, one launch",
            "squishyplanet": "jax.jit(jax.vmap(lightcurve))",
            "jojo": "Python loop (no batch API)",
-           "greenlantern": "one launch, a parameter row per set"}
+           "greenlantern": "one launch, a parameter row per set",
+           "eclipsoid": "jax.jit(jax.vmap(light curve))"}
     for code, t in sorted(r["batch"].items(), key=lambda kv: kv[1]):
-        L.append(f"| {NAMES[code]} | {t:.3f} s | {BATCH_NPV / t:,.0f} | {how[code]} |")
+        L.append(f"| {NAMES[code]} | {t:.3f} s | {BATCH_NPV / t:,.0f} | "
+                 f"{mem(r, 'batch', code)} | {how[code]} |")
     L += ["", "## Value + gradient of a scalar loss (single light curve)", "",
           "In every parameter each code exposes: for Elómë rp, f, theta, "
           "inc, t0, period, a and the limb-darkening weight. JoJo has no "
-          "gradients.", ""]
+          "gradients; eclipsoid's are reverse mode only.", ""]
     gn = sorted({int(n) for v in r["grad"].values() for n in v})
     L.append("| code | " + " | ".join(f"N = {n:,d}" for n in gn) + " |")
     L.append("|---|" + "---:|" * len(gn))
     for code, v in r["grad"].items():
         L.append(f"| {NAMES[code]} | " + " | ".join(
             ms(v[str(n)]) if str(n) in v else "--" for n in gn) + " |")
+    mn = sorted({int(n) for v in r.get("mem", {}).get("single", {}).values()
+                 for n, m in v.items() if "peak_mb" in m})
+    if mn:
+        L += ["", "## Peak memory of one light curve", "",
+              "The process's physical footprint (what Activity Monitor shows), "
+              "above its level after importing the code: what it holds to "
+              "compute the light curve (arrays, compiled code, memory pools) "
+              "and a call's transient peak (../memwatch.py). One measure for "
+              "every code, CPU and GPU (Metal) memory alike. GreenLantern's "
+              "OpenCL buffers count only as far as macOS attributes them to "
+              "the process.", ""]
+        L.append("| code | " + " | ".join(f"N = {n:,d}" for n in mn) + " |")
+        L.append("|---|" + "---:|" * len(mn))
+        for code in r["single"]:
+            L.append(f"| {NAMES[code]} | " + " | ".join(
+                mem(r, "single", code, n) for n in mn) + " |")
     L.append("")
     open(os.path.join(HERE, "RESULTS.md"), "w").write("\n".join(L) + "\n")
     print("\n".join(L))

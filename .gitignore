@@ -9,6 +9,12 @@ dist/
 # oblate cross-code benchmark: competitor clones and their venv (local only)
 benchmarks/oblate_compare/vendor/
 benchmarks/oblate_compare/.venv/
+benchmarks/oblate_compare/.venv-eclipsoid/
+
+# ringed-planet cross-code benchmark: its venv and any vendored code (local only)
+benchmarks/ring_compare/.venv/
+benchmarks/ring_compare/.venv-pryngles/
+benchmarks/ring_compare/vendor/
 
 # Sphinx build output
 docs/_build/

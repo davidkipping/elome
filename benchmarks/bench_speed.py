@@ -47,6 +47,10 @@ ECC_CODES = [
     ("jaxoplanet", [0]),
 ]
 
+# value + gradient (the differentiable codes), at these N
+GRAD = [("elome_fp32", [0]), ("elome_fp64", [0]), ("jaxoplanet", [0])]
+GRAD_N = [10_000, 100_000]
+
 SLOW_SKIP_S = 20.0  # skip larger N once a code's median exceeds this
 
 
@@ -132,6 +136,19 @@ def main():
         print(f"{code:>18s} batch 512x1e5: "
               f"{med if med is None else f'{med:10.3f} s'} "
               f"{rec.get('error', '')[:60]}", flush=True)
+
+    for code, thread_list in GRAD:
+        for threads in thread_list:
+            for n in GRAD_N:
+                if have(rows, code=code, mode="grad", n=n, threads=threads):
+                    continue
+                rec = run_one(code, "grad", n, threads)
+                rows.append(rec)
+                save(rows)
+                med = rec.get("median_s")
+                print(f"{code:>18s}   grad n={n:>9d}: "
+                      f"{med if med is None else f'{med*1e3:10.2f} ms'} "
+                      f"{rec.get('error', '')[:60]}", flush=True)
 
     print(f"wrote {OUT}")
 

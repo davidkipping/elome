@@ -1,7 +1,8 @@
 """One benchmark measurement in an isolated process.
 
 Usage: python worker.py <code> <mode> <n> [reps]
-Emits one JSON line: {"code", "mode", "n", "median_s", "reps", ...}.
+Emits one JSON line: {"code", "mode", "n", "median_s", "reps", ...},
+with the peak memory of one call (memwatch.py) measured after the timing.
 
 Thread environment (NUMBA_NUM_THREADS / OMP_NUM_THREADS / batman
 nthreads) must be set by the parent BEFORE spawning; numba and OpenMP
@@ -18,12 +19,18 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np  # noqa: E402
 
 import adapters  # noqa: E402
+import importlib  # noqa: E402
+
+from memwatch import MemWatch  # noqa: E402
 
 
 def main():
     code, mode, n = sys.argv[1], sys.argv[2], int(sys.argv[3])
     max_reps = int(sys.argv[4]) if len(sys.argv) > 4 else 15
     nthreads = int(os.environ.get("BENCH_NTHREADS", "1"))
+    for mod in adapters.IMPORTS[code.split("_")[0]]:
+        importlib.import_module(mod)    # not counted in the memory
+    watch = MemWatch()
 
     if mode in ("single", "ecc"):
         suffix = "_ecc" if mode == "ecc" else ""
@@ -37,6 +44,9 @@ def main():
     elif mode == "batch":
         state = getattr(adapters, f"{code}_batch_prepare")()
         run = getattr(adapters, f"{code}_batch_run")
+    elif mode == "grad":
+        state = getattr(adapters, f"{code}_grad_prepare")(n)
+        run = getattr(adapters, f"{code}_grad_run")
     else:
         raise SystemExit(f"unknown mode {mode}")
 
@@ -55,6 +65,7 @@ def main():
         "code": code, "mode": mode, "n": n, "threads": nthreads,
         "median_s": float(np.median(ts)), "min_s": float(np.min(ts)),
         "reps": len(ts),
+        **watch.measure(lambda: run(state), reps=1 if np.median(ts) > 5 else 2),
     }))
 
 

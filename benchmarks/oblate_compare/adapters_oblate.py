@@ -16,8 +16,16 @@ many parameter sets, *_grad_* for value + gradient of a scalar loss.
 """
 
 import math
+import os
 
 import numpy as np
+
+# what each code imports, loaded before the memory baseline (memwatch.py)
+IMPORTS = {"elome": ["mlx.core", "elome"],
+           "squishyplanet": ["jax", "squishyplanet"],
+           "jojo": ["JoJo.jojo_oblate"],
+           "greenlantern": ["pocky", "greenlantern"],
+           "eclipsoid": ["jax", "eclipsoid"]}
 
 from scenario_oblate import (A_AX, A_RS, B_AX, B_IMPACT, BATCH_NPT, F, INC,
                              PER, RP, T0, THETA, U1, U2, W_LD, batch_params,
@@ -325,8 +333,92 @@ def greenlantern_grad_run(state):
     return dflux.host @ ct
 
 
+# ---------------------------------------------------------------------------
+# eclipsoid (JAX, float64, CPU; Dholakia, Dholakia & Pope 2024). Its own venv
+# (.venv-eclipsoid): it pins jaxlib <= 0.4.32. The 2-D projected-ellipse
+# light curve: radius = sqrt(A B), oblateness = f, obliquity = -theta (it
+# rotates the planet's position by +obliquity), on jaxoplanet's Keplerian
+# System (its straight-line TransitOrbit would clip the ellipse's contacts).
+# ---------------------------------------------------------------------------
+
+def _ec_curve(t, rp, f, theta, t0, per, a, b, u):
+    from jaxoplanet.orbits.keplerian import Central, System
+    from eclipsoid.light_curve import limb_dark_oblate_lightcurve
+    central = Central.from_orbital_properties(period=per, semimajor=a, radius=1.0)
+    orbit = System(central).add_body(period=per, radius=rp, impact_param=b,
+                                     time_transit=t0)
+    # (N,) or (N, 1) depending on the orbit type
+    return limb_dark_oblate_lightcurve(orbit, u, f, -theta)(t).reshape(t.shape)
+
+
+def eclipsoid_prepare(n):
+    import jax
+    import jax.numpy as jnp
+    jax.config.update("jax_enable_x64", True)
+    t = jnp.asarray(time_grid(n))
+    u = jnp.array([U1, U2])
+    f = jax.jit(lambda t_: _ec_curve(t_, RP, F, THETA, T0, PER, A_RS, B_IMPACT, u))
+    f(t).block_until_ready()
+    return f, t
+
+
+def eclipsoid_run(state):
+    f, t = state
+    return np.asarray(f(t).block_until_ready())
+
+
+def eclipsoid_batch_prepare():
+    import jax
+    import jax.numpy as jnp
+    jax.config.update("jax_enable_x64", True)
+    t = jnp.asarray(time_grid(BATCH_NPT))
+    u = jnp.array([U1, U2])
+    bp = batch_params()
+    args = tuple(jnp.asarray(bp[k]) for k in ("rp", "f", "theta", "t0", "per", "a", "b"))
+    f = jax.jit(jax.vmap(lambda *v: _ec_curve(t, *v, u)))
+    f(*args).block_until_ready()
+    return f, args
+
+
+def eclipsoid_batch_run(state):
+    f, args = state
+    return np.asarray(f(*args).block_until_ready())
+
+
+def eclipsoid_grad_prepare(n):
+    """value + gradient of sum(ct * flux) in rp, f, theta, t0, per, a, b and
+    the limb-darkening coefficients (reverse mode: eclipsoid's root solver
+    has no forward-mode rule)."""
+    import jax
+    import jax.numpy as jnp
+    jax.config.update("jax_enable_x64", True)
+    t = jnp.asarray(time_grid(n))
+    ct = jnp.asarray(np.random.default_rng(0).normal(size=n))
+    x0 = tuple(jnp.asarray(v) for v in (RP, F, THETA, T0, PER, A_RS, B_IMPACT)) \
+        + (jnp.array([U1, U2]),)
+    vg = jax.jit(jax.value_and_grad(
+        lambda *v: jnp.sum(ct * _ec_curve(t, *v)), argnums=tuple(range(8))))
+    state = (vg, x0)
+    eclipsoid_grad_run(state)
+    return state
+
+
+def eclipsoid_grad_run(state):
+    import jax
+    vg, x0 = state
+    val, g = vg(*x0)
+    jax.block_until_ready(g)
+    return g
+
+
+# codes whose dependencies conflict with the others' run under their own
+# interpreter (run_oblate_compare._python)
+PYTHON = {"eclipsoid": os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                    ".venv-eclipsoid", "bin", "python")}
+
 CODES = ["elome_fp64", "elome_fp32", "squishyplanet", "jojo",
-         "greenlantern"]
-BATCH_CODES = ["elome_fp32", "squishyplanet", "jojo", "greenlantern"]
+         "greenlantern", "eclipsoid"]
+BATCH_CODES = ["elome_fp32", "squishyplanet", "jojo", "greenlantern",
+               "eclipsoid"]
 GRAD_CODES = ["elome_fp64", "elome_fp32", "squishyplanet",
-              "greenlantern"]
+              "greenlantern", "eclipsoid"]

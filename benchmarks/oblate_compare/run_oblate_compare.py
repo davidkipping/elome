@@ -42,11 +42,28 @@ def oracle_flux():
     return 1.0 + np.array(dev)
 
 
+def _python(code):
+    """The interpreter a code runs under: its own venv where its
+    dependencies conflict with the others' (adapters_oblate.PYTHON)."""
+    return A.PYTHON.get(code, sys.executable)
+
+
+def curve(code, n):
+    if code not in A.PYTHON:
+        return getattr(A, f"{code}_run")(getattr(A, f"{code}_prepare")(n))
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "f.npy")
+        subprocess.run([_python(code), os.path.join(HERE, "worker_oblate.py"),
+                        code, "curve", str(n), path], check=True)
+        return np.load(path)
+
+
 def precision():
     ref = oracle_flux()
     out = {}
     for code in A.CODES:
-        f = getattr(A, f"{code}_run")(getattr(A, f"{code}_prepare")(N_PREC))
+        f = curve(code, N_PREC)
         err = np.abs(np.asarray(f, np.float64) - ref)
         out[code] = {"max": float(err.max()), "median": float(np.median(err))}
         print(f"  precision {code:18s} max {err.max():.2e} median {np.median(err):.2e}")
@@ -54,12 +71,18 @@ def precision():
 
 
 def measure(code, mode, n):
-    r = subprocess.run([sys.executable, os.path.join(HERE, "worker_oblate.py"),
+    r = subprocess.run([_python(code), os.path.join(HERE, "worker_oblate.py"),
                         code, mode, str(n)], capture_output=True, text=True)
     if r.returncode != 0:
         print(r.stderr[-2000:])
         return None
     return json.loads(r.stdout.strip().splitlines()[-1])
+
+
+def _mem(m):
+    """Peak memory of one call above the process's level after importing
+    the code, MB (memwatch.py: the physical footprint)."""
+    return {k: m[k] for k in ("peak_mb", "mlx_peak_mb") if k in m}
 
 
 def main():
@@ -74,12 +97,17 @@ def main():
             json.dump(old, f, indent=1)
         return
     quick = "--quick" in sys.argv
-    res = {"machine": platform.platform(), "python": platform.python_version(),
-           "started": time.strftime("%Y-%m-%d %H:%M"),
-           "load": os.getloadavg()}
+    path = os.path.join(HERE, "results_oblate.json")
+    old = json.load(open(path)) if os.path.exists(path) else {}
+    # a full run replaces everything but the separately run graze precision
+    res = {k: v for k, v in old.items() if k == "precision_graze"}
+    res.update({"machine": platform.platform(), "python": platform.python_version(),
+                "started": time.strftime("%Y-%m-%d %H:%M"),
+                "load": os.getloadavg()})
     print("precision vs the 30-digit oracle:")
     res["precision"] = precision()
     sweep = N_SWEEP[:3] if quick else N_SWEEP
+    res["mem"] = {"single": {}, "batch": {}, "grad": {}}
     res["single"] = {}
     for code in A.CODES:
         res["single"][code] = {}
@@ -88,6 +116,7 @@ def main():
             if m is None:
                 break
             res["single"][code][str(n)] = m["median_s"]
+            res["mem"]["single"].setdefault(code, {})[str(n)] = _mem(m)
             print(f"  single {code:18s} N={n:>10,d}: {m['median_s'] * 1e3:10.2f} ms")
             if m["median_s"] > 8.0:          # the next decade would take minutes
                 break
@@ -96,6 +125,7 @@ def main():
         m = measure(code, "batch", 0)
         if m is not None:
             res["batch"][code] = m["median_s"]
+            res["mem"]["batch"][code] = _mem(m)
             print(f"  batch {code:18s} {BATCH_NPV} x {BATCH_NPT}: {m['median_s']:.3f} s")
     res["grad"] = {}
     for code in A.GRAD_CODES:
@@ -104,6 +134,7 @@ def main():
             m = measure(code, "grad", n)
             if m is not None:
                 res["grad"][code][str(n)] = m["median_s"]
+                res["mem"]["grad"].setdefault(code, {})[str(n)] = _mem(m)
                 print(f"  value+grad {code:18s} N={n:>8,d}: {m['median_s'] * 1e3:.2f} ms")
     res["load_after"] = os.getloadavg()
     with open(os.path.join(HERE, "results_oblate.json"), "w") as f:

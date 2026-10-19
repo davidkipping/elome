@@ -15,6 +15,12 @@ if os.path.exists(_pe):
     with open(_pe) as f:
         prec_ecc = json.load(f)
 
+def mem_mb(r):
+    """Peak memory of one call above the process's level after importing
+    the code (memwatch.py: the physical footprint, every code alike)."""
+    return r.get("peak_mb")
+
+
 lines = []
 add = lines.append
 
@@ -82,8 +88,8 @@ if any(r["mode"] == "ecc" for r in speed):
         add("| " + " | ".join(row) + " |")
 
 add("\n## Native batch: 512 parameter sets x 100,000 points\n")
-add("| code | wall | curves/s | notes |")
-add("|---|---:|---:|---|")
+add("| code | wall | curves/s | peak memory | notes |")
+add("|---|---:|---:|---:|---|")
 notes = {
     "elome_gpu": "fp32 GPU, one broadcast graph",
     "pytransit": "native parameter arrays (numba)",
@@ -95,10 +101,48 @@ for r in speed:
     if r["mode"] != "batch":
         continue
     if "error" in r:
-        add(f"| {r['code']} | failed | — | {r['error'][:60]} |")
+        add(f"| {r['code']} | failed | — | — | {r['error'][:60]} |")
         continue
+    m = mem_mb(r)
     add(f"| {r['code']} | {r['median_s']:.3f} s | "
-        f"{512 / r['median_s']:,.0f} | {notes.get(r['code'], '')} |")
+        f"{512 / r['median_s']:,.0f} | "
+        f"{'—' if m is None else f'{m:,.0f} MB'} | {notes.get(r['code'], '')} |")
+
+grad = [r for r in speed if r["mode"] == "grad" and "error" not in r]
+if grad:
+    add("\n## Value + gradient of a scalar loss (single light curve)\n")
+    add("sum(c * flux) for fixed random c, differentiated in rp, t0, period, "
+        "a, b, u1 and u2. Only the differentiable codes.\n")
+    gn = sorted({r["n"] for r in grad})
+    add("| code | " + " | ".join(f"N={n:,}" for n in gn) + " |")
+    add("|---|" + "---:|" * len(gn))
+    for code in sorted({r["code"] for r in grad}):
+        row = [code]
+        for n in gn:
+            rec = next((r for r in grad if r["code"] == code and r["n"] == n), None)
+            row.append("—" if rec is None else f"{rec['median_s']*1e3:,.2f} ms")
+        add("| " + " | ".join(row) + " |")
+
+memrows = [r for r in speed if r["mode"] == "single" and "error" not in r
+           and mem_mb(r) is not None]
+if memrows:
+    add("\n## Peak memory of one light curve\n")
+    add("The process's physical footprint (what Activity Monitor shows), "
+        "above its level after importing the code: what it holds to compute "
+        "the light curve (arrays, compiled code, memory pools) and a call's "
+        "transient peak (benchmarks/memwatch.py). One measure for every "
+        "code, CPU and GPU (Metal) memory alike. Fewest threads per code.\n")
+    mn = sorted({r["n"] for r in memrows})
+    add("| code | " + " | ".join(f"N={n:,}" for n in mn) + " |")
+    add("|---|" + "---:|" * len(mn))
+    for code in sorted({r["code"] for r in memrows}):
+        th = min(r["threads"] for r in memrows if r["code"] == code)
+        row = [code]
+        for n in mn:
+            rec = next((r for r in memrows if r["code"] == code
+                        and r["threads"] == th and r["n"] == n), None)
+            row.append("—" if rec is None else f"{mem_mb(rec):,.1f} MB")
+        add("| " + " | ".join(row) + " |")
 
 bs_path = os.path.join(HERE, "batch_scaling.json")
 if os.path.exists(bs_path):
@@ -153,16 +197,18 @@ axis outside the kernel. Reproduce: `python benchmarks/bench_tau_kernel.py`.
 
 | route | evals/pt | forward | value+grad | peak MB (v+g) | max abs error |
 |---|---:|---:|---:|---:|---:|
-| expanded axis, n_sub=15 | 15 | 41.0 ms | 99.7 ms | 2776 | 1.6e-4 |
-| in-kernel supersample, n_sub=15 | 15 | 14.5 ms | 28.0 ms | 51 | 1.6e-4 |
-| in-kernel contact, n_gl=5 | 25 | 24.4 ms | 43.9 ms | 51 | 1.3e-7 |
+| expanded axis, n_sub=15 | 15 | 19.6 ms | 59.0 ms | 2776 | 1.6e-4 |
+| in-kernel supersample, n_sub=15 | 15 | 6.8 ms | 15.5 ms | 51 | 1.6e-4 |
+| in-kernel contact, n_gl=5 | 5-25 | 4.3 ms | 9.8 ms | 51 | 1.3e-7 |
 
 Error is against an fp64 contact-rule reference at n_gl = 12 — neither of
 the rules being compared, because scoring supersampling against a
 supersampled reference flatters it. The middle row is the same arithmetic
-as the first, so its 2.8x / 3.6x is purely the cost of materialising the
+as the first, so its 2.9x / 3.8x is purely the cost of materialising the
 sub-exposure axis in MLX: every forward intermediate and every gradient
-grid is n_sub times the light curve.
+grid is n_sub times the light curve. The contact rule evaluates n_gl
+nodes per non-empty piece of the exposure: 5 for an exposure no contact
+falls inside, 25 only with all four inside.
 
 At matched accuracy the gap is not a factor of three. Supersampling
 converges as O(1/N) on a kinked curve, so 1e-6 needs n_sub ~ 2,271 —
@@ -171,8 +217,8 @@ where both routes stay resident:
 
 | matched to 1e-6 | forward | value+grad | peak MB |
 |---|---:|---:|---:|
-| expanded axis, n_sub=2271 | 59.0 ms | 176.5 ms | 1602 |
-| in-kernel contact, n_gl=5 | 1.9 ms (**30x**) | 3.1 ms (**57x**) | 10 (**161-517x**) |
+| expanded axis, n_sub=2271 | 36.7 ms | 120.7 ms | 1602 |
+| in-kernel contact, n_gl=5 | 0.51 ms (**72x**) | 0.78 ms (**155x**) | 10 (**161-517x**) |
 
 ## The batching rule for samplers
 
