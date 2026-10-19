@@ -347,11 +347,6 @@ def _unpack_ld(vec, tail):
     return u1, u2, None, fp
 
 
-# Times per block when a ringed model's graph is evaluated block by block
-# (TransitModel._eval_blocks): ~1 GB of fp64 intermediates and cache.
-_RING_BLOCK = 1 << 15
-
-
 class TransitModel:
     """Precomputes the (super)sampled time grid; ``light_curve(params)``
     evaluates the model for (possibly updated) parameters, batman-style.
@@ -750,7 +745,7 @@ class TransitModel:
         self._compiled[key] = fn
         return fn
 
-    def _model_eval(self, params, uv, t=None) -> mx.array:
+    def _model_eval(self, params, uv) -> mx.array:
         """One parameter set -> flux, through the compiled graphs. The one
         path behind light_curve and light_curve_mx.
 
@@ -799,7 +794,7 @@ class TransitModel:
 
         self._require(lambda k: getattr(params, k), self._required_fields())
         if self._ringed:
-            return self._ring_eval(params, uv, cast, rad, is_arr, t)
+            return self._ring_eval(params, uv, cast, rad, is_arr)
         if self._oblate:
             return self._oblate_eval(params, uv, cast, rad, is_arr)
 
@@ -981,39 +976,12 @@ class TransitModel:
     # use_metal=False the graph -- not compiled whole: MLX 0.32's mx.compile
     # fails on it (an internal "unordered_map::at" error once the orbit and
     # the ring's columns are in one graph). On the CPU the columns alone
-    # run compiled (rings._shape_cols_compiled).
-    #
-    # The graph holds ~20-24 KB of intermediates per time point (fp64) until
-    # the curve is evaluated -- ~24 GB at 10^6 points -- so light_curve and
-    # light_curves evaluate it in blocks of _RING_BLOCK points (~1 GB at any
-    # length, no slower). Each point's flux depends only on its own time.
-    # light_curve_mx stays one graph: the caller evaluates it.
-
-    def _ring_in_blocks(self) -> bool:
-        """Evaluate this ringed model block by block: the ring graph runs
-        (not the ring kernels) and the grid is longer than one block."""
-        return (self._ringed and self._t_mx.size > _RING_BLOCK
-                and not self._kernel_usable())
-
-    def _eval_blocks(self, run) -> np.ndarray:
-        """``run(t)`` evaluated over the model's grid in equal blocks of at
-        most _RING_BLOCK times, as a float64 numpy array (time last). Equal,
-        so every block reuses the buffers MLX cached for the first (a
-        shorter last block would allocate, and cache, a second set) and
-        one compiled shape serves all: the grid is padded with its last
-        time (< one point per block), and the padding dropped."""
-        t, n = self._t_mx, self._t_mx.size
-        nb = -(-n // _RING_BLOCK)
-        size = -(-n // nb)
-        if nb * size > n:
-            t = mx.concatenate([t, mx.broadcast_to(t[-1:], (nb * size - n,))])
-        out = np.concatenate(
-            [np.array(run(t[i * size:(i + 1) * size]), dtype=np.float64)
-             for i in range(nb)], axis=-1)
-        return out[..., :n]
+    # run compiled (rings._shape_cols_compiled), and the graph is built in
+    # blocks of a bounded number of points (rings_tau._in_blocks).
 
     def _ring_fn(self, orbit: str):
-        """The compiled ringed-planet model; ``orbit`` as _oblate_fn's."""
+        """The ringed-planet model (not compiled whole: see above);
+        ``orbit`` as _oblate_fn's."""
         key = ("ring", orbit)
         fn = self._compiled.get(key)
         if fn is not None:
@@ -1040,9 +1008,8 @@ class TransitModel:
         self._compiled[key] = raw
         return raw
 
-    def _ring_eval(self, params, uv, cast, rad, is_arr, t=None):
-        """light_curve / light_curve_mx for a ringed model, as _oblate_eval;
-        ``t`` a block of the grid (_eval_blocks), else the whole grid."""
+    def _ring_eval(self, params, uv, cast, rad, is_arr):
+        """light_curve / light_curve_mx for a ringed model, as _oblate_eval."""
         from .rings import _check_ring
         f = 0.0 if params.f is None else params.f
         tau = math.inf if params.ring_tau is None else params.ring_tau
@@ -1052,7 +1019,7 @@ class TransitModel:
         ring = (cast(f), rad(0.0 if params.theta is None else params.theta),
                 cast(params.ring_in), cast(params.ring_out),
                 cast(params.ring_f), cast(tau))
-        head = (self._t_mx if t is None else t, t0_off, per, a)
+        head = (self._t_mx, t0_off, per, a)
         route = self._ecc_route(params, cast, rad, is_arr)
         if route[0] == "ew":
             _, e, wr, emask = route
@@ -1115,17 +1082,12 @@ class TransitModel:
     def light_curve(self, params) -> np.ndarray:
         """Model flux at the times given at construction (numpy array)."""
         uv = self._check_law(params)
-
-        def flux():
-            if self._ring_in_blocks():
-                return self._eval_blocks(
-                    lambda t: self._model_eval(params, uv, t))
-            return np.array(self._model_eval(params, uv), dtype=np.float64)
         if self._stream is not None:
             with mx.stream(self._stream):
-                out = flux()
+                f = self._model_eval(params, uv)
+                out = np.array(f, dtype=np.float64)
         else:
-            out = flux()
+            out = np.array(self._model_eval(params, uv), dtype=np.float64)
         if (self.supersample_factor > 1
                 and self.integration == "supersample"):
             out = out.reshape(self.t.size,
@@ -1254,18 +1216,14 @@ class TransitModel:
                 b_np = contact_geometry(
                     cols["a"], ecc, ecc * np.sin(w), np.cos(inc),
                     sqrt=np.sqrt, maximum=np.maximum)[1]
-                rest = (t0, per, a, col(b_np), rp,
+                args = (self._t_mx[None, :], t0, per, a, col(b_np), rp,
                         col(cols["f"]), col(np.radians(cols["theta"])),
                         col(cols["ring_in"]), col(cols["ring_out"]),
                         col(cols["ring_f"]), col(cols["ring_tau"]), uvec)
-                ecc_any = bool(np.any(ecc > 0.0))
-
-                def run(tt):
-                    if ecc_any:
-                        return self._ring_fn("kh")(tt[None, :], *rest, k, h)
-                    return self._ring_fn("circ")(tt[None, :], *rest)
-                out = (self._eval_blocks(run) if self._ring_in_blocks()
-                       else run(self._t_mx))
+                if bool(np.any(ecc > 0.0)):
+                    out = self._ring_fn("kh")(*args, k, h)
+                else:
+                    out = self._ring_fn("circ")(*args)
             elif self._oblate:
                 from .oblate import _check_domain
                 _check_domain(cols["rp"], cols["f"])

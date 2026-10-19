@@ -132,6 +132,30 @@ def test_opacity_is_linear():
         assert np.max(np.abs(cols(cs[:7] + [tau]) - (lo + T * (hi - lo))) / NORM) < 1e-15
 
 
+def test_opacity_keeps_the_data_precision():
+    """A Python tau with a float64 ring_f is not rounded through float32."""
+    exact = -math.expm1(-0.1 / 0.5)
+    with mx.stream(mx.cpu):
+        for rf in (mx.array(0.5, dtype=mx.float64), 0.5):
+            for tau in (0.1, mx.array(0.1, dtype=mx.float64)):
+                if isinstance(rf, float) and isinstance(tau, float):
+                    v = rings.ring_opacity(tau, rf)
+                else:
+                    v = rings.ring_opacity(tau, rf).item()
+                assert abs(v - exact) < 1e-16
+
+
+def test_generator_columns_take_host_arguments():
+    """Python numbers beside the arrays, as the other arguments allow."""
+    x0, y0 = arr(0.3, mx.float64), arr(0.0, mx.float64)
+    with mx.stream(mx.cpu):
+        host = rings.generator_cols_ring(x0, y0, 0.1, 0.0, 1.5, 2.0, 0.5, 1.0, "hybrid2")
+        dev = rings.generator_cols_ring(x0, y0, *[arr(v, mx.float64) for v in
+                                                   (0.1, 0.0, 1.5, 2.0, 0.5, 1.0)], "hybrid2")
+        assert all(isinstance(c, mx.array) for c in host)
+        assert all(np.array_equal(np.array(a), np.array(b)) for a, b in zip(host, dev))
+
+
 def test_out_of_transit_is_exactly_zero():
     for cs in [(1.6, 0.0, 0.08, 0.0, 1.5, 2.5, 0.5, np.inf), (0.0, 1.9, 0.08, 0.1, 1.2, 2.0, 0.7, 1.0)]:
         assert np.all(cols(cs) == 0.0)
@@ -235,7 +259,8 @@ def test_batched_equals_one_at_a_time():
 @pytest.mark.parametrize("bad, msg", [
     (dict(ring_f=1.0), "ring_f"), (dict(ring_f=-0.1), "ring_f"),
     (dict(ring_tau=-1.0), "ring_tau"), (dict(ring_out=1.2), "ring_out"),
-    (dict(ring_in=0.9), "equator"), (dict(f=0.3, ring_in=1.1), "equator")])
+    (dict(ring_in=0.9), "equator"), (dict(f=0.3, ring_in=1.1), "equator"),
+    (dict(f=-0.1), "flattening"), (dict(f=1.0), "flattening")])
 def test_parameter_checks(bad, msg):
     p = dict(x0=0.3, y0=0.2, rp=0.08, f=0.0, ring_in=1.5, ring_out=2.5, ring_f=0.5,
              ring_tau=np.inf)

@@ -5,6 +5,32 @@ every release is tagged `vX.Y.Z` in git.
 
 ## [Unreleased]
 
+## [0.18.5] — 2026-10-19
+
+### Fixed
+- **A ringed planet with a flattening outside [0, 1) now raises**, as an
+  oblate one does ("flattening f must be in [0, 1)"), instead of returning
+  NaN fluxes.
+- **Ring opacity in float64.** A Python `ring_tau` was rounded through
+  float32 before the opacity was formed, an error of about 1e-8 in the
+  ring's blocked fraction (about 1e-10 in flux) on a path otherwise exact
+  to rounding.
+- `rings.generator_cols_ring` accepts Python numbers for the planet and
+  ring arguments, as `shape_cols_ring` does, instead of raising
+  `TypeError`.
+
+### Changed
+- **Ringed planets in float64: memory bounded on every route.** The
+  blocking of 0.18.4 counted times only, and only in `light_curve` and
+  `light_curves`. The ring graph is now built in blocks of at most 32,768
+  evaluation points -- times x parameter sets x exposure nodes -- inside
+  the graph itself, so `light_curves` with many sets, the contact rule and
+  `flux_dev_from_tau(..., ring_in=...)` are bounded too (about 1.6 GB at
+  10^6 points; about 2.5 GB under the contact rule), bit for bit the same
+  light curves, at the same speed. The contact rule finds each set's kinks
+  once rather than per block. A gradient needs less as well: 6.8 GB at
+  10^5 points, down from 11.8 GB, for about 10% more time.
+
 ## [0.18.4] — 2026-10-18
 
 ### Changed

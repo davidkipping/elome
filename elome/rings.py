@@ -106,7 +106,10 @@ def ring_opacity(ring_tau, ring_f):
     if isinstance(ring_tau, mx.array) or isinstance(ring_f, mx.array):
         # an opaque ring (tau = inf) is exactly 1, and sanitized: d/d ring_f
         # of exp(-inf / c) would be 0 * inf
-        tau = ring_tau if isinstance(ring_tau, mx.array) else mx.array(ring_tau)
+        # a host tau takes ring_f's dtype (mx.array() alone would make it
+        # float32 and round a float64 path's opacity)
+        dt = ring_f.dtype if isinstance(ring_f, mx.array) else mx.float32
+        tau = ring_tau if isinstance(ring_tau, mx.array) else _to_dtype(ring_tau, dt)
         opaque = mx.isinf(tau)
         t = mx.where(opaque, 0.0, tau)
         return mx.where(opaque, 1.0, -mx.expm1(-t / (1.0 - ring_f)))
@@ -120,6 +123,8 @@ def _check_ring(f, ring_in, ring_out, ring_f, ring_tau):
     if any(isinstance(v, mx.array) for v in vals):
         return
     f, ri, ro, rf, tau = (np.asarray(v, dtype=np.float64) for v in vals)
+    if np.any(f < 0.0) or np.any(f >= 1.0):
+        raise ValueError(f"flattening f must be in [0, 1); got {f}")
     if np.any(rf < 0.0) or np.any(rf >= 1.0):
         raise ValueError(f"ring_f must be in [0, 1); got {rf}")
     if np.any(tau < 0.0):
@@ -393,6 +398,8 @@ def generator_cols_ring(x0, y0, rp, f, ring_in, ring_out, ring_f, ring_tau, law)
     the principal frame (``oblate.principal_frame``)."""
     law = get_law(law)
     dt = x0.dtype
+    y0, rp, f, ring_in, ring_out, ring_f, ring_tau = (
+        _to_dtype(v, dt) for v in (y0, rp, f, ring_in, ring_out, ring_f, ring_tau))
     # broadcast without arithmetic: ring_tau may be inf (inf * 0 is NaN)
     shape = np.broadcast_shapes(*[v.shape for v in (x0, y0, rp, f, ring_in, ring_out,
                                                     ring_f, ring_tau) if isinstance(v, mx.array)])

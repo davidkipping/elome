@@ -40,7 +40,7 @@ Against tests/ring_oracle.py (rays about the star's centre, adaptive to 1e-15), 
 
 | code | N = 1,000 | N = 10,000 | N = 100,000 | N = 1,000,000 | N = 10,000,000 |
 |---|---:|---:|---:|---:|---:|
-| Elómë fp64 (CPU) | 73.17 ms | 446.64 ms | 4,112.59 ms | 40.7 s | -- |
+| Elómë fp64 (CPU) | 73.88 ms | 451.14 ms | 4,228.04 ms | 41.8 s | -- |
 | Elómë fp32 (GPU, Metal) | 1.59 ms | 1.66 ms | 4.02 ms | 33.95 ms | 330.76 ms |
 | pyPplusS 0.1.5.3 (numpy, fp64; default order 5) | 463.38 ms | 3,862.30 ms | 38.0 s | -- | -- |
 | pyPplusS 0.1.5.3 (order 20) | 1,529.67 ms | 14.5 s | -- | -- | -- |
@@ -64,7 +64,7 @@ sum(c * flux) for fixed random c, in every parameter each code exposes: for Eló
 
 | code | N = 10,000 | N = 100,000 |
 |---|---:|---:|
-| Elómë fp64 (CPU) | 1,341.73 ms | 11.5 s |
+| Elómë fp64 (CPU) | 1,390.77 ms | 12.6 s |
 | Elómë fp32 (GPU, Metal) | 6.47 ms | 17.46 ms |
 | squishyplanet 0.6.0 RingedSystem (JAX, fp64, CPU) | 2,230.27 ms | 20.3 s |
 
@@ -74,7 +74,7 @@ The process's physical footprint (what Activity Monitor shows), above its level 
 
 | code | N = 1,000 | N = 10,000 | N = 100,000 | N = 1,000,000 | N = 10,000,000 |
 |---|---:|---:|---:|---:|---:|
-| Elómë fp64 (CPU) | 201 MB | 531 MB | 1,067 MB | 1,355 MB | -- |
+| Elómë fp64 (CPU) | 199 MB | 532 MB | 1,078 MB | 1,642 MB | -- |
 | Elómë fp32 (GPU, Metal) | 10 MB | 10 MB | 13 MB | 34 MB | 277 MB |
 | pyPplusS 0.1.5.3 (numpy, fp64; default order 5) | 18 MB | 60 MB | 111 MB | -- | -- |
 | pyPplusS 0.1.5.3 (order 20) | 14 MB | 23 MB | -- | -- | -- |

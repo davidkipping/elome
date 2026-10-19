@@ -178,59 +178,95 @@ def test_fp32_model_matches_fp64(kw):
 
 
 
-def _count_ring_calls(m, monkeypatch):
-    """The number of times each ring-graph call sees, per call."""
-    sizes, orig = [], m._ring_fn
+def _spy_graph(monkeypatch):
+    """The (sets, times) of each ring-graph block, in call order."""
+    shapes, orig = [], rings_tau._tau_graph
 
-    def spy(orbit):
-        fn = orig(orbit)
+    def spy(tau, *a, **kw):
+        shapes.append(tuple(tau.shape))
+        return orig(tau, *a, **kw)
+    monkeypatch.setattr(rings_tau, "_tau_graph", spy)
+    return shapes
 
-        def run(tt, *a):
-            sizes.append(tt.shape[-1])
-            return fn(tt, *a)
-        return run
-    monkeypatch.setattr(m, "_ring_fn", spy)
-    return sizes
+
+def _blocks(total, most):
+    nb = -(-total // most)
+    return [-(-total // nb)] * nb          # equal blocks, the last padded
 
 
 @pytest.mark.parametrize("pkw,mkw", [
     ({}, {}), (dict(ecc=0.3, w=40.0), {}), (dict(f=0.2, ring_tau=0.4), {}),
-    ({}, dict(integration="contact", exp_time=EXP)),
+    ({}, dict(integration="contact", exp_time=EXP, n_gl=2)),
     ({}, dict(supersample_factor=3, exp_time=EXP)),
     (dict(ecc=0.2, w=40.0), dict(dtype=mx.float32, use_metal=False))],
     ids=["circular", "eccentric", "oblate, translucent", "contact", "supersampled",
          "fp32 graph"])
 def test_long_grids_are_evaluated_in_blocks(pkw, mkw, monkeypatch):
-    """The ring graph holds ~20 KB per time point until evaluated, so
-    light_curve and light_curves evaluate it in blocks of _RING_BLOCK times:
-    the same curve, bit for bit."""
-    from elome import api
+    """The ring graph holds ~20 KB per evaluation point until evaluated, so
+    it is built in blocks of at most _RING_BLOCK points -- times x sets x
+    exposure nodes: the same curve, bit for bit."""
     p = P(**pkw)
     m = el.TransitModel(p, T, **mkw)
     sets = [p, P(**{**pkw, "ring_f": 0.9, "ring_tau": 0.3, "theta": 80.0})]
     whole, whole_sets = m.light_curve(p), m.light_curves(sets)
-    monkeypatch.setattr(api, "_RING_BLOCK", 50)
-    sizes = _count_ring_calls(m, monkeypatch)
+    nodes = 5 * 2 if mkw.get("integration") == "contact" else 1
+    monkeypatch.setattr(rings_tau, "_RING_BLOCK", 50 * nodes)
+    shapes = _spy_graph(monkeypatch)
     n = m._t_mx.size
-    nb = -(-n // 50)
-    blocks = [-(-n // nb)] * nb            # equal blocks, the last padded
+    one = [(1, s) for s in _blocks(n, 50)]
     assert np.array_equal(m.light_curve(p), whole)
-    assert sizes == blocks
+    assert shapes == one
     assert np.array_equal(m.light_curves(sets), whole_sets)
-    assert sizes == 2 * blocks
+    assert shapes == 3 * one                # each set's times in blocks
+
+
+def test_many_short_rows_are_blocked_by_sets(monkeypatch):
+    """Sets that fit a block whole go in groups of rows (padded with the
+    last); flux_dev_from_tau and the basis columns are blocked as well."""
+    tau = np.linspace(-0.15, 0.15, 9)
+    rp = 0.06 + 0.004 * np.arange(7)
+    kw = dict(limb_dark="hybrid5", theta=0.4, ring_in=1.4, ring_out=2.6, ring_f=0.7)
+    with mx.stream(mx.cpu):
+        t2 = mx.broadcast_to(mx.array(tau, dtype=mx.float64), (7, 9))
+        rpa = mx.array(rp, dtype=mx.float64)
+        whole = np.array(el.flux_dev_from_tau(t2, PER, 8.8, 0.3, rpa, u=W5, **kw))
+        basis = np.array(el.flux_dev_from_tau(t2, PER, 8.8, 0.3, rpa, ld_basis=True, **kw))
+        monkeypatch.setattr(rings_tau, "_RING_BLOCK", 20)
+        shapes = _spy_graph(monkeypatch)
+        assert np.array_equal(np.array(el.flux_dev_from_tau(t2, PER, 8.8, 0.3, rpa, u=W5,
+                                                            **kw)), whole)
+        assert shapes == [(2, 9)] * 4       # 7 rows of 9 points, 2 per block
+        assert np.array_equal(np.array(el.flux_dev_from_tau(t2, PER, 8.8, 0.3, rpa,
+                                                            ld_basis=True, **kw)), basis)
+    assert whole.shape == (7, 9) and basis.shape == (7, 9, 6)
+
+
+def test_contact_kinks_are_found_once_per_set(monkeypatch):
+    """The contact rule's kinks depend on the parameters alone."""
+    calls, orig = [], rings_tau._ring_kinks
+
+    def spy(*a, **kw):
+        calls.append(a[0].shape)
+        return orig(*a, **kw)
+    p = P()
+    m = el.TransitModel(p, T, integration="contact", exp_time=EXP, n_gl=2)
+    monkeypatch.setattr(rings_tau, "_RING_BLOCK", 100)
+    monkeypatch.setattr(rings_tau, "_ring_kinks", spy)
+    m.light_curves([p, P(rp=0.07)])
+    assert calls == [(2,)]
 
 
 @pytest.mark.skipif(not el.metal_available(), reason="needs Metal")
 def test_ring_kernels_are_not_blocked(monkeypatch):
-    """The fp32 ring kernels hold no per-point graph: one call."""
-    from elome import api
-    monkeypatch.setattr(api, "_RING_BLOCK", 50)
+    """The fp32 ring kernels hold no per-point graph: no graph at all."""
+    monkeypatch.setattr(rings_tau, "_RING_BLOCK", 50)
     p = P()
     m = el.TransitModel(p, T, dtype=mx.float32)
-    sizes = _count_ring_calls(m, monkeypatch)
+    shapes = _spy_graph(monkeypatch)
     m.light_curve(p)
     m.light_curves([p, P(rp=0.07)])
-    assert sizes == [T.size, T.size]
+    assert shapes == []
+
 
 def test_errors():
     with pytest.raises(ValueError, match="hybrid law"):
@@ -248,6 +284,12 @@ def test_errors():
     with pytest.raises(ValueError, match="equator"):
         p = P(ring_in=0.9)
         el.TransitModel(p, T).light_curve(p)
+    for f in (-0.1, 1.0, 1.2):              # as the oblate path, not NaN
+        with pytest.raises(ValueError, match="flattening"):
+            p = P(f=f)
+            el.TransitModel(p, T).light_curve(p)
+        with pytest.raises(ValueError, match="flattening"):
+            el.TransitModel(P(f=0.2), T).light_curves([P(f=0.2), P(f=f)])
     m = el.TransitModel(P(), T)
     bare = P()
     bare.ring_in = bare.ring_out = bare.ring_f = bare.theta = None
