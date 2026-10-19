@@ -33,7 +33,7 @@ because they differ in what they can do and in what they cost:
 |---|---|---|---|
 | shape on the sky | disc, radius `rp` | ellipse: area-equivalent radius `rp`, flattening `f`, angle `theta` | the planet, plus an elliptical annulus: `ring_in`, `ring_out`, `ring_f`, `ring_tau`, angle `theta` |
 | limb darkening | uniform, linear, quadratic, polynomial, hybrid2/4/5 | hybrid2/4/5 | hybrid2/4/5 |
-| cost (fp32 GPU) | ~0.2 ns per point | tens of times more (B8) | 10-20x an oblate planet (C4) |
+| cost (fp32 GPU) | ~0.2 ns per point | tens of times more (B8) | about 10x an oblate planet (C4) |
 | switch | leave `f` as `None` (the default) | set `f` | set `ring_in` |
 
 **Part A** walks through a spherical planet; **Part B** repeats the same
@@ -700,7 +700,7 @@ md("""
 
 A float32 model runs fused Metal kernels for ringed planets too. Every
 outline -- the planet and both ring edges -- is integrated, each split
-into arcs where it crosses the others, so a ring costs about 10-20 times
+into arcs where it crosses the others, so a ring costs about 10 times
 an oblate planet.
 """)
 
@@ -735,7 +735,7 @@ md("""
 | float64 accuracy | ~1e-16 | ~1e-16 (vs a 30-digit integral) | ~1e-16 (vs brute-force integrals) |
 | float32 (GPU) accuracy | ~1e-7 | ~1e-7 | ~1e-7 |
 | exposures, eccentric orbits, gradients, batching, `ld_basis` | yes | yes | yes |
-| cost (fp32 GPU) | ~0.2 ns per point | tens of times that (15-32x; B8 measures this notebook's case); ~60x under the contact rule | 10-20x an oblate planet (C4) |
+| cost (fp32 GPU) | ~0.2 ns per point | tens of times that (15-32x; B8 measures this notebook's case); ~60x under the contact rule | about 10x an oblate planet (C4) |
 
 ## Where to go next
 
