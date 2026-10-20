@@ -23,7 +23,7 @@ planet.
 | `ring_in`, `ring_out` | the ring's inner and outer radii, in units of `rp` | the projected semi-major axes of its edges; `ring_in` must reach past the planet's equator |
 | `ring_f` | $1 - \lvert\cos i_\mathrm{ring}\rvert$, the projected flattening of both edges | 0 face-on, $\to 1$ edge-on; $0 \le$ `ring_f` $< 1$ |
 | `ring_tau` | the normal optical depth | `None` or $\infty$ is opaque; $\ge 0$ |
-| `theta` | the angle from the direction of motion to the ring's long axis | degrees in `TransitParams`, radians in the array API; shared with an oblate planet |
+| `theta` | the angle from the direction of motion at mid-transit to the ring's long axis | degrees in `TransitParams`, radians in the array API; shared with an oblate planet |
 
 In stellar radii the edges are ellipses with semi-axes
 

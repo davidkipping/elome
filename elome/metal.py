@@ -1381,6 +1381,23 @@ def _ld_basis_metal(z, r):
     return out[0] if squeeze and n == 1 else out
 
 
+def _per_chain_layout(z, r, u1, u2):
+    """The kernel's layout on the graph route: an (n,) parameter is one
+    per row of z (the graph broadcast it along the points instead, and
+    raised). Scalars and (n, 1) columns pass unchanged, so calls that
+    already worked give the same bits."""
+    if z.ndim not in (1, 2):
+        return z, r, u1, u2
+    chain = [isinstance(p, mx.array) and p.ndim == 1
+             and (z.ndim == 2 or p.shape[0] > 1) for p in (r, u1, u2)]
+    if not any(chain):
+        return z, r, u1, u2
+    if z.ndim == 1:
+        z = z[None, :]
+    return (z, *(p[:, None] if c else p
+                 for p, c in zip((r, u1, u2), chain)))
+
+
 @fp64_on_cpu
 def flux_dev_metal(z: mx.array, r, u1=None, u2=None, *,
                    ld_basis: bool = False, limb_dark: str = "quadratic",
@@ -1429,7 +1446,7 @@ def flux_dev_metal(z: mx.array, r, u1=None, u2=None, *,
     r, u1, u2 = (_as_dtype(p, z.dtype) for p in (r, u1, u2))
     if (z.dtype != mx.float32 or z.ndim not in (1, 2)
             or not _gpu_stream_active() or not metal_available()):
-        return flux_dev_analytic(z, r, u1, u2)
+        return flux_dev_analytic(*_per_chain_layout(z, r, u1, u2))
 
     squeeze = z.ndim == 1
     z2d = z[None, :] if squeeze else z

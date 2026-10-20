@@ -49,6 +49,7 @@ What differs:
 
 - **The hybrid limb-darkening laws only**, as for an oblate planet.
 - **Primary transits only.**
+- **Eccentricity up to 0.999**, as for an oblate planet.
 - **The planet may be spherical or oblate.** Leave `f` unset for a
   spherical planet; set it for an oblate one, whose ring shares its
   `theta`.

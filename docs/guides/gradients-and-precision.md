@@ -117,3 +117,14 @@ periastron, so that float32 gradients survive there. Its relative
 gradient error stays at about $10^{-7}$ from $e = 0.1$ down to
 $e = 10^{-8}$, where the textbook formulation's float32 gradients are
 already entirely wrong (`benchmarks/kh_grad_conditioning.py`).
+
+## A planet exactly as large as the star
+
+At exactly $r_p = 1$, with the planet's centre within about $10^{-12}$
+stellar radii of the star's, the planet's and the star's outlines
+coincide and the closed forms are degenerate. There the flux is off by
+up to $5\times10^{-9}$ and its gradients are wrong: 0, very large, or
+NaN, depending on the law and the path. Anywhere else, including
+$r_p = 0.999$ or a separation of $10^{-3}$, they are accurate. A sampler
+whose prior on $r_p$ reaches 1 is very unlikely to land on exactly 1.0,
+but avoid fixing $r_p = 1$ with $b = 0$.

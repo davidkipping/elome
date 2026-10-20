@@ -448,8 +448,10 @@ def _pole_terms(g, eps: float):
     Q = (eps + A) * (eps + Bp)
 
     # complete transit: Q > 0 there (z + r <= 1 < sqrt p)
+    # K is guarded too: off the mask sqQ = 1 and K + 1 passes through 0 at
+    # z^2 = 2 + eps + r^2, where the masked lane's VJP is 0 * inf
     sqQ = mx.sqrt(mx.where(m_comp, Q, one))
-    occ_c = _TWO_PI * r2 / (sqQ * (K + sqQ))
+    occ_c = _TWO_PI * r2 / (sqQ * (mx.where(m_comp, K, one) + sqQ))
     Q32c = mx.where(m_comp, Q, one) * sqQ
     docc_c_dz = 4.0 * _PI * z * r2 / Q32c
     docc_c_dr = _TWO_PI * r * a_ / Q32c

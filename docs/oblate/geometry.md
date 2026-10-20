@@ -23,7 +23,7 @@ stellar radii). Elómë describes it by:
 |---|---|---|
 | `rp` | $\sqrt{AB}$ | the **area-equivalent radius**: a circle of radius `rp` has the ellipse's area |
 | `f` | $1 - B/A$ | the projected flattening, $0 \le f < 1$ |
-| `theta` | the angle from the direction of motion to the long axis | degrees in `TransitParams`, radians in the array API |
+| `theta` | the angle from the direction of motion at mid-transit to the long axis | degrees in `TransitParams`, radians in the array API |
 
 so that
 
@@ -36,10 +36,14 @@ to $r_p^2$ whatever the flattening, and `rp` keeps the meaning it has for
 a spherical planet.
 
 `theta` is measured from the direction in which the planet moves across
-the star, positive towards the star's centre: anticlockwise in the
-figure, where the planet crosses below the centre ($b > 0$). The
+the star at mid-transit, positive towards the star's centre:
+anticlockwise in the figure, where the planet crosses below the centre
+($b > 0$). The axis is fixed on the sky for the whole transit, as a
+planet's spin axis is, even though a curved orbit's direction of motion
+turns slightly. The
 orbit is the same as for a spherical planet: `t0`, `per`, `a`, `inc` (or
-`b`), and `ecc`, `w` if eccentric.
+`b`), and `ecc`, `w` if eccentric, with $e \le 0.999$ (a spherical
+planet takes any $e < 1$).
 
 ## Symmetries
 
@@ -49,6 +53,11 @@ orbit is the same as for a spherical planet: `t0`, `per`, `a`, `inc` (or
   the chord is a line of symmetry of the star, and reflecting across it
   maps `theta` to $\pi -$ `theta`. The two light curves agree to rounding
   at $b = 0$ and differ by $2\times10^{-5}$ at $b = 0.05$.
+- **`b` and $-$`b` mirror `theta`.** A transit at $-b$ (`inc` above 90°)
+  with $-$`theta` is the mirror image of one at $b$ with `theta`, and
+  the light curves are identical. Which side of the star the planet
+  crosses cannot be seen, so the data fix the sign of `theta` only
+  relative to the sign of `b`.
 - **`f` and `theta` trade against `b` and `rp`.** On near-central
   transits an aligned oblate planet and a round one at slightly different
   $b$ can look alike. That is a property of the data, and matters for

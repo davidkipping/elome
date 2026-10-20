@@ -290,6 +290,11 @@ def test_errors():
             el.TransitModel(p, T).light_curve(p)
         with pytest.raises(ValueError, match="flattening"):
             el.TransitModel(P(f=0.2), T).light_curves([P(f=0.2), P(f=f)])
+    with pytest.raises(ValueError, match=r"\[0, 0.999\]"):  # cos i holds to 0.999
+        p = P(ecc=0.9995, w=300.0)
+        el.TransitModel(p, T).light_curve(p)
+    with pytest.raises(ValueError, match=r"\[0, 0.999\]"):
+        el.TransitModel(P(), T).light_curves([P(), P(ecc=0.9995, w=300.0)])
     m = el.TransitModel(P(), T)
     bare = P()
     bare.ring_in = bare.ring_out = bare.ring_f = bare.theta = None

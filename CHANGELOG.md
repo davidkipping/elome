@@ -5,6 +5,38 @@ every release is tagged `vX.Y.Z` in git.
 
 ## [Unreleased]
 
+## [0.18.8] — 2026-10-20
+
+### Fixed
+- **Eccentricities above 0.999 for oblate and ringed planets now raise**
+  ("eccentricity must be in [0, 0.999] for an oblate or ringed planet"),
+  or give NaN for a traced value, instead of a wrong light curve. These
+  routes rebuild the orbit from the impact parameter, whose inclination
+  holds to e = 0.999; above it the transit was wrong by up to 2% of its
+  depth (e = 0.9995). Spherical planets are exact there and still take
+  any e < 1.
+- **`flux_dev_metal` on the graph route** (float64, the CPU stream, or no
+  Metal) takes per-chain parameters as the kernel does: separations of
+  shape (n, m) with r, u1, u2 of shape (n,). It raised before. Calls that
+  already worked give the same results bit for bit.
+- **NaN gradient in the hybrid laws' pole terms** (float64 and the float32
+  graph; the kernels were not affected) at a single separation per pole,
+  where an unused branch divided by zero: z^2 = 2 + eps + r^2, outside
+  the transit for most radii, inside it for hybrid4's inner pole at
+  r = 0.9.
+
+### Documentation
+- `w` is the planet's argument of periastron (an RV solution's
+  omega_star + 180°), as in batman.
+- Secondary eclipses are placed at geometric superior conjunction; the
+  light-travel time across the orbit is not included.
+- `theta` is measured from the direction of motion at mid-transit, fixed
+  on the sky; and a transit at -b with -theta is the mirror image of one
+  at b with theta.
+- Known limitation, now documented: at exactly rp = 1 with the planet
+  centred on the star (within about 1e-12), the flux is off by up to 5e-9
+  and its gradients are wrong on every path.
+
 ## [0.18.7] — 2026-10-19
 
 Documentation only; the package is unchanged from 0.18.6.

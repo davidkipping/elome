@@ -570,3 +570,33 @@ class TestEccentricKernel:
         a = np.array(self._kernel(x2d, *args))
         b = np.array(self._kernel(x2d, *args))
         np.testing.assert_array_equal(a, b)
+
+
+@pytest.mark.parametrize("route", ["fp32 CPU graph", "fp64 graph"])
+def test_per_chain_parameters_on_the_graph_route(route):
+    """(n, m) separations with (n,) or scalar parameters, one per chain: the
+    kernel's layout. The graph fallback took the parameters per point and
+    raised (or broadcast wrongly) instead."""
+    rng = np.random.default_rng(3)
+    z = rng.uniform(0.0, 1.3, (4, 100))
+    r, u1 = rng.uniform(0.05, 0.2, 4), rng.uniform(0.1, 0.5, 4)
+    ref = np.stack([np.asarray(flux_dev_analytic(
+        mx.array(z[i], dtype=mx.float64), float(r[i]), float(u1[i]), 0.25))
+        for i in range(4)])
+    with mx.stream(mx.gpu):
+        kern = np.asarray(flux_dev_metal(mx.array(z, dtype=mx.float32),
+                                         mx.array(r, dtype=mx.float32),
+                                         mx.array(u1, dtype=mx.float32), 0.25))
+    if route == "fp64 graph":
+        out = np.asarray(flux_dev_metal(mx.array(z, dtype=mx.float64),
+                                        mx.array(r, dtype=mx.float64),
+                                        mx.array(u1, dtype=mx.float64), 0.25))
+        assert np.abs(out - ref).max() < 1e-15
+    else:
+        with mx.stream(mx.cpu):
+            out = np.asarray(flux_dev_metal(mx.array(z, dtype=mx.float32),
+                                            mx.array(r, dtype=mx.float32),
+                                            mx.array(u1, dtype=mx.float32), 0.25))
+        assert np.abs(out - ref).max() < 1e-6
+    assert out.shape == kern.shape == (4, 100)
+    assert np.abs(kern - ref).max() < 1e-6

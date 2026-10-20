@@ -48,6 +48,8 @@ What differs:
   $f = 0.5$, which covers planets.
 - **Primary transits only.** Secondary eclipses are for spherical
   planets.
+- **Eccentricity up to 0.999**, against any $e < 1$ for a spherical
+  planet.
 - **Cost.** An evaluation costs tens of times a spherical one. It is still
   milliseconds for a light curve on the GPU.
 

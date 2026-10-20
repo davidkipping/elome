@@ -748,3 +748,24 @@ class TestHybrid4CurvatureBasis:
         plain = HybridLaw("plain", HYBRID4.eps, HYBRID4.shapes, mix=np.eye(4))
         assert plain.mix is None
         assert plain.definition == HybridLaw("p2", HYBRID4.eps, HYBRID4.shapes).definition
+
+
+@pytest.mark.parametrize("z0,r,law", [(1.6155494421403511, 0.5, "hybrid2"),
+                                      (1.6848148266204213, 0.9, "hybrid4")])
+def test_no_nan_gradient_where_the_complete_form_divides_by_zero(z0, r, law):
+    """Off the complete-transit mask the pole column's K + sqrt(Q) is
+    K + 1, which passes through 0 at z^2 = 2 + eps + r^2 (out of transit for
+    hybrid2's pole at r = 0.5, inside the partial regime for hybrid4's inner
+    pole at r = 0.9). The masked lane's VJP was 0 * inf = NaN on the ulp
+    where it rounds to 0."""
+    zs = [z0]
+    for step in (np.inf, 0.0):
+        x = z0
+        for _ in range(200):
+            x = np.nextafter(x, step)
+            zs.append(x)
+    w = [0.3, 0.2] if law == "hybrid2" else [0.2, 0.2, 0.1, 0.1]
+    with mx.stream(mx.cpu):
+        Z = mx.array(np.array(zs), dtype=mx.float64)
+        g = mx.grad(lambda z: mx.sum(flux_dev_hybrid(z, r, w, law)))(Z)
+        assert np.isfinite(np.asarray(g)).all()

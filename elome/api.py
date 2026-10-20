@@ -11,7 +11,7 @@ drop-in familiarity:
     params.a = 15.0            # semi-major axis [stellar radii]
     params.inc = 87.0          # inclination [deg]
     params.ecc = 0.0           # eccentricity
-    params.w = 90.0            # longitude of periastron [deg]
+    params.w = 90.0            # planet's argument of periastron [deg]
     params.u = [0.1, 0.3]      # limb-darkening coefficients
     params.limb_dark = "quadratic"
 
@@ -120,7 +120,7 @@ class TransitParams:
         self.a = None             # semi-major axis [stellar radii]
         self.inc = None           # orbital inclination [degrees]
         self.ecc = 0.0            # eccentricity
-        self.w = 90.0             # longitude of periastron [degrees]
+        self.w = 90.0             # planet's argument of periastron [degrees]
         self.u = []               # limb-darkening coefficients
         self.limb_dark = None     # "uniform" | "linear" | "quadratic"
         self.fp = None            # planet/star flux ratio (secondary)
@@ -261,21 +261,32 @@ class _nullcontext:
 
 
 _ECC_MSG = "eccentricity must be in [0, 1); got {}"
+# an oblate or ringed planet's orbit is rebuilt from the impact parameter,
+# whose cos i (anchored.cos_inc_from_b) holds to e = 0.999 (metal._E_MAX)
+_ECC_MAX_SHAPED = 0.999
+_ECC_MSG_SHAPED = ("eccentricity must be in [0, 0.999] for an oblate or "
+                   "ringed planet; got {}")
 
 
-def _check_ecc(ecc):
+def _ecc_ok(ecc, shaped):
+    return (ecc >= 0.0) & ((ecc <= _ECC_MAX_SHAPED) if shaped else (ecc < 1.0))
+
+
+def _check_ecc(ecc, shaped=False):
     """Reject eccentricities the model cannot represent, before they reach
     a graph that would return a plausible flat curve (e >= 1) or an
-    all-NaN row (e < 0) with nothing pointing at the parameter. A Python
-    number is checked as a scalar; the batched path passes an array."""
+    all-NaN row (e < 0) with nothing pointing at the parameter -- or, for
+    an oblate or ringed planet (shaped), a wrong orbit (e > 0.999). A
+    Python number is checked as a scalar; the batched path passes an
+    array."""
+    msg = _ECC_MSG_SHAPED if shaped else _ECC_MSG
     if not isinstance(ecc, np.ndarray):
-        if not 0.0 <= ecc < 1.0:
-            raise ValueError(_ECC_MSG.format(ecc))
+        if not _ecc_ok(ecc, shaped):
+            raise ValueError(msg.format(ecc))
         return
-    bad = ~((ecc >= 0.0) & (ecc < 1.0))
+    bad = ~_ecc_ok(ecc, shaped)
     if bool(np.any(bad)):
-        raise ValueError(_ECC_MSG.format(
-            f"{ecc[bad][:4]} (and possibly more)"))
+        raise ValueError(msg.format(f"{ecc[bad][:4]} (and possibly more)"))
 
 
 _GEOM_RULES = (("rp", "rp must be >= 0", lambda v: v >= 0.0),
@@ -399,6 +410,7 @@ class TransitModel:
         # oblate planet: fixed per model, like the law (its own graphs)
         self._oblate = _is_oblate(params)
         self._ringed = _is_ringed(params)
+        self._shaped = self._oblate or self._ringed
         self._batch_keys = self._BATCH_KEYS + (
             ("f", "theta") + _RING_FIELDS if self._ringed
             else ("f", "theta") if self._oblate else ())
@@ -866,13 +878,13 @@ class TransitModel:
             e = cast(ecc)
             ev = _scalar_value(e)
             if ev is not None:
-                _check_ecc(ev)
+                _check_ecc(ev, self._shaped)
                 return "ew", e, rad(w), None
-            ok = mx.logical_and(e >= 0.0, e < 1.0)
+            ok = _ecc_ok(e, self._shaped)
             return "ew", e, rad(w), mx.where(ok, 1.0, float("nan")).astype(
                 self.dtype)
         ev = float(ecc)
-        _check_ecc(ev)
+        _check_ecc(ev, self._shaped)
         if ev == 0.0:
             return ("circ",)
         sq = math.sqrt(ev)
@@ -1125,7 +1137,7 @@ class TransitModel:
                 _ld_coeffs(p, u=uv)
                 rows.append([float(x) for x in uv])
             u = np.array(rows, dtype=np.float64).reshape(len(seq), -1)
-            _check_ecc(cols["ecc"])
+            _check_ecc(cols["ecc"], self._shaped)
             _check_geometry_cols(cols)
             return cols, u
         p = params_seq                       # array-valued TransitParams
@@ -1159,7 +1171,7 @@ class TransitModel:
             raise ValueError(f"inconsistent parameter-array lengths: u has "
                              f"{u.shape[0]} sets, the other fields {n}")
         u = np.broadcast_to(u, (n, u.shape[1]))
-        _check_ecc(cols["ecc"])
+        _check_ecc(cols["ecc"], self._shaped)
         _check_geometry_cols(cols)
         return cols, np.ascontiguousarray(u)
 

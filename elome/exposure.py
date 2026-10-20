@@ -2,7 +2,7 @@
 
 A finite exposure measures the flux averaged over [t - dt/2, t + dt/2].
 The usual fix (batman's, and ``TransitModel(supersample_factor=N)``) is
-to average N uniformly spaced samples. That converges only as O(dt^2/N^2)
+to average N uniformly spaced samples. That converges only as O(1/N)
 because the light curve is *not* smooth inside the window: its
 derivative jumps at each contact, where the planet's limb crosses the
 stellar limb.

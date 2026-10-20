@@ -243,6 +243,27 @@ def test_array_ecc_out_of_range_raises_or_is_nan():
         assert np.isfinite(np.asarray(comp(mx.array(0.3, dtype=mx.float64)))).all()
 
 
+def test_ecc_above_0999_raises_or_is_nan():
+    """The orbit is rebuilt from the impact parameter, whose cos i holds to
+    e = 0.999; above it the curve was quietly wrong (2% of the depth at
+    e = 0.9995). The spherical model is exact there and still accepts it."""
+    kw = dict(ecc=0.9995, w=300.0, inc=87.0)
+    with mx.stream(mx.cpu):
+        m = el.TransitModel(P(ecc=0.99, w=300.0, inc=87.0), T)
+        with pytest.raises(ValueError, match=r"\[0, 0.999\]"):
+            m.light_curve(P(**kw))
+        with pytest.raises(ValueError, match=r"\[0, 0.999\]"):
+            m.light_curves([P(**dict(kw, ecc=0.5)), P(**kw)])
+        with pytest.raises(ValueError, match=r"\[0, 0.999\]"):
+            m.light_curve_mx(P(**dict(kw, ecc=mx.array(0.9995, dtype=mx.float64))))
+        comp = mx.compile(lambda e: m.light_curve_mx(P(**dict(kw, ecc=e))))
+        assert np.isnan(np.asarray(comp(mx.array(0.9995, dtype=mx.float64)))).all()
+        assert np.isfinite(np.asarray(comp(mx.array(0.999, dtype=mx.float64)))).all()
+        assert np.isfinite(m.light_curve(P(**dict(kw, ecc=0.999)))).all()
+        s = spherical(**kw)
+        assert np.isfinite(el.TransitModel(s, T).light_curve(s)).all()
+
+
 @pytest.mark.skipif(not KERNEL, reason="needs Metal and the GPU stream")
 @pytest.mark.parametrize("kw", [{}, {"integration": "contact", "exp_time": EXP}],
                          ids=["none", "contact"])

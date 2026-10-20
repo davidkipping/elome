@@ -12,10 +12,14 @@
 | `a` | semi-major axis | stellar radii |
 | `inc` | orbital inclination | degrees |
 | `ecc` | eccentricity, $0 \le e < 1$ | |
-| `w` | argument of periastron | degrees |
+| `w` | the planet's argument of periastron | degrees |
 | `limb_dark` | the limb-darkening law | see {doc}`limb-darkening` |
 | `u` | the law's coefficients | a list |
 | `fp` | planet-to-star flux ratio (secondary eclipses only) | |
+
+`w` is the planet's argument of periastron, as in batman. A radial-velocity
+solution usually gives the star's, $\omega_\star$; then
+`w` $= \omega_\star + 180°$.
 
 Two more fields, `f` and `theta`, make the planet oblate; leave them as
 `None` here. See {doc}`../oblate/index`.
@@ -98,6 +102,11 @@ t2 = params.t0 + 0.5 * params.per + np.linspace(-0.1, 0.1, 1000)  # circular orb
 m2 = elome.TransitModel(params, t2, transittype="secondary")
 eclipse = m2.light_curve(params)
 ```
+
+The eclipse is placed at the orbit's geometric superior conjunction:
+the light-travel time across the orbit, $2a/c$ (about 40 s for
+$a = 8\,R_\odot$, 15 minutes for $a = 200\,R_\odot$), is not included, as
+in batman. Add it to the times if your timing precision needs it.
 
 `integration="contact"` is for primary transits. Use
 `supersample_factor` for a secondary eclipse.
