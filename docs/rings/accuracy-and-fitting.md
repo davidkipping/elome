@@ -32,7 +32,8 @@ weight.
 
 As for an oblate planet, a flattening below $10^{-5}$ is evaluated as a
 circle in float32 -- here also `ring_f` below $10^{-5}$, a face-on ring
--- and the derivative with respect to it is 0 in that band.
+-- while the derivative with respect to it is the ellipse's, so `ring_f`
+can start at exactly 0.
 
 ## Cost
 
@@ -87,7 +88,7 @@ ray integral (`benchmarks/ring_compare/`):
 |---|---:|---:|---:|---:|---:|---:|
 | error, opaque ring | $1.0\times10^{-7}$ | $5.6\times10^{-7}$ | $5.6\times10^{-16}$ | $1.1\times10^{-14}$ | $4.7\times10^{-3}$ | $2.2\times10^{-16}$ |
 | error, translucent ($\tau = 0.6$) | $1.1\times10^{-7}$ | $4.8\times10^{-7}$ | opaque only | $9.7\times10^{-15}$ | $4.1\times10^{-3}$ | $1.1\times10^{-16}$ |
-| error, nearly edge-on (`ring_f = 0.95`) | $1.0\times10^{-7}$ | $4.5\times10^{-6}$ | $7.8\times10^{-16}$ | $8.6\times10^{-15}$ | $9.6\times10^{-4}$ | $1.1\times10^{-16}$ |
+| error, nearly edge-on (`ring_f = 0.95`) | $1.0\times10^{-7}$ | $4.4\times10^{-6}$ | $7.8\times10^{-16}$ | $8.5\times10^{-15}$ | $9.6\times10^{-4}$ | $1.1\times10^{-16}$ |
 | one light curve, $N = 10^3$ | 1.6 ms | 0.46 s | 43 ms | 69 ms | 0.12 s | 74 ms |
 | one light curve, $N = 10^5$ | 4.0 ms | 38 s | 4.1 s | 7.2 s | 12 s | 4.2 s |
 | one light curve, $N = 10^6$ | 34 ms | | 40 s | 86 s | | 42 s |
@@ -98,9 +99,10 @@ ray integral (`benchmarks/ring_compare/`):
 
 The batches of the slower codes were timed on 8 to 32 sets and scaled to
 512. pyPplusS is shown at its default order; at order 20 its error is
-$4\times10^{-10}$ and it takes about 3.5 times as long. pryngles samples
-5,000 points on the planet and 5,000 on the ring. Memory is measured as
-for oblate planets (see {doc}`../oblate/accuracy-and-cost`); Elómë's
+$4\times10^{-10}$ to $1\times10^{-9}$ and it takes about 3.5 times as
+long. pryngles samples 5,000 points on the planet and 5,000 on the ring.
+Memory is measured as for oblate planets (see
+{doc}`../oblate/accuracy-and-cost`); Elómë's
 float64 path builds its graph in blocks of 32,768 evaluation points,
 which caps it near 1.6 GB at any length.
 

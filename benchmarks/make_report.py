@@ -161,13 +161,20 @@ if os.path.exists(bs_path):
             row.append("failed" if rec is None
                        else f"{npv / rec['median_s']:,.0f}")
         add("| " + " | ".join(row) + " |")
+    rate = {c: [r["npv"] / r["median_s"] for r in bs if r["code"] == c
+                and r["npv"] >= 256 and "median_s" in r]
+            for c in ("elome_gpu", "pytransit")}
     add("\nWith the fused model-level Metal kernel (orbit + photometry in "
         "one register-resident pass, ~12 B/pt of memory traffic) the GPU "
-        "streams ~55,000 curves/s flat to npv = 4096 with no memory "
-        "cliff. PyTransit's numba batch streams ~1,950 curves/s at every "
-        "size on 12 cores.\n")
+        f"streams {min(rate['elome_gpu']):,.0f}-{max(rate['elome_gpu']):,.0f} "
+        "curves/s from npv = 256 to 4096 with no memory cliff. PyTransit's "
+        f"numba batch streams {min(rate['pytransit']):,.0f}-"
+        f"{max(rate['pytransit']):,.0f} curves/s on 12 cores.\n")
 
 _vjp = json.load(open(os.path.join(HERE, "vjp.json")))["median_ms"]
+_e7 = {r["code"]: r["median_s"] for r in speed
+       if r["mode"] == "ecc" and r["n"] == 10_000_000 and "error" not in r}
+_cpu_e7 = min(v for c, v in _e7.items() if not c.startswith("elome"))
 VJP_SENTENCE = (f"{_vjp['metal_value_grad']:.1f} ms vs "
                 f"{_vjp['autodiff_value_grad'] / 1e3:.1f} s for reverse-mode autodiff at "
                 f"1024 x 65,536 — a\n~{round(_vjp['autodiff_value_grad'] / _vjp['metal_value_grad'], -1):.0f}x spread")
@@ -177,8 +184,8 @@ add(f"""
 Every code above solves Kepler's equation inside the timed region. At
 float64 Elómë ties exoplanet-core for the most accurate eccentric
 light curve (4e-16 vs the independent mpmath oracle); at float32 on the
-GPU it is the fastest past N ~ 1e5, reaching 15.3 ms at 10^7 points
-against 207 ms for the next-fastest CPU code. Below ~10^4 points the
+GPU it is the fastest past N ~ 1e5, reaching {_e7["elome_fp32"] * 1e3:.1f} ms at 10^7 points
+against {_cpu_e7 * 1e3:.0f} ms for the fastest CPU code. Below ~10^4 points the
 GPU dispatch floor dominates and the CPU codes win — the same crossover
 documented for the circular case.
 

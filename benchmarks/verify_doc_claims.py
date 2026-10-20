@@ -7,11 +7,20 @@ Every such number in the docs traces here or to vjp.json (written by
 bench_vjp.py). --check measures nothing: it formats the stored numbers as
 the docs print them and fails, listing each one, if a page does not
 contain it. Run the measurements on an otherwise-idle GPU.
+
+--check also reads the cross-code comparison tables (spherical, oblate and
+ringed planets) back to the results files the comparison runs write
+(precision*.json, speed.json, batch_scaling.json,
+oblate_compare/results_oblate.json, ring_compare/results_ring.json). A
+number on a page passes if the measurement rounds to it at the precision
+shown ("0.44 ms" means 0.435-0.445 ms; "about 1,700" means 1,650-1,750),
+and a cell with no measurement must hold no number.
 """
 
 import json
 import math
 import os
+import re
 import sys
 import time
 
@@ -60,9 +69,236 @@ def check():
     for page, needles in expect.items():
         text = open(os.path.join(DOCS, page)).read()
         bad += [f"{page}: missing {n!r}" for n in needles if n not in text]
+    n_cmp, bad_cmp, pages_cmp = check_comparisons()
+    bad += bad_cmp
+    pages = len(set(expect) | pages_cmp)
     print("\n".join(bad) if bad else f"docs agree with the measurements "
-          f"({sum(map(len, expect.values()))} numbers on {len(expect)} pages)")
+          f"({sum(map(len, expect.values())) + n_cmp} numbers on {pages} pages)")
     return not bad
+
+
+# ---- the cross-code comparison tables -------------------------------------
+
+_UNITS = {"ms": 1e-3, "s": 1.0, "KB": 1e-3, "MB": 1.0, "GB": 1e3}
+_NUMBER = re.compile(r"\$(\d+(?:\.\d+)?)\\times10\^\{(-?\d+)\}\$"
+                     r"|(\d[\d,]*(?:\.\d+)?)(?:\s*(ms|s|KB|MB|GB))?(?![\w.])")
+
+
+def _shown(cell):
+    """The first number in a cell, in s or MB, and half its last digit:
+    '0.44 ms' -> (4.4e-4, 5e-6), 'about 1,700' -> (1700, 50). None if the
+    cell holds no number."""
+    m = _NUMBER.search(cell)
+    if m is None:
+        return None
+    if m.group(1):
+        digits, scale = m.group(1), 10.0 ** int(m.group(2))
+    else:
+        digits, scale = m.group(3).replace(",", ""), _UNITS.get(m.group(4), 1.0)
+    if "." in digits:
+        last = 10.0 ** -len(digits.split(".")[1])
+    else:
+        last = 10.0 ** (len(digits) - len(digits.rstrip("0")))
+    return float(digits) * scale, 0.5 * last * scale
+
+
+def _agrees(cell, value):
+    shown = _shown(cell)
+    if value is None or shown is None:
+        return value is None and shown is None
+    return abs(value - shown[0]) <= shown[1] * (1 + 1e-9)
+
+
+def _table(text, after):
+    """{first cell: other cells} of the first table after `after`."""
+    rows, lines = {}, text[text.index(after):].splitlines()
+    i = next(k for k, line in enumerate(lines) if line.startswith("|"))
+    for line in lines[i:]:
+        if not line.startswith("|"):
+            break
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        rows[cells[0]] = cells[1:]
+    return rows
+
+
+def _get(d, *keys):
+    for k in keys:
+        if not isinstance(d, dict) or k not in d:
+            return None
+        d = d[k]
+    return d
+
+
+def check_comparisons():
+    """(numbers checked, failures, pages) for the comparison pages."""
+    load = lambda *p: json.load(open(os.path.join(HERE, *p)))  # noqa: E731
+    circ = {r["code"]: r["max_err"] for r in load("precision.json")}
+    ecc = {r["code"]: r["max_err"] for r in load("precision_ecc.json")}
+    speed = load("speed.json")
+    scaling = [r["npv"] / r["median_s"] for r in load("batch_scaling.json")
+               if r["code"] == "elome_gpu" and r["npv"] >= 256]
+    ob = load("oblate_compare", "results_oblate.json")
+    rg = load("ring_compare", "results_ring.json")
+
+    thr = {"batman": 1, "pytransit": 1, "exoplanet": 1}
+
+    def sp(code, mode, n=0, key="median_s"):
+        threads = 0 if mode == "batch" else thr.get(code, 0)
+        rec = next(r for r in speed if r["code"] == code and r["mode"] == mode
+                   and r["n"] == n and r["threads"] == threads)
+        return rec[key]
+
+    def batch_ratio(res, gpu):
+        return min(v for c, v in res.items() if not c.startswith("elome")) / res[gpu]
+
+    sph_codes = {"Elómë, float32 (GPU)": "elome_fp32", "Elómë, float64 (CPU)": "elome_fp64",
+                 "batman": "batman", "jaxoplanet": "jaxoplanet",
+                 "exoplanet-core": "exoplanet", "PyTransit": "pytransit"}
+    sph_batch = {"Elómë, float32 (GPU), one call": "elome_gpu",
+                 "PyTransit (native arrays)": "pytransit",
+                 "jaxoplanet (`jax.vmap`, CPU)": "jaxoplanet",
+                 "exoplanet-core (loop)": "exoplanet", "batman (loop)": "batman"}
+    sph_tables = {
+        "**Accuracy**": {
+            "Elómë, float64": [circ["elome fp64"], ecc["elome fp64"]],
+            "exoplanet-core": [circ["exoplanet-core"], ecc["exoplanet-core"]],
+            "jaxoplanet": [circ["jaxoplanet (order=50)"], ecc["jaxoplanet (order=10)"]],
+            "batman": [circ["batman"], ecc["batman"]],
+            "PyTransit (exact)": [circ["pytransit (exact)"], ecc["pytransit (exact)"]],
+            "Elómë, float32 (GPU)": [circ["elome fp32(GPU)"], ecc["elome fp32(GPU)"]]},
+        "**One light curve**": {
+            label: [sp(c, "single", n) for n in (10**3, 10**5, 10**6, 10**7)]
+            for label, c in sph_codes.items()},
+        "**Many light curves**": {
+            label: [sp(c, "batch"), 512 / sp(c, "batch"), sp(c, "batch", key="peak_mb")]
+            for label, c in sph_batch.items()},
+        "**Value and gradient**": {
+            label: [sp(c, "grad", n) for n in (10**4, 10**5)]
+            for label, c in (("Elómë, float32 (GPU)", "elome_fp32"),
+                             ("jaxoplanet (CPU)", "jaxoplanet"),
+                             ("Elómë, float64 (CPU)", "elome_fp64"))},
+        "**Memory**": {
+            label: [sp(c, "single", n, "peak_mb") for n in (10**5, 10**7)]
+            for label, c in sph_codes.items()},
+    }
+    sph_cpu_e7 = min(sp(c, "ecc", 10**7) for c in sph_codes.values() if not c.startswith("elome"))
+    sph_prose = [
+        (r"take Elómë's GPU path to (\S+ ms) at \$10\^7\$ points", sp("elome_fp32", "ecc", 10**7)),
+        (r"against (\S+ ms) for the fastest CPU code", sph_cpu_e7),
+        (r"stays at (about \S+) light curves per second", min(scaling)),
+        (r"stays at (about \S+) light curves per second", max(scaling)),
+        (r"(about \S+ KB) per point", sp("elome_fp64", "single", 10**7, "peak_mb") / 1e7),
+    ]
+
+    def compare_table(r, cols, rows):
+        """rows: label -> (results key path below each code, or a callable)."""
+        return {label: [get(r, c) for c in cols] for label, get in rows.items()}
+
+    def one(*path):
+        return lambda r, c: _get(r, *path[:1], c, *path[1:])
+
+    common = {
+        "one light curve, $N = 10^3$": one("single", "1000"),
+        "one light curve, $N = 10^5$": one("single", "100000"),
+        "512 sets × $10^4$ points": one("batch"),
+        "value + gradient, $N = 10^5$": one("grad", "100000"),
+        "memory, $N = 10^5$": lambda r, c: _get(r, "mem", "single", c, "100000", "peak_mb"),
+    }
+    ob_cols = ["elome_fp32", "greenlantern", "jojo", "squishyplanet", "eclipsoid", "elome_fp64"]
+    ob_rows = dict(common, **{
+        "error vs 30-digit integral": one("precision", "max"),
+        "one light curve, $N = 10^7$": one("single", "10000000"),
+        "memory, $N = 10^7$": lambda r, c: _get(r, "mem", "single", c, "10000000", "peak_mb"),
+        "memory, 512 sets × $10^4$": lambda r, c: _get(r, "mem", "batch", c, "peak_mb"),
+    })
+    rg_cols = ["elome_fp32", "pyppluss", "squishyplanet", "jojo", "pryngles", "elome_fp64"]
+    rg_rows = dict(common, **{
+        "error, opaque ring": one("precision_opaque", "max"),
+        "error, translucent ($\\tau = 0.6$)": one("precision_translucent", "max"),
+        "error, nearly edge-on (`ring_f = 0.95`)": one("precision_edge", "max"),
+        "one light curve, $N = 10^6$": one("single", "1000000"),
+        "memory, $N = 10^6$": lambda r, c: _get(r, "mem", "single", c, "1000000", "peak_mb"),
+    })
+    n20 = [rg["single"]["pyppluss_n20"][n] / rg["single"]["pyppluss"][n]
+           for n in rg["single"]["pyppluss_n20"]]
+    fp32_e7 = [sp("elome_fp32", "single", 10**7, "peak_mb"),
+               ob["mem"]["single"]["elome_fp32"]["10000000"]["peak_mb"],
+               rg["mem"]["single"]["elome_fp32"]["10000000"]["peak_mb"]]
+
+    def fastest(r):
+        """Elómë float32 is the fastest code at every size and in every mode."""
+        for mode in ("single", "grad"):
+            for n in {n for v in r[mode].values() for n in v}:
+                t = {c: v[n] for c, v in r[mode].items() if n in v}
+                if min(t, key=t.get) != "elome_fp32":
+                    return False
+        return min(r["batch"], key=r["batch"].get) == "elome_fp32"
+
+    pages = {
+        "spherical/accuracy-and-cost.md": (sph_tables, sph_prose),
+        "oblate/accuracy-and-cost.md": (
+            {"The benchmark is the spherical one's transit": compare_table(ob, ob_cols, ob_rows)},
+            [(r"timed up to \$10\^6\$ points \((\S+ s),", ob["single"]["eclipsoid"]["1000000"]),
+             (r"timed up to \$10\^6\$ points \(\S+ s, (\S+ MB)\)",
+              ob["mem"]["single"]["eclipsoid"]["1000000"]["peak_mb"]),
+             (r"(about \S+ KB) per point",
+              ob["mem"]["single"]["elome_fp64"]["10000000"]["peak_mb"] / 1e7)]),
+        "rings/accuracy-and-fitting.md": (
+            {"The reference is an independent float64": compare_table(rg, rg_cols, rg_rows)},
+            [(r"timed on (\S+) to \S+ sets", min(rg["batch_scaled_from"].values())),
+             (r"timed on \S+ to (\S+) sets", max(rg["batch_scaled_from"].values())),
+             (r"at order 20 its error is (\$[^$]+\$)",
+              min(rg[k]["pyppluss_n20"]["max"] for k in rg if k.startswith("precision_"))),
+             (r"at order 20 its error is \$[^$]+\$ to (\$[^$]+\$)",
+              max(rg[k]["pyppluss_n20"]["max"] for k in rg if k.startswith("precision_"))),
+             (r"it takes (about \S+) times as long", math.prod(n20) ** (1 / len(n20))),
+             (r"which caps it near (\S+ GB)",
+              max(v["peak_mb"] for v in rg["mem"]["single"]["elome_fp64"].values()))]),
+        "reference/performance.md": ({}, [
+            (r"from (about \S+) times \(spherical, against PyTransit\)",
+             batch_ratio({c: sp(c, "batch") for c in sph_batch.values()}, "elome_gpu")),
+            (r"to (about \S+) times \(ringed\)", batch_ratio(rg["batch"], "elome_fp32"))]),
+        "index.md": ({}, [
+            (r"integral to (\$[^$]+\$)", circ["elome fp64"]),
+            (r"\$10\^7\$ points in (about \S+ ms)", sp("elome_fp32", "single", 10**7)),
+            (r"(about \S+) light curves of \$10\^5\$ points", min(scaling)),
+            (r"(about \S+) light curves of \$10\^5\$ points", max(scaling))]),
+    }
+    claims = [
+        ("reference/performance.md", "fastest for oblate planets at every size",
+         fastest(ob)),
+        ("reference/performance.md", "fastest for ringed planets at every size",
+         fastest(rg)),
+        ("reference/performance.md", "float32, 10^7 points, under 300 MB for each planet type",
+         max(fp32_e7) < 300),
+    ]
+
+    n, bad = 0, []
+    for page, (tables, prose) in pages.items():
+        text = open(os.path.join(DOCS, page)).read()
+        flat = " ".join(text.split())
+        for after, rows in tables.items():
+            found = _table(text, after)
+            for label, values in rows.items():
+                cells = found.get(label)
+                if cells is None or len(cells) != len(values):
+                    bad.append(f"{page}: no row {label!r} with {len(values)} values")
+                    continue
+                for cell, v in zip(cells, values):
+                    n += 1
+                    if not _agrees(cell, v):
+                        bad.append(f"{page}: {label!r}: {cell!r}, measured {v!r}")
+        for pattern, v in prose:
+            n += 1
+            m = re.search(pattern, flat)
+            if m is None or not _agrees(m.group(1), v):
+                bad.append(f"{page}: /{pattern}/: "
+                           f"{m.group(1) if m else 'not found'!r}, measured {v!r}")
+    for page, what, ok in claims:
+        n += 1
+        if not ok:
+            bad.append(f"{page}: no longer true: {what}")
+    return n, bad, set(pages)
 
 
 if "--check" in sys.argv:

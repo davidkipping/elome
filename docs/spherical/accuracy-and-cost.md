@@ -45,7 +45,7 @@ over 241 points:
 |---|---:|---:|
 | Elómë, float64 | $2.2\times10^{-16}$ | $4.4\times10^{-16}$ |
 | exoplanet-core | $3.3\times10^{-16}$ | $5.6\times10^{-16}$ |
-| jaxoplanet | $1.8\times10^{-12}$ (order 50) | $4.6\times10^{-9}$ (order 10) |
+| jaxoplanet | $1.7\times10^{-12}$ (order 50) | $4.6\times10^{-9}$ (order 10) |
 | batman | $6.0\times10^{-9}$ | $5.4\times10^{-8}$ |
 | PyTransit (exact) | $4.0\times10^{-8}$ | $2.9\times10^{-7}$ |
 | Elómë, float32 (GPU) | $1.8\times10^{-7}$ | $1.3\times10^{-7}$ |
@@ -76,7 +76,7 @@ fixed dispatch cost dominates and the CPU codes are faster.
 | exoplanet-core (loop) | 1.53 s | 336 | 27 MB |
 | batman (loop) | 1.77 s | 289 | 255 MB |
 
-Elómë's throughput stays at about 55,000 light curves per second from
+Elómë's throughput stays at about 50,000 light curves per second from
 256 to 4,096 sets.
 
 **Value and gradient** of a scalar loss on one light curve, in every
@@ -100,7 +100,7 @@ memory alike.
 | Elómë, float32 (GPU) | 14 MB | 279 MB |
 | Elómë, float64 (CPU) | 84 MB | 7.9 GB |
 | batman | 3.3 MB | 154 MB |
-| jaxoplanet | 57 MB | 1.3 GB |
+| jaxoplanet | 56 MB | 1.3 GB |
 | exoplanet-core | 2.4 MB | 88 MB |
 | PyTransit | 49 MB | 203 MB |
 

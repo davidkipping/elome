@@ -21,11 +21,10 @@ are `tau`, `period`, `a`, `b`, `r`, `f`, `theta`, every weight, and
 
 - **Very small flattening.** Below $f = 10^{-5}$ a float32 evaluation
   uses the spherical forms, because the flattening moves the flux by less
-  than $4\times10^{-8}$ there. So $\partial F/\partial f = 0$ in that
-  band, and just above it the derivative is good to about 1%, improving
-  with $f$. A sampler started at exactly $f = 0$ leaves it on the
-  likelihood, not on the gradient; start at a small positive $f$
-  instead.
+  than $4\times10^{-8}$ there. The derivative $\partial F/\partial f$
+  is still the oblate one, taken from the ellipse at $f = 10^{-5}$, and
+  agrees with float64 to about $10^{-4}$ in that band and above it, so a
+  sampler or optimiser can start at exactly $f = 0$.
 - **Within about $10^{-6}$ of a limb contact.** float32 cannot resolve
   the sliver of overlap there. The flux lost is about $10^{-13}$ and the
   gradient error about $10^{-4}$, in a window of about $10^{-6}$ in

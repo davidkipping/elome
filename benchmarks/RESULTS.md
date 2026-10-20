@@ -103,14 +103,14 @@ The process's physical footprint (what Activity Monitor shows), above its level 
 
 | npv | Elómë GPU [curves/s] | PyTransit 12-core [curves/s] |
 |---:|---:|---:|
-| 64 | 40,638 | 2,037 |
-| 256 | 52,037 | 2,168 |
-| 512 | 53,592 | 2,149 |
-| 1024 | 54,757 | 1,986 |
-| 2048 | 55,126 | 2,004 |
-| 4096 | 55,268 | 2,024 |
+| 64 | 42,850 | 1,873 |
+| 256 | 47,756 | 1,998 |
+| 512 | 49,255 | 2,023 |
+| 1024 | 50,353 | 1,901 |
+| 2048 | 50,605 | 1,953 |
+| 4096 | 50,756 | 1,951 |
 
-With the fused model-level Metal kernel (orbit + photometry in one register-resident pass, ~12 B/pt of memory traffic) the GPU streams ~55,000 curves/s flat to npv = 4096 with no memory cliff. PyTransit's numba batch streams ~1,950 curves/s at every size on 12 cores.
+With the fused model-level Metal kernel (orbit + photometry in one register-resident pass, ~12 B/pt of memory traffic) the GPU streams 47,756-50,756 curves/s from npv = 256 to 4096 with no memory cliff. PyTransit's numba batch streams 1,901-2,023 curves/s on 12 cores.
 
 
 ## The eccentric comparison in one line
@@ -118,8 +118,8 @@ With the fused model-level Metal kernel (orbit + photometry in one register-resi
 Every code above solves Kepler's equation inside the timed region. At
 float64 Elómë ties exoplanet-core for the most accurate eccentric
 light curve (4e-16 vs the independent mpmath oracle); at float32 on the
-GPU it is the fastest past N ~ 1e5, reaching 15.3 ms at 10^7 points
-against 207 ms for the next-fastest CPU code. Below ~10^4 points the
+GPU it is the fastest past N ~ 1e5, reaching 10.2 ms at 10^7 points
+against 190 ms for the fastest CPU code. Below ~10^4 points the
 GPU dispatch floor dominates and the CPU codes win — the same crossover
 documented for the circular case.
 

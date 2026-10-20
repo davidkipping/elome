@@ -38,9 +38,9 @@ largest `rp` the chains reach), or map a non-finite log-likelihood to
 
 ## Near f = 0
 
-In float32 the model uses the spherical forms below $f = 10^{-5}$, so
-the gradient in `f` is zero in that band. Start chains at a small
-positive `f` rather than at exactly 0.
+In float32 the model's value uses the spherical forms below
+$f = 10^{-5}$, but its gradient in `f` is the oblate one, so chains can
+start at exactly $f = 0$, the edge of a uniform prior on $[0, 1)$.
 
 ## Limb darkening
 

@@ -13,7 +13,7 @@ CPU. Both run through [MLX](https://github.com/ml-explore/mlx).
 - **Exact.** In float64 the light curves agree with a 30-digit direct
   integral to $2\times10^{-16}$.
 - **Fast.** A light curve of $10^7$ points in about 10 ms on the GPU, and
-  about 55,000 light curves of $10^5$ points each per second when
+  about 50,000 light curves of $10^5$ points each per second when
   parameter sets are batched.
 - **Differentiable.** Every parameter, including the limb darkening,
   the eccentricity and the planet's shape, has an analytic gradient.

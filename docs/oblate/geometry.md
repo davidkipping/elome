@@ -76,5 +76,5 @@ raised) gives NaN.
   with the spherical result to $2\times10^{-17}$.
 - In float32, a flattening below $10^{-5}$ is evaluated with the spherical
   closed forms, since it moves the flux by less than $4\times10^{-8}$.
-  The derivative with respect to `f` is therefore 0 in that band; see
+  The derivative with respect to `f` is still the oblate one; see
   {doc}`accuracy-and-cost`.
