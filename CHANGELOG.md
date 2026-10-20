@@ -5,6 +5,24 @@ every release is tagged `vX.Y.Z` in git.
 
 ## [Unreleased]
 
+## [0.18.7] — 2026-10-19
+
+Documentation only; the package is unchanged from 0.18.6.
+
+### Fixed
+- **The oblate and ring pages** no longer say the gradient in `f` or
+  `ring_f` is 0 below 1e-5 and that fits should start at a small positive
+  value. Since 0.18.6 the gradient there is the oblate (or elliptical)
+  one, and a fit can start at exactly 0.
+- **Comparison tables.** Four rounded figures corrected (jaxoplanet's
+  accuracy and memory; pyPplusS's and JoJo's errors for a nearly edge-on
+  ring), and pyPplusS's order-20 error given over all three ring cases.
+  The batched throughput is about 50,000 light curves per second, not
+  55,000.
+- `benchmarks/verify_doc_claims.py --check` now checks every number in
+  the comparison tables, and the figures quoted from them, against the
+  results files.
+
 ## [0.18.6] — 2026-10-19
 
 ### Fixed
