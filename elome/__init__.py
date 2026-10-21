@@ -97,7 +97,7 @@ __all__ = [
     "sn_dev_with_aux",
 ]
 
-__version__ = "0.19.0"
+__version__ = "0.20.0"
 
 # Ringed planets, exported lazily: the ring modules are imported only when
 # one of these is first used (or a ring parameter is set), so a spherical

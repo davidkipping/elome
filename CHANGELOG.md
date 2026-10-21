@@ -5,6 +5,8 @@ every release is tagged `vX.Y.Z` in git.
 
 ## [Unreleased]
 
+## [0.20.0] — 2026-10-21
+
 ### Changed
 - **`TransitModel.light_curves` in float32 on the GPU** (uniform, linear
   and quadratic laws, primary transits, without the contact rule) runs the
