@@ -1644,7 +1644,7 @@ def contact_offsets_oblate_kernel(a, b, r, f, theta, k=None, h=None, ci=None,
                                   consts=None):
     """``oblate_tau.contact_offsets_oblate`` in one fp32 kernel launch:
     (n, 4) contact phases, detached. Same arguments."""
-    from .exposure import contact_offsets, contact_offsets_anchored
+    from .exposure import contact_offsets
     a, b, r, f, theta = (mx.stop_gradient(v) for v in (a, b, r, f, theta))
     A = r / mx.sqrt(1.0 - f)
     n = a.shape[0]
@@ -1657,7 +1657,8 @@ def contact_offsets_oblate_kernel(a, b, r, f, theta, k=None, h=None, ci=None,
         consts = tuple(mx.stop_gradient(c) for c in
                        (anchor_constants(k, h) if consts is None else consts))
         orbit, shape = "ecc", pack_orbit_constants(k, h, ci, consts=consts)
-        cA = contact_offsets_anchored(A, a, b, k, h, ci, consts=consts)
+        cA = M.contact_offsets_anchored_kernel(A, a, b, k, h, ci, consts=consts)
+        cA = [cA[:, j] for j in range(4)]
     st = mx.stack([mx.broadcast_to(c, (n,)) for c in cA], axis=1)
     out = _contact_kernel(orbit)(
         inputs=[a, mx.stop_gradient(shape), r, f, theta, st, n],

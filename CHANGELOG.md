@@ -22,6 +22,15 @@ every release is tagged `vX.Y.Z` in git.
   kernels. Accuracy against float64 is unchanged (the same maximum error
   over 1.8 million points, a slightly smaller RMS), and the outputs differ
   from 0.19.0's at float32 rounding.
+- **Eccentric contacts in float32 on the GPU** are solved by one Metal
+  kernel, one thread per set, instead of a graph of ~1,000 small
+  operations: 7.1 to 0.7 ms whatever the number of sets. An eccentric
+  contact-rule `flux_dev_from_tau` call is 6.6 times faster at 64 sets
+  (7.6 to 1.2 ms) and 3.1 times at 512; the oblate and ring kernels'
+  contact windows use it too (an eccentric oblate call at 64 sets, 26 to
+  20 ms). The same steps as the graph's solve, as accurate (over 20,000
+  orbits up to e = 0.95, grazing ones included); circular sets are
+  unchanged bit for bit, eccentric ones change at float32 rounding.
 
 ### Documentation
 - The batching guide's `light_curves` figure, now measured by

@@ -1020,7 +1020,7 @@ def ring_kinks_kernel(law, a, b, r, f, theta, ring_in, ring_out, ring_f, k=None,
                       h=None, ci=None, consts=None):
     """``rings_tau._ring_kinks`` in one fp32 kernel launch: (n, 24) kink
     phases, sorted, +inf in unused slots; detached."""
-    from .exposure import contact_offsets, contact_offsets_anchored
+    from .exposure import contact_offsets
     from .rings import ring_axes
     sg = mx.stop_gradient
     a, b, r, f, theta, ring_in, ring_out, ring_f = (
@@ -1035,8 +1035,13 @@ def ring_kinks_kernel(law, a, b, r, f, theta, ring_in, ring_out, ring_f, k=None,
         k, h, ci = (sg(v) for v in (k, h, ci))
         consts = tuple(sg(c) for c in (anchor_constants(k, h) if consts is None else consts))
         orbit, shape = "ecc", pack_orbit_constants(k, h, ci, consts=consts)
-        win = [contact_offsets_anchored(A, a, b, k, h, ci, consts=consts)
-               for A, _ in [planet] + edges]
+        # the three outlines' windows in one launch, stacked (3 n,)
+        def t3(v):
+            return mx.concatenate([mx.broadcast_to(v, (n,))] * 3)
+        cs = M.contact_offsets_anchored_kernel(
+            mx.concatenate([mx.broadcast_to(A, (n,)) for A, _ in [planet] + edges]),
+            t3(a), t3(b), t3(k), t3(h), t3(ci), consts=tuple(t3(c) for c in consts))
+        win = [[cs[j * n:(j + 1) * n, i] for i in range(4)] for j in range(3)]
     st = mx.stack([mx.broadcast_to(c, (n,)) for w in win for c in (w[0], w[3])], axis=1)
     out = _kink_kernel(law, orbit)(
         inputs=[a, sg(shape), r, f, theta, ring_in, ring_out, 1.0 - ring_f, st, n],

@@ -1532,12 +1532,136 @@ def _ecc_kernel_inputs(period, a, b, r, k, h, n):
     """(orb, cs) for the eccentric plug-in: the packed anchored constants
     (their Jacobian to a, b, k, h rides ordinary autodiff, as for the
     model kernel) and the detached contact times."""
-    from .anchored import pack_orbit_constants
-    from .exposure import contact_offsets_anchored
+    from .anchored import anchor_constants, pack_orbit_constants
     ci = _ecc_shape(a, b, k, h)[2]
-    cs = contact_offsets_anchored(r, a, b, k, h, ci)
-    return (pack_orbit_constants(k, h, ci),
-            _contact_taus(r, a, b, period, n, phases=cs))
+    consts = anchor_constants(k, h)
+    cs = contact_offsets_anchored_kernel(r, a, b, k, h, ci, consts=consts)
+    return (pack_orbit_constants(k, h, ci, consts=consts),
+            _contact_taus(r, a, b, period, n,
+                          phases=[cs[:, j] for j in range(4)]))
+
+
+# exposure.contact_offsets_anchored's solve in one thread per chain. As a
+# graph it is ~1,000 small ops whatever the batch (7 ms on the GPU, most of
+# an eccentric fp32 call); here it is one launch. The same steps in the
+# same order, from the model kernel's Kepler solve: secant steps to the
+# closest approach, outward doublings to bracket each contact, Newton
+# falling back to bisection. Values only: the kernels' contacts are
+# detached split points (_contact_taus).
+_ECC_CONTACT_FN = """
+// z^2 and d(z^2)/dphi at phase phi (contact_offsets_anchored's z2_slope)
+inline float mp_z2_slope(float phi, float av, thread const float *o,
+                         thread float *slope) {
+    float o_ecw = o[0], o_esw = o[1], o_es = o[2], o_ec = o[3];
+    float o_b1 = o[4], o_a2 = o[5], o_b2 = o[6], o_e = o[7];
+    float o_E0 = o[8], o_Mt = o[9], o_ci = o[10];
+SOLVE
+    float uu = av * (-o_ecw * omcf - o_b1 * sind);
+    float vv = av * (o_a2 * cosd - o_b2 * sind - o_esw);
+    float dud = av * (-o_ecw * sind - o_b1 * cosd);
+    float dvd = av * (-o_a2 * sind - o_b2 * cosd);
+    float Dk = 1.0f + o_es * sind - o_ec * cosd;
+    *slope = 2.0f * (uu * dud + o_ci * o_ci * vv * dvd) / Dk;
+    float vc = vv * o_ci;
+    return uu * uu + vc * vc;
+}
+"""
+
+_ECC_CONTACT_SRC = """
+    uint y = thread_position_in_grid.x;
+    if (y >= (uint)nchain) return;
+    float o[NORB_I];
+    for (int c = 0; c < NORB_I; ++c) o[c] = orb[y * NORB_C + (uint)c];
+    if (!(o[7] > 0.0f)) {             // e = 0: the linearisation is exact
+        for (uint j = 0u; j < 4u; ++j) out[4u * y + j] = lin[4u * y + j];
+        return;
+    }
+    float av = ain[y], r = rin[y], asq = asqin[y];
+    float s0, s1;
+    float p0 = 0.0f;
+    mp_z2_slope(p0, av, o, &s0);
+    float p1 = clamp(-s0 / (2.0f * asq), -MP_HALF_PI, MP_HALF_PI);
+    float z1 = mp_z2_slope(p1, av, o, &s1);
+    for (int it = 0; it < NSEC; ++it) {
+        float ds = s1 - s0;
+        float step = (ds != 0.0f) ? s1 * (p1 - p0) / ds : 0.0f;
+        p0 = p1;
+        s0 = s1;
+        p1 = clamp(p1 - clamp(step, -0.5f, 0.5f), -MP_HALF_PI, MP_HALF_PI);
+        z1 = mp_z2_slope(p1, av, o, &s1);
+    }
+    float pm = p1, zm2 = z1;
+    float zo = 1.0f + r, zi = fabs(1.0f - r);
+    float prev = 0.0f;
+    for (int j = 0; j < 4; ++j) {     // (outer, inner, inner, outer)
+        float Z = (j == 0 || j == 3) ? zo : zi;
+        float Z2 = Z * Z;
+        float sg = (j < 2) ? -1.0f : 1.0f;
+        float dq = metal::precise::sqrt(max(Z2 - zm2, 0.0f) / asq);
+        float p_in = pm;
+        float p_out = pm + sg * min(2.0f * dq + 1e-6f, MP_HALF_PI);
+        float sl;
+        for (int it = 0; it < NEXP; ++it) {
+            if (mp_z2_slope(p_out, av, o, &sl) - Z2 <= 0.0f)
+                p_out = pm + clamp(2.0f * (p_out - pm), -MP_HALF_PI,
+                                   MP_HALF_PI);
+        }
+        float phi = pm + sg * dq;
+        for (int it = 0; it < NNEWTON; ++it) {
+            float dz2;
+            float g = mp_z2_slope(phi, av, o, &dz2) - Z2;
+            if (g > 0.0f) p_out = phi; else p_in = phi;
+            bool okd = dz2 != 0.0f;
+            float newton = phi - g / (okd ? dz2 : 1.0f);
+            bool within = okd && (newton - p_in) * (newton - p_out) <= 0.0f;
+            phi = within ? newton : 0.5f * (p_in + p_out);
+        }
+        float root = (zm2 < Z2) ? phi : pm;
+        prev = (j == 0) ? root : max(root, prev);
+        out[4u * y + (uint)j] = prev;
+    }
+"""
+
+
+def _get_ecc_contact_kernel():
+    if "ecc_contacts" not in _kernels:
+        from .exposure import _NEXP, _NSEC
+        src = (_ECC_CONTACT_SRC.replace("NSEC", str(_NSEC))
+               .replace("NEXP", str(_NEXP)).replace("NNEWTON", "5")
+               .replace("NORB_I", str(NORB)).replace("NORB_C", f"{NORB}u"))
+        hdr = _HEADER + _subst(_ECC_CONTACT_FN.replace("SOLVE", _SOLVE))
+        _kernels["ecc_contacts"] = mx.fast.metal_kernel(
+            name="mp_ecc_contacts",
+            input_names=["ain", "asqin", "rin", "orb", "lin", "nchain"],
+            output_names=["out"], header=hdr, source=src)
+    return _kernels["ecc_contacts"]
+
+
+def contact_offsets_anchored_kernel(r, a, b, k, h, ci, consts=None):
+    """``exposure.contact_offsets_anchored`` in one fp32 kernel launch:
+    (n, 4) contact phases, detached (float32 on the GPU stream). Same
+    arguments; r may be any outline's radius (the oblate and ring kernels
+    pass theirs)."""
+    from .anchored import anchor_constants, pack_orbit_constants
+    from .exposure import contact_geometry, contact_offsets
+    sg = mx.stop_gradient
+    r, a, b, k, h, ci = (sg(v) for v in (r, a, b, k, h, ci))
+    consts = tuple(sg(c) for c in
+                   (anchor_constants(k, h) if consts is None else consts))
+    n = max(v.shape[0] if v.ndim else 1 for v in (r, a, b, k, h, ci))
+    a_sky = contact_geometry(a, consts[0], consts[2], ci)[0]
+    lin = contact_offsets(r, a_sky, b)
+
+    def col(v):
+        return mx.broadcast_to(v, (n,)).astype(mx.float32)
+    out = _get_ecc_contact_kernel()(
+        inputs=[col(a), col(a_sky * a_sky), col(r),
+                mx.broadcast_to(pack_orbit_constants(k, h, ci, consts=consts),
+                                (n, NORB)),
+                mx.stack([col(c) for c in lin], axis=1), n],
+        output_shapes=[(n, 4)], output_dtypes=[mx.float32],
+        grid=(n, 1, 1), threadgroup=(min(n, 64), 1, 1))[0]
+    return sg(out)
 
 
 def _contact_taus(r, a, b, period, n, phases=None):

@@ -153,11 +153,16 @@ def _bisect_contacts(g):
     return np.sort(out)
 
 
-@pytest.mark.parametrize("dtype", [mx.float64, mx.float32],
-                         ids=["fp64", "fp32"])
+@pytest.mark.parametrize("dtype", [mx.float64, mx.float32, "kernel"],
+                         ids=["fp64", "fp32", "fp32-kernel"])
 def test_contacts_are_exact(dtype):
     from elome.exposure import contact_offsets_anchored
-    from elome.metal import _ecc_shape
+    from elome.metal import _ecc_shape, contact_offsets_anchored_kernel
+    kernel = dtype == "kernel"
+    if kernel:
+        if not metal_available():
+            pytest.skip("Metal kernels unavailable")
+        dtype = mx.float32
     cases = list(GEOMS) + [
         dict(a=10.0, b=0.90, r=0.15, k=0.45, h=0.40),    # grazing
         dict(a=10.0, b=0.79, r=0.20, k=-0.3, h=0.55),    # nearly grazing
@@ -168,11 +173,12 @@ def test_contacts_are_exact(dtype):
         # b > 1 + r at conjunction, yet the planet clips the star
         dict(a=3.67, b=1.08, r=0.0737, k=0.6155, h=0.01074)]
     for g in cases:
-        with mx.stream(mx.cpu):
-            v = [mx.array(g[q], dtype=dtype) for q in ("r", "a", "b", "k", "h")]
+        with mx.stream(mx.gpu) if kernel else mx.stream(mx.cpu):
+            v = [mx.array([g[q]], dtype=dtype) for q in ("r", "a", "b", "k", "h")]
             ci = _ecc_shape(v[1], v[2], v[3], v[4])[2]
-            got = np.array([float(np.asarray(x)) * P / (2 * math.pi)
-                            for x in contact_offsets_anchored(*v, ci)])
+            cs = (contact_offsets_anchored_kernel(*v, ci)[0] if kernel
+                  else mx.concatenate(contact_offsets_anchored(*v, ci)))
+            got = np.asarray(cs).astype(np.float64) * P / (2 * math.pi)
         ref = _bisect_contacts(g)
         assert np.all(np.diff(got) >= 0.0)
         tol = 1e-11 if dtype == mx.float64 else 2e-7
@@ -187,6 +193,27 @@ def test_contacts_are_exact(dtype):
             gtol = tol if dtype == mx.float64 else 1e-6
             assert np.abs(got[[0, 3]] - ref).max() < gtol, g
             assert ref[0] <= got[1] <= got[2] <= ref[1]
+
+
+@needs_metal
+def test_contact_kernel_passes_circular_chains_through():
+    """At e = 0 the contact kernel returns the linearised contacts (exact
+    there) bit for bit, beside eccentric chains in the same launch."""
+    from elome.exposure import contact_offsets
+    from elome.metal import _ecc_shape, contact_offsets_anchored_kernel
+    rng = np.random.default_rng(2)
+    n = 300
+    e = np.where(np.arange(n) % 3 == 0, 0.0, rng.uniform(0.0, 0.9, n))
+    w = rng.uniform(0, 2 * math.pi, n)
+    f32 = lambda x: mx.array(np.asarray(x, np.float32))
+    r, a = f32(rng.uniform(0.01, 0.3, n)), f32(rng.uniform(2, 30, n))
+    b = f32(rng.uniform(0, 1.4, n))
+    k, h = f32(np.sqrt(e) * np.cos(w)), f32(np.sqrt(e) * np.sin(w))
+    ci = _ecc_shape(a, b, k, h)[2]
+    got = np.asarray(contact_offsets_anchored_kernel(r, a, b, k, h, ci))
+    lin = np.stack([np.asarray(c) for c in contact_offsets(r, a, b)], axis=1)
+    assert np.array_equal(got[e == 0], lin[e == 0])
+    assert np.isfinite(got).all() and np.all(np.diff(got, axis=1) >= 0.0)
 
 
 @needs_metal
