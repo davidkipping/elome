@@ -1252,26 +1252,9 @@ class TransitModel:
                 b_np = contact_geometry(
                     cols["a"], ecc, ecc * np.sin(w), np.cos(inc),
                     sqrt=np.sqrt, maximum=np.maximum)[1]
-                # exact contacts (linearised ones returned as is at e = 0)
-                cs = contact_offsets_anchored(rp, a, col(b_np), k, h, ci)
-                # (7) self._t_mx already holds the (re-centred) grid on
-                # the device -- re-uploading it per call is a pure waste
-                # on the surface the docs tell samplers to use. In contact
-                # mode it equals the exposure mid-times.
-                T, W = exposure_nodes(self._t_mx[None, :], t0, per,
-                                      self.exp_time, cs, self.n_gl,
-                                      dtype=dt)
-                phi = (2.0 * math.pi) * (T - t0[..., None]) / per[..., None]
-                z, front = separation_anchored(phi, k[..., None],
-                                               h[..., None], a[..., None],
-                                               ci[..., None])
-                # every per-set column needs the trailing node axis
-                nd = lambda c: None if c is None else c[..., None]
-                f = self._photom(z, front, rp[..., None], nd(u1), nd(u2),
-                                 nd(fp),
-                                 uvec=None if uvec is None
-                                 else uvec[:, None, :])
-                out = mx.sum(f * W, axis=-1)
+                ld = (uvec,) if self._n_vec else (u1, u2)
+                out = self._batch_graph_fn(True)(t0, per, rp, a, k, h, ci,
+                                                 fp, col(b_np), *ld)
             elif (not self._n_vec and self.transittype == "primary"
                   and self._kernel_usable()):
                 # the fused model kernel, as light_curve uses it (see
@@ -1284,16 +1267,57 @@ class TransitModel:
                 out = self._batch_kernel_fn()(t0, per, rp, a, k, h, ci_k,
                                               u1, u2)
             else:
-                tt = self._t_mx[None, :]
-                phi = (2.0 * math.pi) * (tt - t0) / per
-                z, front = separation_anchored(phi, k, h, a, ci)
-                out = self._photom(z, front, rp, u1, u2, fp, uvec=uvec)
+                ld = (uvec,) if self._n_vec else (u1, u2)
+                out = self._batch_graph_fn(False)(t0, per, rp, a, k, h, ci,
+                                                  fp, *ld)
             res = np.array(out, dtype=np.float64)
         if (self.supersample_factor > 1
                 and self.integration == "supersample"):
             res = res.reshape(n, self.t.size,
                               self.supersample_factor).mean(axis=2)
         return res
+
+    def _batch_graph_fn(self, contact: bool):
+        """light_curves' spherical graph, compiled as light_curve's graphs
+        are; (n, 1) columns in, (n, len(t)) out. ``contact``: the contact
+        rule, which takes b at conjunction after fp. The law's coefficients
+        come last: (u1, u2), or the (n, n_w) vector of a vector law."""
+        key = ("batch_graph", contact)
+        fn = self._compiled.get(key)
+        if fn is not None:
+            return fn
+        vec = bool(self._n_vec)
+        tt = self._t_mx[None, :]
+        dt = self.dtype
+
+        def body(t0, per, rp, a, k, h, ci, fp, ld, b=None):
+            u1, u2, uvec = (None, None, ld[0]) if vec else (*ld, None)
+            if not contact:
+                phi = (2.0 * math.pi) * (tt - t0) / per
+                z, front = separation_anchored(phi, k, h, a, ci)
+                return self._photom(z, front, rp, u1, u2, fp, uvec=uvec)
+            # exact contacts (linearised ones returned as is at e = 0);
+            # in contact mode self._t_mx is the exposure mid-times
+            cs = contact_offsets_anchored(rp, a, b, k, h, ci)
+            T, W = exposure_nodes(tt, t0, per, self.exp_time, cs, self.n_gl,
+                                  dtype=dt)
+            phi = (2.0 * math.pi) * (T - t0[..., None]) / per[..., None]
+            z, front = separation_anchored(phi, k[..., None], h[..., None],
+                                           a[..., None], ci[..., None])
+            # every per-set column needs the trailing node axis
+            nd = lambda c: None if c is None else c[..., None]  # noqa: E731
+            f = self._photom(z, front, rp[..., None], nd(u1), nd(u2), nd(fp),
+                             uvec=None if uvec is None else uvec[:, None, :])
+            return mx.sum(f * W, axis=-1)
+
+        if contact:
+            def raw(t0, per, rp, a, k, h, ci, fp, b, *ld):
+                return body(t0, per, rp, a, k, h, ci, fp, ld, b)
+        else:
+            def raw(t0, per, rp, a, k, h, ci, fp, *ld):
+                return body(t0, per, rp, a, k, h, ci, fp, ld)
+        fn = self._compiled[key] = mx.compile(raw)
+        return fn
 
     def _batch_kernel_fn(self):
         """light_curves' fused-kernel graph, compiled as light_curve's is

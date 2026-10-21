@@ -31,6 +31,11 @@ every release is tagged `vX.Y.Z` in git.
   20 ms). The same steps as the graph's solve, as accurate (over 20,000
   orbits up to e = 0.95, grazing ones included); circular sets are
   unchanged bit for bit, eccentric ones change at float32 rounding.
+- **`TransitModel.light_curves` on the graph** (float64, and the float32
+  cases the fused kernel does not take) runs compiled, as `light_curve`
+  does: 1.2-1.8 times faster (64 sets x 2,000 points, quadratic: 32 to
+  23 ms; contact rule: 1.09 to 0.76 s; 256 x 4,000: 252 to 172 ms).
+  Values move by a few float64 ulp (the fused arithmetic).
 
 ### Documentation
 - The batching guide's `light_curves` figure, now measured by
