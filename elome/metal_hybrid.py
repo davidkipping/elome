@@ -21,7 +21,7 @@ three laws are three instantiations of the same source.
 No column needs an elliptic integral: per point the kernel evaluates the
 lens geometry (two atan2, one sqrt, as the quadratic core), the even
 recursion M_0 -> M_2 -> M_4 (rational), and per pole one atan2 or log and
-two sqrt. The quadratic core's 10-iteration cel3 recursion is gone.
+two sqrt. The quadratic core's 8-iteration cel3 recursion is gone.
 """
 
 from __future__ import annotations

@@ -2,7 +2,7 @@
 
 The MLX elementwise graph of the ALFM19 core is memory-bandwidth-bound
 (~KB of intermediate traffic per point). These kernels keep the whole
-computation — geometry, kappas, the merged 10-iteration cel3 recursion,
+computation — geometry, kappas, the merged 8-iteration cel3 recursion,
 Taylor switches, assembly — in registers: one read of z (+ per-chain
 parameters) and one write of flux per point, with a real early exit for
 out-of-transit points.
@@ -163,7 +163,8 @@ _CORE = """
     float kc = max(metal::precise::sqrt(kc2), EPS);
     p_cel = max(p_cel, 1e-30f);
 
-    // one 10-iteration Bulirsch recursion, three chains (Pi-like, E, Em)
+    // one 8-iteration Bulirsch recursion, three chains (Pi-like, E, Em):
+    // float32 converges within 6 over the whole argument range
     float ee = kc;
     float mm = 1.0f;
     float sp = metal::precise::sqrt(p_cel);
@@ -184,7 +185,7 @@ _CORE = """
     b3 = 2.0f * (b3 + f3 * g1);
     float p1 = 1.0f + g1;
     mm += kc;
-    for (int it = 0; it < 10; ++it) {
+    for (int it = 0; it < 8; ++it) {
         float kcn = 2.0f * metal::precise::sqrt(ee);
         ee = kcn * mm;
         f1 = a1; f2 = a2; f3 = a3;

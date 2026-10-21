@@ -15,6 +15,13 @@ every release is tagged `vX.Y.Z` in git.
   both ring edges are found in one stacked solve instead of three, with
   the same result bit for bit. A 200-point contact-rule `light_curve` is
   2.7 times faster (3.9 to 1.5 s; the first call, 8.8 to 4.7 s).
+- **The quadratic law's float32 Metal kernels** run 8 iterations of the
+  elliptic-integral recursion instead of 10 (it converges within 6 in
+  float32 over the whole argument range): 9% off the z kernel's forward
+  pass, 7% off its value and gradient, 4-5% off the contact-rule tau
+  kernels. Accuracy against float64 is unchanged (the same maximum error
+  over 1.8 million points, a slightly smaller RMS), and the outputs differ
+  from 0.19.0's at float32 rounding.
 
 ### Documentation
 - The batching guide's `light_curves` figure, now measured by
