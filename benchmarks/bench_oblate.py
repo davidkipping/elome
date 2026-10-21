@@ -15,7 +15,9 @@ The oblate times include the per-call contact solve (one kernel launch).
     python benchmarks/bench_oblate.py [--chains 512] [--points 5000]
                                       [--integration contact|none]
 
-Run on a quiet machine: GPU timings on a loaded one mean little.
+Writes benchmarks/oblate_kernels.json (per integration rule), which the
+docs check (benchmarks/verify_doc_claims.py --check) reads. Run on a
+quiet machine: GPU timings on a loaded one mean little.
 """
 
 import argparse
@@ -123,6 +125,21 @@ def main():
             g0 = statistics.median(res[(law, True)])
             print(f"| {r} | {f * 1e3:.1f} ms | {f / f0:.1f}x | "
                   f"{g * 1e3:.1f} ms | {g / g0:.1f}x |")
+
+    # per integration rule, so the contact and none runs share one file
+    path = os.path.join(os.path.dirname(here), "oblate_kernels.json")
+    try:
+        stored = json.load(open(path))
+    except (OSError, ValueError):
+        stored = {}
+    stored[a.integration] = {
+        "chains": a.chains, "points": a.points,
+        "routes": {r: {"forward_ms": statistics.median(res[(r, False)]) * 1e3,
+                       "value_grad_ms": statistics.median(res[(r, True)]) * 1e3}
+                   for r in ROUTES}}
+    with open(path, "w") as f:
+        json.dump(stored, f, indent=1)
+    print("wrote", path)
 
 
 if __name__ == "__main__":

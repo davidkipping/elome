@@ -53,7 +53,7 @@ removes four or five dimensions from the sampled space.
 
 ## Cost
 
-One oblate evaluation costs 15–32 times a spherical hybrid one, and about
-55–65 times under the contact rule. See {doc}`accuracy-and-cost`. To find
+One oblate evaluation costs 16–31 times a spherical hybrid one, and about
+53–63 times under the contact rule. See {doc}`accuracy-and-cost`. To find
 the mode quickly, `integration="none"` (no exposure integration) or a
 smaller `n_gl` is much cheaper; sample the posterior with the full rule.

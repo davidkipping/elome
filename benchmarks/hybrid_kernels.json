@@ -1,0 +1,32 @@
+{
+ "contact": {
+  "chains": 512,
+  "points": 5000,
+  "routes": {
+   "quadratic": {
+    "forward_ms": 3.7240000092424452,
+    "value_grad_ms": 8.380624989513308
+   },
+   "hybrid2": {
+    "forward_ms": 2.2129789576865733,
+    "value_grad_ms": 5.08804147830233
+   },
+   "hybrid4": {
+    "forward_ms": 2.888791961595416,
+    "value_grad_ms": 7.65189592493698
+   },
+   "hybrid5": {
+    "forward_ms": 3.4747085301205516,
+    "value_grad_ms": 10.002270981203765
+   },
+   "quadratic_basis": {
+    "forward_ms": 3.6286039976403117,
+    "value_grad_ms": 8.2706039538607
+   },
+   "hybrid5_basis": {
+    "forward_ms": 3.4823750029318035,
+    "value_grad_ms": 10.016541462391615
+   }
+  }
+ }
+}

@@ -1,0 +1,62 @@
+{
+ "contact": {
+  "chains": 512,
+  "points": 5000,
+  "routes": {
+   "hybrid2": {
+    "forward_ms": 2.0193749805912375,
+    "value_grad_ms": 5.075249937362969
+   },
+   "hybrid2_oblate": {
+    "forward_ms": 107.91400005109608,
+    "value_grad_ms": 321.48570800200105
+   },
+   "hybrid4": {
+    "forward_ms": 2.8908750973641872,
+    "value_grad_ms": 7.647542050108314
+   },
+   "hybrid4_oblate": {
+    "forward_ms": 156.51075006462634,
+    "value_grad_ms": 470.1655830722302
+   },
+   "hybrid5": {
+    "forward_ms": 3.490624949336052,
+    "value_grad_ms": 9.988625068217516
+   },
+   "hybrid5_oblate": {
+    "forward_ms": 205.3666670108214,
+    "value_grad_ms": 616.5673750219867
+   }
+  }
+ },
+ "none": {
+  "chains": 512,
+  "points": 5000,
+  "routes": {
+   "hybrid2": {
+    "forward_ms": 0.622499966993928,
+    "value_grad_ms": 1.3514159945771098
+   },
+   "hybrid2_oblate": {
+    "forward_ms": 10.021540918387473,
+    "value_grad_ms": 32.90945803746581
+   },
+   "hybrid4": {
+    "forward_ms": 0.7454580627381802,
+    "value_grad_ms": 1.698334002867341
+   },
+   "hybrid4_oblate": {
+    "forward_ms": 15.11720905546099,
+    "value_grad_ms": 47.421582974493504
+   },
+   "hybrid5": {
+    "forward_ms": 0.8240410825237632,
+    "value_grad_ms": 2.020166954025626
+   },
+   "hybrid5_oblate": {
+    "forward_ms": 20.06758307106793,
+    "value_grad_ms": 62.881708960048854
+   }
+  }
+ }
+}

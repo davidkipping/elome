@@ -41,12 +41,12 @@ transit (`benchmarks/bench_oblate.py`, M2 Max):
 
 | | forward | vs spherical | value + gradient | vs spherical |
 |---|---:|---:|---:|---:|
-| hybrid2, one evaluation per point | 9.9 ms | 15× | 31.5 ms | 22× |
-| hybrid4, one evaluation per point | 15.7 ms | 20× | 46.4 ms | 29× |
-| hybrid5, one evaluation per point | 20.0 ms | 22× | 62.3 ms | 32× |
-| hybrid2, contact rule (`n_gl = 5`) | 108 ms | 19× | 323 ms | 21× |
-| hybrid4, contact rule (`n_gl = 5`) | 157 ms | 19× | 467 ms | 20× |
-| hybrid5, contact rule (`n_gl = 5`) | 205 ms | 20× | 621 ms | 21× |
+| hybrid2, one evaluation per point | 10.0 ms | 16× | 32.9 ms | 24× |
+| hybrid4, one evaluation per point | 15.1 ms | 20× | 47.4 ms | 28× |
+| hybrid5, one evaluation per point | 20.1 ms | 24× | 62.9 ms | 31× |
+| hybrid2, contact rule (`n_gl = 5`) | 108 ms | 53× | 321 ms | 63× |
+| hybrid4, contact rule (`n_gl = 5`) | 157 ms | 54× | 470 ms | 61× |
+| hybrid5, contact rule (`n_gl = 5`) | 205 ms | 59× | 617 ms | 62× |
 
 Under the contact rule, an exposure that no contact falls inside costs
 `n_gl` evaluations; one containing a contact costs `n_gl` more per

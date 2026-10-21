@@ -54,12 +54,12 @@ separations, evaluating the kernel and averaging outside it:
 
 | | forward | value + gradient | peak memory |
 |---|---:|---:|---:|
-| sub-exposure axis expanded | 19.6 ms | 59.0 ms | 2,776 MB |
-| the same rule, in the kernel (`n_sub = 15`) | 6.8 ms | 15.5 ms | 51 MB |
-| contact rule, in the kernel (`n_gl = 5`) | 4.3 ms | 9.8 ms | 51 MB |
+| sub-exposure axis expanded | 19.9 ms | 58.2 ms | 2,776 MB |
+| the same rule, in the kernel (`n_sub = 15`) | 5.7 ms | 12.8 ms | 51 MB |
+| contact rule, in the kernel (`n_gl = 5`) | 3.8 ms | 8.4 ms | 51 MB |
 
-The last row is also about 1,200 times more accurate than the first
-($1.3\times10^{-7}$ against $1.6\times10^{-4}$). Reaching $10^{-6}$ by
+The last row is also about 1,300 times more accurate than the first
+($1.2\times10^{-7}$ against $1.6\times10^{-4}$). Reaching $10^{-6}$ by
 supersampling would need about 2,271 sub-exposures, which at 512 chains
 would ask for about 368 GB.
 
@@ -149,8 +149,8 @@ points under the contact rule (`benchmarks/bench_hybrid.py`):
 
 | law | forward | vs quadratic | value + gradient | vs quadratic |
 |---|---:|---:|---:|---:|
-| quadratic | 4.4 ms | 1.00× | 9.8 ms | 1.00× |
-| hybrid2 | 2.4 ms | 0.55× | 6.0 ms | 0.62× |
-| hybrid4 | 3.2 ms | 0.74× | 8.7 ms | 0.89× |
-| hybrid5 | 3.9 ms | 0.90× | 11.4 ms | 1.16× |
-| hybrid5, `ld_basis=True` | 3.9 ms | 0.88× | 11.4 ms | 1.17× |
+| quadratic | 3.7 ms | 1.00× | 8.4 ms | 1.00× |
+| hybrid2 | 2.2 ms | 0.59× | 5.1 ms | 0.61× |
+| hybrid4 | 2.9 ms | 0.78× | 7.7 ms | 0.91× |
+| hybrid5 | 3.5 ms | 0.93× | 10.0 ms | 1.19× |
+| hybrid5, `ld_basis=True` | 3.5 ms | 0.94× | 10.0 ms | 1.20× |

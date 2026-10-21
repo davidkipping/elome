@@ -10,7 +10,9 @@ larger than the light curve. flux_dev_from_tau runs the same rule in
 registers, so only the (n, m) result and, in the backward pass, the (n, m)
 tau gradient ever exist.
 
-Reports wall time and MLX peak memory for the forward and for value+grad.
+Reports wall time and MLX peak memory for the forward and for value+grad,
+and writes them to benchmarks/tau_kernel.json (which the docs check,
+benchmarks/verify_doc_claims.py --check, reads).
 value+grad evaluates BOTH -- MLX is lazy and the custom VJP recomputes
 from the primals, so evaluating only the gradients silently skips the
 forward and flatters the measurement.
@@ -19,6 +21,8 @@ forward and flatters the measurement.
 """
 
 import argparse
+import json
+import os
 import time
 
 import numpy as np
@@ -109,6 +113,7 @@ def main():
     print(f"\n{n} chains x {m} points x {ns} sub-exposures "
           f"= {n * m * ns / 1e6:.1f} M model evaluations\n")
     base = {}
+    out = {"chains": n, "points": m, "n_sub": ns, "rows": {}}
     for grad in (False, True):
         what = "value+grad" if grad else "forward"
         print(f"  {what:<28s} {'ms':>9s} {'Mpts/s':>10s} "
@@ -118,6 +123,7 @@ def main():
             if name.startswith("expanded"):
                 base[what] = (dt, mb)
             s = base[what][0] / dt
+            out["rows"].setdefault(name, {})[what] = {"ms": dt * 1e3, "peak_mb": mb}
             mem = base[what][1] / mb
             print(f"  {name:<28s} {dt * 1e3:9.2f} "
                   f"{n * m * ns / dt / 1e6:10.1f} {mb:9.1f} "
@@ -169,6 +175,8 @@ def main():
     budget = 6e9
     n_small = max(1, min(n, int(budget / (m * n_match * 4 * 17))))
     proj = n * m * n_match * 4 * 17 / 2 ** 30
+    out.update(err_supersample=float(e_super), err_contact=float(e_cont),
+               n_sub_for_1em6=n_match, full_width_gb=proj)
     print(f"  measured at {n_small} chains so both routes stay resident "
           f"(at {n} it would ask for ~{proj:.0f} GB).\n")
     tau_s, pars_s = tau[:n_small], [p[:n_small] for p in pars]
@@ -185,6 +193,12 @@ def main():
               f"{1.0:8.2f}x {1.0:8.2f}x")
         print(f"  {what + ', kernel contact':<28s} {dt_k * 1e3:9.2f} "
               f"{mb_k:9.1f} {dt_e / dt_k:8.2f}x {mb_e / mb_k:8.2f}x")
+
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "tau_kernel.json")
+    with open(path, "w") as f:
+        json.dump(out, f, indent=1)
+    print("wrote", path)
 
 
 if __name__ == "__main__":

@@ -5,6 +5,14 @@ every release is tagged `vX.Y.Z` in git.
 
 ## [Unreleased]
 
+### Documentation
+- The sampler guide's exposure-kernel and hybrid-law tables and the oblate
+  kernel table, re-measured (the spherical contact-rule kernels are about
+  15% faster than those tables said; an oblate planet under the contact
+  rule costs 53–63 times a spherical one, not 19–21), and now checked by
+  `benchmarks/verify_doc_claims.py` against the results files
+  `bench_tau_kernel.py`, `bench_hybrid.py` and `bench_oblate.py` write.
+
 ## [0.20.0] — 2026-10-21
 
 ### Changed

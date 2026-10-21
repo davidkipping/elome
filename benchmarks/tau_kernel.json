@@ -1,0 +1,41 @@
+{
+ "chains": 512,
+ "points": 5000,
+ "n_sub": 15,
+ "rows": {
+  "expanded axis (today)": {
+   "forward": {
+    "ms": 19.93734159041196,
+    "peak_mb": 935.0782127380371
+   },
+   "value+grad": {
+    "ms": 58.19819162134081,
+    "peak_mb": 2775.9043579101562
+   }
+  },
+  "kernel, supersample n=15": {
+   "forward": {
+    "ms": 5.747874989174306,
+    "peak_mb": 19.586055755615234
+   },
+   "value+grad": {
+    "ms": 12.808183394372463,
+    "peak_mb": 50.73897171020508
+   }
+  },
+  "kernel, contact n_gl=5": {
+   "forward": {
+    "ms": 3.78115838393569,
+    "peak_mb": 19.586055755615234
+   },
+   "value+grad": {
+    "ms": 8.35930840112269,
+    "peak_mb": 50.73897171020508
+   }
+  }
+ },
+ "err_supersample": 0.0001562053789983522,
+ "err_contact": 1.2217871705327843e-07,
+ "n_sub_for_1em6": 2271,
+ "full_width_gb": 368.18504333496094
+}

@@ -17,6 +17,9 @@ evaluates value AND gradients, in (tau, period, a, b, r) and the limb
 darkening where the route has it.
 
     python benchmarks/bench_hybrid.py [--chains 512] [--points 5000]
+
+Writes benchmarks/hybrid_kernels.json (per integration rule), which the
+docs check (benchmarks/verify_doc_claims.py --check) reads.
 """
 
 import argparse
@@ -128,6 +131,21 @@ def main():
         print(f"  {r:<18s}{f * 1e3:10.2f}ms{f / base[False]:8.2f}x"
               f"{v * 1e3:12.2f}ms{v / base[True]:8.2f}x")
     print()
+
+    # per integration rule, so the contact and none runs share one file
+    path = os.path.join(os.path.dirname(here), "hybrid_kernels.json")
+    try:
+        stored = json.load(open(path))
+    except (OSError, ValueError):
+        stored = {}
+    stored[a.integration] = {
+        "chains": a.chains, "points": a.points,
+        "routes": {r: {"forward_ms": statistics.median(res[(r, False)]) * 1e3,
+                       "value_grad_ms": statistics.median(res[(r, True)]) * 1e3}
+                   for r in ROUTES}}
+    with open(path, "w") as f:
+        json.dump(stored, f, indent=1)
+    print("wrote", path)
 
 
 if __name__ == "__main__":

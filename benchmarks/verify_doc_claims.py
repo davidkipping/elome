@@ -9,7 +9,10 @@ bench_vjp.py). --check measures nothing: it formats the stored numbers as
 the docs print them and fails, listing each one, if a page does not
 contain it. Run the measurements on an otherwise-idle GPU.
 
---check also reads the cross-code comparison tables (spherical, oblate and
+--check also reads the GPU kernel tables back to the results files their
+benchmarks write (tau_kernel.json, hybrid_kernels.json,
+oblate_kernels.json: bench_tau_kernel.py, bench_hybrid.py,
+bench_oblate.py), and the cross-code comparison tables (spherical, oblate and
 ringed planets) back to the results files the comparison runs write
 (precision*.json, speed.json, batch_scaling.json,
 oblate_compare/results_oblate.json, ring_compare/results_ring.json). A
@@ -77,8 +80,10 @@ def check():
         bad.append("guides/batching.md: 'several hundred times' no longer holds "
                    f"({claims['lcs_vs_loop']['speedup_arrays']})")
     n_cmp, bad_cmp, pages_cmp = check_comparisons()
-    bad += bad_cmp
-    pages = len(set(expect) | pages_cmp)
+    n_ker, bad_ker, pages_ker = check_kernels()
+    bad += bad_cmp + bad_ker
+    n_cmp += n_ker
+    pages = len(set(expect) | pages_cmp | pages_ker)
     print("\n".join(bad) if bad else f"docs agree with the measurements "
           f"({sum(map(len, expect.values())) + n_cmp} numbers on {pages} pages)")
     return not bad
@@ -134,6 +139,116 @@ def _get(d, *keys):
             return None
         d = d[k]
     return d
+
+
+def _check_pages(pages, claims=()):
+    """(numbers checked, failures) for {page: ({table anchor: {row label:
+    values}}, [(prose regex, value)])} and [(page, what, holds)]."""
+    n, bad = 0, []
+    for page, (tables, prose) in pages.items():
+        text = open(os.path.join(DOCS, page)).read()
+        flat = " ".join(text.split())
+        for after, rows in tables.items():
+            found = _table(text, after)
+            for label, values in rows.items():
+                cells = found.get(label)
+                if cells is None or len(cells) != len(values):
+                    bad.append(f"{page}: no row {label!r} with {len(values)} values")
+                    continue
+                for cell, v in zip(cells, values):
+                    n += 1
+                    if not _agrees(cell, v):
+                        bad.append(f"{page}: {label!r}: {cell!r}, measured {v!r}")
+        for pattern, v in prose:
+            n += 1
+            m = re.search(pattern, flat)
+            if m is None or not _agrees(m.group(1), v):
+                bad.append(f"{page}: /{pattern}/: "
+                           f"{m.group(1) if m else 'not found'!r}, measured {v!r}")
+    for page, what, ok in claims:
+        n += 1
+        if not ok:
+            bad.append(f"{page}: no longer true: {what}")
+    return n, bad
+
+
+def check_kernels():
+    """(numbers checked, failures, pages) for the GPU kernel tables: the
+    exposure kernel against an expanded sub-exposure axis, the hybrid laws
+    against the quadratic one, and oblate planets against spherical ones."""
+    load = lambda name: json.load(open(os.path.join(HERE, name)))  # noqa: E731
+    tk, hy, ob = (load("tau_kernel.json"), load("hybrid_kernels.json"),
+                  load("oblate_kernels.json"))
+
+    def tk_row(name):
+        r = tk["rows"][name]
+        return [r["forward"]["ms"] * 1e-3, r["value+grad"]["ms"] * 1e-3,
+                max(r["forward"]["peak_mb"], r["value+grad"]["peak_mb"])]
+
+    ns = tk["n_sub"]
+    tau_rows = {
+        "sub-exposure axis expanded": tk_row("expanded axis (today)"),
+        f"the same rule, in the kernel (`n_sub = {ns}`)":
+            tk_row(f"kernel, supersample n={ns}"),
+        "contact rule, in the kernel (`n_gl = 5`)": tk_row("kernel, contact n_gl=5"),
+    }
+    es, ec = tk["err_supersample"], tk["err_contact"]
+
+    h = hy["contact"]["routes"]
+
+    def hy_row(r):
+        f, v = h[r]["forward_ms"], h[r]["value_grad_ms"]
+        q = h["quadratic"]
+        return [f * 1e-3, f / q["forward_ms"], v * 1e-3, v / q["value_grad_ms"]]
+
+    hy_rows = {r: hy_row(r) for r in ("quadratic", "hybrid2", "hybrid4", "hybrid5")}
+    hy_rows["hybrid5, `ld_basis=True`"] = hy_row("hybrid5_basis")
+    q = h["quadratic"]
+    dearer = [r for r in ("hybrid2", "hybrid4", "hybrid5")
+              if h[r]["value_grad_ms"] > q["value_grad_ms"]]
+
+    def ob_row(rule, law):
+        o, sph = ob[rule]["routes"][law + "_oblate"], ob[rule]["routes"][law]
+        return [o["forward_ms"] * 1e-3, o["forward_ms"] / sph["forward_ms"],
+                o["value_grad_ms"] * 1e-3, o["value_grad_ms"] / sph["value_grad_ms"]]
+
+    ob_rows = {}
+    for rule, label in (("none", "one evaluation per point"),
+                        ("contact", "contact rule (`n_gl = 5`)")):
+        for law in ("hybrid2", "hybrid4", "hybrid5"):
+            ob_rows[f"{law}, {label}"] = ob_row(rule, law)
+
+    # the oblate-to-spherical ratios, forward and value+grad, per rule
+    ratio = {rule: [ob_rows[f"{law}, {label}"][k]
+                    for law in ("hybrid2", "hybrid4", "hybrid5") for k in (1, 3)]
+             for rule, label in (("none", "one evaluation per point"),
+                                 ("contact", "contact rule (`n_gl = 5`)"))}
+    pages = {
+        "guides/sampler-api.md": (
+            {"(`benchmarks/bench_tau_kernel.py`": tau_rows,
+             "(`benchmarks/bench_hybrid.py`)": hy_rows},
+            [(r"also (about \S+) times more accurate", es / ec),
+             (r"more accurate than the first \((\$[^$]+\$) against", ec),
+             (r"more accurate than the first \(\$[^$]+\$ against (\$[^$]+\$)\)", es),
+             (r"would need about (\S+) sub-exposures", tk["n_sub_for_1em6"]),
+             (r"would ask for (about \S+ GB)", tk["full_width_gb"] * 1e3)]),
+        "oblate/accuracy-and-cost.md": (
+            {"(`benchmarks/bench_oblate.py`": ob_rows}, []),
+        "oblate/fitting.md": ({}, [
+            (r"evaluation costs (\d+)–\d+ times a spherical", min(ratio["none"])),
+            (r"evaluation costs \d+–(\d+) times a spherical", max(ratio["none"])),
+            (r"and about (\d+)–\d+ times under the contact rule", min(ratio["contact"])),
+            (r"and about \d+–(\d+) times under the contact rule", max(ratio["contact"]))]),
+    }
+    claims = [
+        ("guides/sampler-api.md", "every hybrid law's forward kernel is faster "
+         "than the quadratic law's",
+         all(h[r]["forward_ms"] < q["forward_ms"] for r in ("hybrid2", "hybrid4", "hybrid5"))),
+        ("guides/sampler-api.md", "only hybrid5's gradient costs more than the "
+         "quadratic law's", dearer == ["hybrid5"]),
+    ]
+    n, bad = _check_pages(pages, claims)
+    return n, bad, set(pages)
 
 
 def check_comparisons():
@@ -280,31 +395,7 @@ def check_comparisons():
          max(fp32_e7) < 300),
     ]
 
-    n, bad = 0, []
-    for page, (tables, prose) in pages.items():
-        text = open(os.path.join(DOCS, page)).read()
-        flat = " ".join(text.split())
-        for after, rows in tables.items():
-            found = _table(text, after)
-            for label, values in rows.items():
-                cells = found.get(label)
-                if cells is None or len(cells) != len(values):
-                    bad.append(f"{page}: no row {label!r} with {len(values)} values")
-                    continue
-                for cell, v in zip(cells, values):
-                    n += 1
-                    if not _agrees(cell, v):
-                        bad.append(f"{page}: {label!r}: {cell!r}, measured {v!r}")
-        for pattern, v in prose:
-            n += 1
-            m = re.search(pattern, flat)
-            if m is None or not _agrees(m.group(1), v):
-                bad.append(f"{page}: /{pattern}/: "
-                           f"{m.group(1) if m else 'not found'!r}, measured {v!r}")
-    for page, what, ok in claims:
-        n += 1
-        if not ok:
-            bad.append(f"{page}: no longer true: {what}")
+    n, bad = _check_pages(pages, claims)
     return n, bad, set(pages)
 
 
