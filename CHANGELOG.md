@@ -5,6 +5,21 @@ every release is tagged `vX.Y.Z` in git.
 
 ## [Unreleased]
 
+### Changed
+- **`TransitModel.light_curves` in float32 on the GPU** (uniform, linear
+  and quadratic laws, primary transits, without the contact rule) runs the
+  fused model kernel that `light_curve` uses, one row per set: 2.3-3.4
+  times faster (256 sets x 4,096 points: 3.9 to 1.2 ms), and each row is
+  `light_curve`'s bit for bit.
+
+### Documentation
+- The batching guide's `light_curves` figure, now measured by
+  `benchmarks/verify_doc_claims.py`: about 100 times a Python loop with a
+  list of sets (not 160), several hundred with array-valued fields.
+- Correction to 0.19.0's notes: re-measured on a quiet machine, the
+  eccentric contact-rule kernel is about 2.6 times faster, not 3; the
+  other figures stand.
+
 ## [0.19.0] — 2026-10-20
 
 ### Fixed

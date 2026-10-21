@@ -1,6 +1,7 @@
 """Reproduce the measured batching and long-baseline numbers quoted in the docs.
 
     python benchmarks/verify_doc_claims.py           # measure; writes doc_claims.json
+    python benchmarks/verify_doc_claims.py --only lcs_vs_loop   # one claim
     python benchmarks/verify_doc_claims.py --check   # check the docs quote them
 
 Every such number in the docs traces here or to vjp.json (written by
@@ -60,7 +61,10 @@ def check():
         "guides/batching.md": [
             f"about {round(b['looped_ms'], -2):,.0f} ms | about {round(per_loop_us, -1):.0f} µs",
             f"about {b['batched_ms']:.1f} ms | about {round(per_batch_ns, -1):.0f} ns",
-            f"about {round(b['speedup'], -2):.0f} here"],
+            f"about {round(b['speedup'], -2):.0f} here",
+            f"in float32 this is about "
+            f"{round(claims['lcs_vs_loop']['speedup'], -2):.0f} times faster",
+            "several\nhundred times faster with array-valued fields"],
         "guides/gradients-and-precision.md": [
             f"${_latex(w['1'])}$ for a span of one orbit",
             f"${_latex(w['100'])}$ for 100", f"${_latex(w['1000'])}$ for 1,000"],
@@ -69,6 +73,9 @@ def check():
     for page, needles in expect.items():
         text = open(os.path.join(DOCS, page)).read()
         bad += [f"{page}: missing {n!r}" for n in needles if n not in text]
+    if not 200 <= claims["lcs_vs_loop"]["speedup_arrays"] < 1000:
+        bad.append("guides/batching.md: 'several hundred times' no longer holds "
+                   f"({claims['lcs_vs_loop']['speedup_arrays']})")
     n_cmp, bad_cmp, pages_cmp = check_comparisons()
     bad += bad_cmp
     pages = len(set(expect) | pages_cmp)
@@ -307,45 +314,55 @@ if "--check" in sys.argv:
 import mlx.core as mx  # noqa: E402
 import numpy as np  # noqa: E402
 
-out = {}
+# every claim by default; --only NAME [NAME ...] re-measures just those and
+# keeps the others' stored numbers
+only = sys.argv[sys.argv.index("--only") + 1:] if "--only" in sys.argv else None
+path = os.path.join(HERE, "doc_claims.json")
+out = json.load(open(path)) if only else {}
+
+
+def want(name):
+    return only is None or name in only
+
 
 # ---- claim 1: looped vs batched (the batching rule) ----------------------
 from elome.metal import flux_dev_metal  # noqa: E402
 
-rng = np.random.default_rng(0)
-npv, npt = 10_000, 1_000
-z_row = np.abs(rng.uniform(0, 1.3, npt)).astype(np.float32)
-r_all = (0.1 * (1 + 0.1 * rng.standard_normal(npv))).astype(np.float32)
-u1 = np.full(npv, 0.4, np.float32)
-u2 = np.full(npv, 0.25, np.float32)
+if want("batch_vs_loop"):
+    rng = np.random.default_rng(0)
+    npv, npt = 10_000, 1_000
+    z_row = np.abs(rng.uniform(0, 1.3, npt)).astype(np.float32)
+    r_all = (0.1 * (1 + 0.1 * rng.standard_normal(npv))).astype(np.float32)
+    u1 = np.full(npv, 0.4, np.float32)
+    u2 = np.full(npv, 0.25, np.float32)
 
-z1 = mx.array(z_row[None, :])
-for _ in range(3):
-    mx.eval(flux_dev_metal(z1, mx.array(r_all[:1]), mx.array(u1[:1]),
-                           mx.array(u2[:1])))
-t0 = time.perf_counter()
-for i in range(200):
-    mx.eval(flux_dev_metal(z1, mx.array(r_all[i:i + 1]), mx.array(u1[:1]),
-                           mx.array(u2[:1])))
-t_loop = (time.perf_counter() - t0) / 200 * npv
-
-zb = mx.array(np.broadcast_to(z_row, (npv, npt)).copy())
-rb, u1b, u2b = mx.array(r_all), mx.array(u1), mx.array(u2)
-for _ in range(3):
-    mx.eval(flux_dev_metal(zb, rb, u1b, u2b))
-ts = []
-for _ in range(7):
+    z1 = mx.array(z_row[None, :])
+    for _ in range(3):
+        mx.eval(flux_dev_metal(z1, mx.array(r_all[:1]), mx.array(u1[:1]),
+                               mx.array(u2[:1])))
     t0 = time.perf_counter()
-    mx.eval(flux_dev_metal(zb, rb, u1b, u2b))
-    ts.append(time.perf_counter() - t0)
-t_batch = float(np.median(ts))
-out["batch_vs_loop"] = {
-    "npv": npv, "npt": npt,
-    "looped_ms": round(t_loop * 1e3, 1),
-    "batched_ms": round(t_batch * 1e3, 2),
-    "speedup": round(t_loop / t_batch),
-}
-print("batch_vs_loop:", out["batch_vs_loop"], flush=True)
+    for i in range(200):
+        mx.eval(flux_dev_metal(z1, mx.array(r_all[i:i + 1]), mx.array(u1[:1]),
+                               mx.array(u2[:1])))
+    t_loop = (time.perf_counter() - t0) / 200 * npv
+
+    zb = mx.array(np.broadcast_to(z_row, (npv, npt)).copy())
+    rb, u1b, u2b = mx.array(r_all), mx.array(u1), mx.array(u2)
+    for _ in range(3):
+        mx.eval(flux_dev_metal(zb, rb, u1b, u2b))
+    ts = []
+    for _ in range(7):
+        t0 = time.perf_counter()
+        mx.eval(flux_dev_metal(zb, rb, u1b, u2b))
+        ts.append(time.perf_counter() - t0)
+    t_batch = float(np.median(ts))
+    out["batch_vs_loop"] = {
+        "npv": npv, "npt": npt,
+        "looped_ms": round(t_loop * 1e3, 1),
+        "batched_ms": round(t_batch * 1e3, 2),
+        "speedup": round(t_loop / t_batch),
+    }
+    print("batch_vs_loop:", out["batch_vs_loop"], flush=True)
 
 # ---- claim 2: fp32 phase error vs the baseline the data span ------------
 # The frontend re-centres the times on their midpoint in float64, so what
@@ -354,20 +371,70 @@ print("batch_vs_loop:", out["batch_vs_loop"], flush=True)
 # against fp64 through the frontend, max in-transit flux error.
 from elome import TransitModel, TransitParams  # noqa: E402
 
-per = 10.0
-wrap = {}
-for n_orbits in (1, 100, 1000):
-    p = TransitParams()
-    p.t0, p.per, p.rp, p.a, p.inc = 0.0, per, 0.1, 12.0, 88.0
-    p.ecc, p.w, p.u, p.limb_dark = 0.0, 90.0, [0.4, 0.25], "quadratic"
-    win = np.linspace(-0.15, 0.15, 4001)
-    t = np.concatenate([win, n_orbits * per + win])
-    f32 = TransitModel(p, t, dtype=mx.float32).light_curve(p)
-    f64 = TransitModel(p, t).light_curve(p)
-    wrap[str(n_orbits)] = float(np.abs(f32 - f64).max())
-out["fp32_baseline_flux_error"] = {k: f"{v:.1e}" for k, v in wrap.items()}
-print("fp32_baseline_flux_error:", out["fp32_baseline_flux_error"], flush=True)
+if want("fp32_baseline_flux_error"):
 
-with open(os.path.join(HERE, "doc_claims.json"), "w") as f:
+    per = 10.0
+    wrap = {}
+    for n_orbits in (1, 100, 1000):
+        p = TransitParams()
+        p.t0, p.per, p.rp, p.a, p.inc = 0.0, per, 0.1, 12.0, 88.0
+        p.ecc, p.w, p.u, p.limb_dark = 0.0, 90.0, [0.4, 0.25], "quadratic"
+        win = np.linspace(-0.15, 0.15, 4001)
+        t = np.concatenate([win, n_orbits * per + win])
+        f32 = TransitModel(p, t, dtype=mx.float32).light_curve(p)
+        f64 = TransitModel(p, t).light_curve(p)
+        wrap[str(n_orbits)] = float(np.abs(f32 - f64).max())
+    out["fp32_baseline_flux_error"] = {k: f"{v:.1e}" for k, v in wrap.items()}
+    print("fp32_baseline_flux_error:", out["fp32_baseline_flux_error"], flush=True)
+
+
+# ---- claim 3: light_curves vs a loop over light_curve --------------------
+# 2,000 sets of a 301-point light curve, float32 on the GPU
+if want("lcs_vs_loop"):
+    rng = np.random.default_rng(1)
+    t = np.linspace(-0.15, 0.15, 301)
+    sets = []
+    for j in range(2000):
+        p = TransitParams()
+        p.t0, p.per, p.a, p.limb_dark, p.u = 0.0, 3.45, 8.8, "quadratic", [0.4, 0.25]
+        p.rp, p.inc = rng.uniform(0.05, 0.15), rng.uniform(87.0, 90.0)
+        p.ecc, p.w = (0.0, 90.0) if j % 2 else (rng.uniform(0, 0.5), rng.uniform(0, 360))
+        sets.append(p)
+    m = TransitModel(sets[0], t, dtype=mx.float32)
+    for _ in range(3):
+        m.light_curves(sets)
+        m.light_curve(sets[0])
+    ts = []
+    for _ in range(7):
+        t0 = time.perf_counter()
+        m.light_curves(sets)
+        ts.append(time.perf_counter() - t0)
+    t_batch = float(np.median(ts))
+    # the same sets as one TransitParams of array-valued fields
+    pa = TransitParams()
+    for f in ("t0", "per", "a", "limb_dark", "u"):
+        setattr(pa, f, getattr(sets[0], f))
+    for f in ("rp", "inc", "ecc", "w"):
+        setattr(pa, f, np.array([getattr(q, f) for q in sets]))
+    assert np.array_equal(m.light_curves(pa), m.light_curves(sets))
+    ts = []
+    for _ in range(7):
+        t0 = time.perf_counter()
+        m.light_curves(pa)
+        ts.append(time.perf_counter() - t0)
+    t_arr = float(np.median(ts))
+    t0 = time.perf_counter()
+    for p in sets:
+        m.light_curve(p)
+    t_loop = time.perf_counter() - t0
+    out["lcs_vs_loop"] = {"n_sets": 2000, "n_t": 301,
+                          "loop_ms": round(t_loop * 1e3, 1),
+                          "batched_ms": round(t_batch * 1e3, 2),
+                          "speedup": round(t_loop / t_batch),
+                          "batched_arrays_ms": round(t_arr * 1e3, 2),
+                          "speedup_arrays": round(t_loop / t_arr)}
+    print("lcs_vs_loop:", out["lcs_vs_loop"], flush=True)
+
+with open(path, "w") as f:
     json.dump(out, f, indent=1)
 print("wrote doc_claims.json")

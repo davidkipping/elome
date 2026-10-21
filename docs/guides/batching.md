@@ -50,8 +50,11 @@ p.inc = np.array([88.0, 88.5, 89.0])
 flux = m.light_curves(p)                   # ...(3, len(t))
 ```
 
-For 2,000 sets of 301 points this is about 160 times faster than a Python
-loop over `light_curve`. Circular and eccentric sets can be mixed in one
+For 2,000 sets of 301 points in float32 this is about 100 times faster
+than a Python loop over `light_curve` with a list of sets, and several
+hundred times faster with array-valued fields, which skip unpacking 2,000
+Python objects. Each set's light curve is `light_curve`'s, bit for bit.
+Circular and eccentric sets can be mixed in one
 batch, and every exposure rule and limb-darkening law works, including
 per-set coefficients and, for oblate planets, per-set `f` and `theta`.
 

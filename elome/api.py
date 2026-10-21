@@ -1272,6 +1272,17 @@ class TransitModel:
                                  uvec=None if uvec is None
                                  else uvec[:, None, :])
                 out = mx.sum(f * W, axis=-1)
+            elif (not self._n_vec and self.transittype == "primary"
+                  and self._kernel_usable()):
+                # the fused model kernel, as light_curve uses it (see
+                # _get_compiled): orbit and photometry in one pass, one row
+                # per set. A circular set's cos i is light_curve's b / a,
+                # with b = a cos i folded on the host, so each row is
+                # light_curve's bit for bit.
+                b_circ = col(cols["a"] * np.cos(inc))
+                ci_k = mx.where(col(ecc == 0.0) > 0, b_circ / a, ci)
+                out = self._batch_kernel_fn()(t0, per, rp, a, k, h, ci_k,
+                                              u1, u2)
             else:
                 tt = self._t_mx[None, :]
                 phi = (2.0 * math.pi) * (tt - t0) / per
@@ -1283,6 +1294,27 @@ class TransitModel:
             res = res.reshape(n, self.t.size,
                               self.supersample_factor).mean(axis=2)
         return res
+
+    def _batch_kernel_fn(self):
+        """light_curves' fused-kernel graph, compiled as light_curve's is
+        (the same ops fused the same way, so each row is light_curve's
+        bit for bit); (n, 1) columns in, (n, len(t)) out."""
+        fn = self._compiled.get("batch_kernel")
+        if fn is None:
+            from .anchored import pack_orbit_constants
+            from .metal import make_model_core_metal
+            core = make_model_core_metal(0.0)
+            tt = self._t_mx
+            xdat = mx.stack([tt, mx.zeros_like(tt)])
+
+            def raw(t0, per, rp, a, k, h, ci, u1, u2):
+                n = t0.shape[0]
+                flat = lambda c: mx.reshape(c, (n,))       # noqa: E731
+                orb = pack_orbit_constants(flat(k), flat(h), flat(ci))
+                return 1.0 + core(xdat, flat(t0), flat(per), flat(rp),
+                                  flat(a), orb, flat(u1), flat(u2))
+            fn = self._compiled["batch_kernel"] = mx.compile(raw)
+        return fn
 
     def light_curve_mx(self, params) -> mx.array:
         """Model flux as an MLX array that stays in the graph, for building

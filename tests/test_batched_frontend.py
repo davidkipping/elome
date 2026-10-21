@@ -84,12 +84,24 @@ def test_single_set_still_works():
     assert m.light_curves([_p()]).shape == (1, T.size)
 
 
-def test_fp32_gpu_path():
-    m = elome.TransitModel(_p(), T, dtype=mx.float32)
-    sets = _sets(16)
+@pytest.mark.parametrize("kw,base", [
+    ({}, {}),
+    (dict(exp_time=0.02, supersample_factor=7), {}),
+    ({}, dict(u=[0.4], limb_dark="linear")),
+    ({}, dict(u=[], limb_dark="uniform"))], ids=["plain", "supersample", "linear", "uniform"])
+def test_fp32_gpu_path(kw, base):
+    """On the GPU the batch runs light_curve's fused model kernel, one row
+    per set, compiled the same way: each row is light_curve's bit for bit,
+    for circular and eccentric sets mixed in one batch."""
+    m = elome.TransitModel(_p(**base), T, dtype=mx.float32, **kw)
+    sets = _sets(16, **base) + [_p(rp=0.09, inc=88.0, **base),
+                                _p(rp=0.12, inc=87.5, **base)]
     batched = m.light_curves(sets)
     looped = np.stack([m.light_curve(p) for p in sets])
-    assert np.abs(batched - looped).max() < 5e-6
+    if m._kernel_usable():
+        assert np.array_equal(batched, looped)
+    else:
+        assert np.abs(batched - looped).max() < 5e-6
 
 
 def test_rejects_empty_and_mismatched_law():
