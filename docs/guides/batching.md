@@ -23,8 +23,8 @@ Measured, for 10,000 parameter sets of a 1,000-point light curve
 
 | strategy | wall time | per light curve |
 |---|---:|---:|
-| 10,000 separate calls (a Python loop) | about 2,400 ms | about 240 µs |
-| one batched call | about 2.9 ms | about 290 ns |
+| 10,000 separate calls (a Python loop) | about 2,300 ms | about 230 µs |
+| one batched call | about 2.7 ms | about 270 ns |
 
 The ratio, about 800 here, moves by a few tens of per cent with the
 machine's state; the order of magnitude is the point. A per-walker loop makes Elómë the

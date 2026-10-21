@@ -38,8 +38,8 @@ log-likelihood at 1024 chains × 65,536 points, compiled, in float32
 |---|---:|---:|
 | reverse-mode automatic differentiation | 492 ms | 31,264 ms |
 | analytic gradient (MLX graph) | 496 ms | 627 ms |
-| **fused Metal kernel**, circular orbit | **19.5 ms** | **55.0 ms** |
-| **fused Metal kernel**, eccentric ($e = 0.3$) | **26.2 ms** | **68.7 ms** |
+| **fused Metal kernel**, circular orbit | **19.6 ms** | **54.4 ms** |
+| **fused Metal kernel**, eccentric ($e = 0.3$) | **25.7 ms** | **68.6 ms** |
 
 The fused kernel keeps the whole model (orbit, Kepler solve and
 photometry) in registers, with about 12 bytes of memory traffic per

@@ -136,7 +136,7 @@ any error:
    transforms impose such bounds for you; emcee does not.
 2. **Compile the likelihood.** `mx.compile` fuses the reduction. The same
    likelihood run eagerly is about 1.5 times as slow at 1024 × 65,536
-   points (29.8 against 19.6 ms, `benchmarks/bench_vjp.py`).
+   points (29.3 against 19.7 ms, `benchmarks/bench_vjp.py`).
 3. **Use `ChunkedGaussianLogLike`, not a bare `mx.sum`.** A single
    float32 sum over a long light curve accumulates rounding towards the
    scale of a Metropolis decision. The chunked tree (16,384-point chunks
@@ -199,9 +199,9 @@ From the reference run (`examples/chees_ecc.py`, measured by
 MLX computes a gradient only when a sampler asks for one, with `mx.grad`
 or `mx.vjp`, and Elómë's gradient kernels recompute what they need rather
 than storing a tape. So a forward-only sampler (Metropolis, the stretch
-move, emcee) pays only for the forward kernel: 19.5 ms at 1024 chains ×
+move, emcee) pays only for the forward kernel: 19.6 ms at 1024 chains ×
 65,536 points on a circular orbit. A gradient sampler such as ChEES-HMC
-pays 55.0 ms for the value and gradient together. That is under three
+pays 54.4 ms for the value and gradient together. That is under three
 times a forward evaluation, and about 570 times cheaper than reverse-mode
 automatic differentiation of the same model (see
 {doc}`../reference/performance`).

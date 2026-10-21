@@ -55,6 +55,10 @@ every release is tagged `vX.Y.Z` in git.
   other figures stand.
 - The oblate cross-code comparison's float64 memory, re-measured with the
   blocked graph: 1.3 GB at 10^7 points (was 21 GB), capped at any length.
+- The fused Metal kernel's timings re-measured with the 8-iteration core
+  (19.6 / 54.4 ms circular, 25.7 / 68.6 ms eccentric, at 1024 chains ×
+  65,536 points), and the batching guide's batched call (about 2.7 ms,
+  was 2.9).
 
 ## [0.19.0] — 2026-10-20
 

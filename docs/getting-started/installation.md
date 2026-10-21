@@ -8,7 +8,7 @@
   and float32 calls run an MLX graph of the same model instead of the
   fused kernels. The results agree to float32 rounding, but a forward
   evaluation is about 25 times slower and a value with its gradient about
-  11 times slower.
+  12 times slower.
 - **Python 3.10 or later**, with [MLX](https://github.com/ml-explore/mlx)
   0.30 or later and NumPy. pip installs both for you.
 

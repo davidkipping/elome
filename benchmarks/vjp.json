@@ -1,18 +1,18 @@
 {
  "machine": "macOS-27.0.1-arm64-arm-64bit",
- "date": "2026-10-13",
+ "date": "2026-10-21",
  "n_chains": 1024,
  "n_points": 65536,
  "median_ms": {
-  "chunked_eager": 29.82,
-  "chunked_compiled": 19.58,
+  "chunked_eager": 29.34,
+  "chunked_compiled": 19.66,
   "autodiff_forward": 492.14,
   "analytic_forward": 496.44,
-  "metal_forward": 19.52,
+  "metal_forward": 19.59,
   "autodiff_value_grad": 31264.29,
   "analytic_value_grad": 626.52,
-  "metal_value_grad": 55.04,
-  "metal_ecc_forward": 26.22,
-  "metal_ecc_value_grad": 68.7
+  "metal_value_grad": 54.38,
+  "metal_ecc_forward": 25.68,
+  "metal_ecc_value_grad": 68.64
  }
 }
