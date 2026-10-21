@@ -160,7 +160,13 @@ def test_contacts_are_exact(dtype):
     from elome.metal import _ecc_shape
     cases = list(GEOMS) + [
         dict(a=10.0, b=0.90, r=0.15, k=0.45, h=0.40),    # grazing
-        dict(a=10.0, b=0.79, r=0.20, k=-0.3, h=0.55)]    # nearly grazing
+        dict(a=10.0, b=0.79, r=0.20, k=-0.3, h=0.55),    # nearly grazing
+        # grazing with the closest approach off conjunction: the ingress
+        # sits far from it (the solver returned 0 for it until 0.19)
+        dict(a=3.67, b=1.0677, r=0.0737, k=0.6155, h=0.01074),
+        dict(a=14.89, b=1.1754, r=0.2187, k=0.9369, h=0.0655),
+        # b > 1 + r at conjunction, yet the planet clips the star
+        dict(a=3.67, b=1.08, r=0.0737, k=0.6155, h=0.01074)]
     for g in cases:
         with mx.stream(mx.cpu):
             v = [mx.array(g[q], dtype=dtype) for q in ("r", "a", "b", "k", "h")]
@@ -175,9 +181,11 @@ def test_contacts_are_exact(dtype):
             assert np.abs(got - ref).max() < tol, g
         else:
             # grazing: the outer pair is exact; the inner pair has no root
-            # and collapses (harmlessly) between them
+            # and collapses (harmlessly) between them. z^2 is flatter at a
+            # graze, which float32 resolves to about 1e-6 d.
             assert len(ref) == 2
-            assert np.abs(got[[0, 3]] - ref).max() < tol, g
+            gtol = tol if dtype == mx.float64 else 1e-6
+            assert np.abs(got[[0, 3]] - ref).max() < gtol, g
             assert ref[0] <= got[1] <= got[2] <= ref[1]
 
 
@@ -509,3 +517,24 @@ def test_shapes_and_smaller_batch_after_compile(dtype):
 def test_secosw_and_sesinw_come_as_a_pair():
     with pytest.raises(ValueError, match="secosw and sesinw"):
         flux_dev_from_tau(mx.zeros((4,)), P, 8.8, 0.3, 0.1, *U, secosw=0.1)
+
+
+def test_contact_rule_on_a_graze_off_conjunction():
+    """e = 0.88 with the closest approach off conjunction: the ingress
+    contact was returned at conjunction, the split missed the kink, and the
+    contact rule was off by 3.5e-5 (1% of the depth) at n_gl = 5. The
+    reference is supersampling, which needs no contacts (its own error here
+    is ~7e-7)."""
+    e, w = 0.882, math.radians(4.0)
+    k, h = math.sqrt(e) * math.cos(w), math.sqrt(e) * math.sin(w)
+    tau = np.linspace(-0.12, 0.05, 851)
+    with mx.stream(mx.cpu):
+        f = lambda v: mx.array(np.asarray(v, dtype=np.float64))
+        args = (f(tau), f(5.0), f(14.89), f(1.1754), f(0.2187), f(0.4), f(0.25))
+        kw = dict(secosw=f(k), sesinw=f(h), exp_time=0.02)
+        ref = np.asarray(flux_dev_from_tau(*args, integration="supersample",
+                                           n_sub=4001, **kw))
+        got = np.asarray(flux_dev_from_tau(*args, integration="contact",
+                                           n_gl=5, **kw))
+    assert np.abs(ref).max() > 3e-3
+    assert np.abs(got - ref).max() < 2e-6

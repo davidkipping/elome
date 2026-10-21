@@ -536,3 +536,43 @@ class TestContract:
     def test_bad_tau_rank_raises(self):
         with pytest.raises(ValueError, match="tau must be"):
             call(np.zeros((2, 3, 4)))
+
+
+@needs_metal
+@pytest.mark.parametrize("b", [0.30, 1.05, 1.11, 1.2])   # central, grazing, barely, none
+@pytest.mark.parametrize("integ,kw", [("contact", {"exp_time": EXP}),
+                                      ("supersample", {"exp_time": EXP, "n_sub": 7}),
+                                      ("none", {})])
+def test_windows_at_the_contacts_match_the_graph(b, integ, kw):
+    """The circular kernels skip an exposure that ends before the first
+    contact or starts after the last (with a margin of 1e-3 of the
+    duration). Windows placed just either side of that line, on central,
+    grazing and non-transiting chains, must equal the graph, which skips
+    nothing -- values and the tau and parameter gradients."""
+    from elome.exposure import contact_offsets
+    r = NOM["r"]
+    c1, _, _, c4 = (float(c) * P / (2 * math.pi)
+                    for c in contact_offsets(r, NOM["a"], b))
+    hw = 0.5 * kw.get("exp_time", 0.0)
+    dur = max(c4 - c1, 1e-3)
+    edge = np.array([-1e-2, -2e-3, -1e-3, -5e-4, 0.0, 5e-4, 1e-3, 2e-3, 1e-2]) * dur
+    tau = np.concatenate([c1 - hw - edge, c4 + hw + edge, [0.0, -P / 3, P / 3]])
+    k32 = call(tau, b=b, integration=integ, **kw)
+    k64 = call(tau, b=b, integration=integ, dtype=mx.float64, **kw)
+    assert np.abs(k32 - k64).max() < 2e-7
+    if b < 1 + r:                       # the windows do reach the transit
+        assert np.count_nonzero(k64) > 1
+
+    def grads(dtype):
+        args = [mx.array(v, dtype=dtype)
+                for v in (P, NOM["a"], b, r, NOM["u1"], NOM["u2"])]
+        ct = mx.array(np.linspace(-1, 1, tau.size), dtype=dtype)
+        g = mx.grad(lambda t, *p: mx.sum(ct * flux_dev_from_tau(
+            t, *p, integration=integ, **kw)), argnums=(0, 4))(
+            mx.array(tau, dtype=dtype), *args)
+        return [np.asarray(x, dtype=np.float64) for x in g]
+    g32 = grads(mx.float32)
+    with mx.stream(mx.cpu):
+        g64 = grads(mx.float64)
+    for x32, x64 in zip(g32, g64):
+        assert np.abs(x32 - x64).max() <= 1e-3 * max(np.abs(x64).max(), 1e-6)

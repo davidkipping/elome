@@ -327,6 +327,8 @@ def _vjp_body(nslot: int) -> str:
          "                    a_u2  += w * dFdu2;\n",
          "                    for (int q = 0; q < HYB_NW; ++q)\n"
          "                        a_w[q] += w * dFdw[q];\n"),
+        ("            p_u1 = zc;  p_u2 = zc;\n",
+         "            for (int q = 0; q < HYB_NW; ++q) p_w[q] = zc;\n"),
         ("            p_u1 = ctv * a_u1 * inv;\n"
          "            p_u2 = ctv * a_u2 * inv;\n",
          "            for (int q = 0; q < HYB_NW; ++q)\n"
@@ -352,7 +354,8 @@ _FWD_B_BODY = M._swap(M._TAU_HEAD_G, _U_LOADS, "") + """
 ORB_DECL
     float acc[HYB_NCOL], Bc[HYB_NCOL];
     for (int q = 0; q < HYB_NCOL; ++q) acc[q] = 0.0f;
-    if (mode == MODE_NONE) {
+    if (skip) {
+    } else if (mode == MODE_NONE) {
         ORB_Z(tau0)
         if (front) {
             mp_hyb_cols(z, r, Bc);

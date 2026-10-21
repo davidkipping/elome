@@ -845,6 +845,22 @@ def _ecc_header() -> str:
     return _subst(_ECC_FN.replace("SOLVE", _SOLVE))
 
 
+# An exposure window that ends before the first contact or starts after
+# the last has F - 1 = 0 exactly: skip its 5 x n_gl (or n_sub) orbit and
+# photometry evaluations. The outputs are the bits the evaluation would
+# give, signed zeros included. The contacts solve z = 1 + r (exactly for a
+# circular orbit, exposure.contact_offsets_anchored for an eccentric one);
+# the margin, 1e-3 of the duration plus 2e-6 of the period, covers float32's
+# placement of a contact on a barely grazing transit, where z^2 is nearly
+# flat (1e-6 rad). A chain without a transit (c3 == c0, collapsed
+# contacts) is never skipped.
+_TAU_SKIP = """
+    float sc0 = cs[y * 4u], sc3 = cs[y * 4u + 3u];
+    float smg = 1e-3f * (sc3 - sc0) + 2e-6f * per;
+    bool skip = sc3 > sc0 && (tau0 + hw_exp < sc0 - smg
+                              || tau0 - hw_exp > sc3 + smg);
+"""
+
 _TAU_ORBITS = {
     "circ": dict(
         inputs=["bin"],
@@ -858,7 +874,8 @@ _TAU_ORBITS = {
            "            dzdphi = (av * av - bv * bv) * sphi * cphi * zi;\n"
            "            dth[0] = av * sphi * sphi * zi;\n"
            "            dth[1] = bv * cphi * cphi * zi;",
-        theta=("a", "b"), live="2"),
+        theta=("a", "b"), live="2",
+        skip=_TAU_SKIP),
     "ecc": dict(
         inputs=["orb"],
         load="    float o[NORB_I];\n"
@@ -868,7 +885,8 @@ _TAU_ORBITS = {
         z="z = mp_z_ecc(TT, per, av, o, &front);",
         zd="z = mp_z_ecc_d(TT, per, av, o, &front, &dzdphi, dth);",
         theta=("a", "ci", "ecw", "esw", "es", "ec", "b1", "a2", "b2"),
-        live="((o[7] != 0.0f) ? 9 : 2)"),
+        live="((o[7] != 0.0f) ? 9 : 2)",
+        skip=_TAU_SKIP),
 }
 
 _TAU_HEAD_G = """
@@ -885,12 +903,14 @@ ORB_LOAD
     float u1  = u1in[y];
     float u2  = u2in[y];
     float hw_exp = 0.5f * expt;
+ORB_SKIP
 """
 
 _TAU_FWD_G = _TAU_HEAD_G + """
     float z;
     bool front;
 ORB_DECL
+    if (skip) { out[i] = 0.0f; return; }
     if (mode == MODE_NONE) {
         ORB_Z(tau0)
         out[i] = front ? mp_phot(z, r, u1, u2) : 0.0f;
@@ -936,7 +956,9 @@ _TAU_FWD_B_G = _swap(_TAU_HEAD_G,
     bool front;
 ORB_DECL
     float3 acc;
-    if (mode == MODE_NONE) {
+    if (skip) {
+        acc = float3(0.0f);
+    } else if (mode == MODE_NONE) {
         ORB_Z(tau0)
         acc = front ? mp_phot_b(z, r) : float3(0.0f);
     } else if (mode == MODE_SUPER) {
@@ -987,7 +1009,15 @@ ORB_DECL
     for (int k = 0; k < NTH; ++k) p_th[k] = 0.0f;
     float g_tau = 0.0f;
 
-    if (mode == MODE_NONE || mode == MODE_SUPER) {
+    if (skip) {
+        // the contact rule's quotient gives ctv * (+0): match its sign
+        if (mode != MODE_NONE && mode != MODE_SUPER) {
+            float zc = ctv * 0.0f;
+            g_tau = zc;  p_per = zc;  p_r = zc;
+            for (int k = 0; k < NTH; ++k) p_th[k] = zc;
+            p_u1 = zc;  p_u2 = zc;
+        }
+    } else if (mode == MODE_NONE || mode == MODE_SUPER) {
         int n_node = (mode == MODE_NONE) ? 1 : nsub;
         float scale = 1.0f / (float)n_node;
         for (int j = 0; j < n_node; ++j) {
@@ -1087,7 +1117,8 @@ def _tau_g_src(body: str, orbit: str) -> str:
     plug = _TAU_ORBITS[orbit]
     nth = len(plug["theta"])
     src = (body.replace("ORB_LOAD\n", plug["load"])
-               .replace("ORB_DECL\n", plug["decl"]))
+               .replace("ORB_DECL\n", plug["decl"])
+               .replace("ORB_SKIP\n", plug["skip"]))
     src = re.sub(r"ORB_ZD\((\w+)\)",
                  lambda m: plug["zd"].replace("TT", m.group(1)), src)
     src = re.sub(r"ORB_Z\((\w+)\)",

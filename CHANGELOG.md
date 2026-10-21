@@ -5,6 +5,33 @@ every release is tagged `vX.Y.Z` in git.
 
 ## [Unreleased]
 
+## [0.19.0] — 2026-10-20
+
+### Fixed
+- **Eccentric contact times on grazing transits.** On an eccentric orbit
+  the planet's closest approach to the star's centre is not at
+  conjunction. The contact solver assumed it was, and on a grazing transit
+  it could return the ingress at conjunction, or miss a transit that
+  happens only off conjunction (b > 1 + r there). The contact rule then
+  split each exposure in the wrong place: at e = 0.88 the flux was off by
+  3.5e-5, 1% of the depth, against ~1e-7 normally. The solver
+  (`exposure.contact_offsets_anchored`) now finds the closest approach,
+  brackets each contact, and solves the four together; on 2,600 random
+  orbits up to e = 0.95 its float64 contacts are within 1e-12 of the
+  transit's duration of a bisected root. Other eccentric contact-rule
+  results move by up to a few parts in 1e6 of their gradients' and values'
+  scale; circular orbits are unchanged.
+
+### Changed
+- **Faster float32 GPU kernels** (`flux_dev_from_tau`, every law). An
+  exposure that ends before the first contact or starts after the last is
+  skipped rather than evaluated node by node. Circular orbits: about 55%
+  off a sampler's uniform-phase grid under the contact rule, 12-15% on a
+  grid around the transit, 6-25% with no exposure integration, with
+  results bit for bit the same. Eccentric orbits: the contact-rule kernel
+  is 3 times faster on a uniform-phase grid, and a whole call 31% faster
+  (19% with no exposure integration).
+
 ## [0.18.8] — 2026-10-20
 
 ### Fixed
