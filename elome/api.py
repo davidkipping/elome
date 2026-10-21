@@ -923,6 +923,7 @@ class TransitModel:
         fn = self._compiled.get(key)
         if fn is not None:
             return fn
+        from . import oblate_tau
         from .metal import _INT_CONTACT, _INT_NONE
         from .oblate_tau import flux_dev_from_tau_oblate
         contact = self.integration == "contact"
@@ -930,25 +931,43 @@ class TransitModel:
         exp_time = self.exp_time if contact else 0.0
         law, n_gl, use_metal = self._hlaw, self.n_gl, self.use_metal
 
-        def flux(tt, t0, per, a, b, rp, f, th, uv, k=None, h=None):
+        def flux(tt, t0, per, a, b, rp, f, th, uv, k=None, h=None,
+                 blocks=False):
             tau = tt - t0
             tau = tau - per * mx.round(tau / per)
             return 1.0 + flux_dev_from_tau_oblate(
                 tau, per, a, b, rp, f, th, law, uv, exp_time, mode, n_gl, 1,
-                k=k, h=h, ew=orbit == "ew", use_metal=use_metal)
+                k=k, h=h, ew=orbit == "ew", use_metal=use_metal,
+                compile_blocks=blocks)
         if orbit == "circ":
-            def raw(tt, t0, per, a, b, rp, f, th, uv):
-                return flux(tt, t0, per, a, b, rp, f, th, uv)
+            def raw(tt, t0, per, a, b, rp, f, th, uv, blocks=False):
+                return flux(tt, t0, per, a, b, rp, f, th, uv, blocks=blocks)
         else:
-            def raw(tt, t0, per, a, b, rp, f, th, uv, k, h):
-                return flux(tt, t0, per, a, b, rp, f, th, uv, k, h)
+            def raw(tt, t0, per, a, b, rp, f, th, uv, k, h, blocks=False):
+                return flux(tt, t0, per, a, b, rp, f, th, uv, k, h,
+                            blocks=blocks)
         # An fp32 model with use_metal=False runs the oblate *graph* on the
         # GPU, and that graph is too large for one fused Metal primitive:
         # MLX's compile exhausts the kernel's argument buffers and aborts
         # the process. So that one configuration runs uncompiled (the
         # kernels, and every graph on the CPU stream, compile normally).
-        fn = raw if (self.dtype == mx.float32 and not use_metal) \
-            else mx.compile(raw)
+        if self.dtype == mx.float32 and not use_metal:
+            fn = raw
+        else:
+            whole = mx.compile(raw)
+            nodes = oblate_tau._nodes_per_time(exp_time, mode, n_gl, 1)
+
+            def fn(tt, t0, *rest):
+                # The graph (fp64) runs in blocks of _OBLATE_BLOCK points
+                # (oblate_tau._in_blocks); compiling a blocked call whole
+                # traces every block, so a call larger than one block runs
+                # uncompiled around a compiled block instead.
+                n = max([x.shape[0] for x in (tt, t0, *rest[:6])
+                         if x.ndim == 2] or [1])
+                if (self.dtype == mx.float64 and n * tt.shape[-1] * nodes
+                        > oblate_tau._OBLATE_BLOCK):
+                    return raw(tt, t0, *rest, blocks=True)
+                return whole(tt, t0, *rest)
         self._compiled[key] = fn
         return fn
 
@@ -989,7 +1008,7 @@ class TransitModel:
     # fails on it (an internal "unordered_map::at" error once the orbit and
     # the ring's columns are in one graph). On the CPU the columns alone
     # run compiled (rings._shape_cols_compiled), and the graph is built in
-    # blocks of a bounded number of points (rings_tau._in_blocks).
+    # blocks of a bounded number of points (oblate_tau._in_blocks).
 
     def _ring_fn(self, orbit: str):
         """The ringed-planet model (not compiled whole: see above);

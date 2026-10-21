@@ -279,10 +279,12 @@ def _contact_kh(k, h, ew):
 
 
 def _tau_graph(tau, period, a, b, r, f, theta, w2d, exp_time, mode, n_gl,
-               n_sub, law, basis=False, k=None, h=None, ew=False):
+               n_sub, law, basis=False, k=None, h=None, ew=False,
+               contacts=None):
     """The oblate counterpart of ``metal_hybrid._tau_graph``: the same
     exposure rules, contacts detached and the period detached in the node
-    map exactly as there."""
+    map exactly as there. ``contacts``: the contact rule's (n, 4)
+    (_graph_contacts), computed here if not given."""
     from .exposure import exposure_nodes
     law = get_law(law)
     ecc = k is not None
@@ -319,14 +321,9 @@ def _tau_graph(tau, period, a, b, r, f, theta, w2d, exp_time, mode, n_gl,
         Bc = mx.mean(inst(nodes, 2), axis=-2)
     else:
         per1 = col(1)[0]
-        if ecc:
-            ci, consts = _orbit_consts(a, b, k, h, ew)
-            kc, hc = _contact_kh(k, h, ew)
-            cs = _contact_offsets_oblate(a, b, r, f, theta, kc, hc, ci,
-                                         consts=consts)
-        else:
-            cs = _contact_offsets_oblate(a, b, r, f, theta)
-        cs = tuple(mx.reshape(c, (-1, 1)) for c in cs)
+        if contacts is None:
+            contacts = _graph_contacts(a, b, r, f, theta, k, h, ew)
+        cs = tuple(contacts[:, j:j + 1] for j in range(4))
         T, W = exposure_nodes(tau, tau * 0.0, mx.stop_gradient(per1),
                               exp_time, cs, int(n_gl), dtype=tau.dtype)
         Bc = mx.sum(inst(T, 2) * W[..., None], axis=-2)
@@ -335,15 +332,124 @@ def _tau_graph(tau, period, a, b, r, f, theta, w2d, exp_time, mode, n_gl,
     return combine_cols(Bc, w2d, law)
 
 
+def _graph_contacts(a, b, r, f, theta, k=None, h=None, ew=False):
+    """The contact rule's (n, 4) contact phases for _tau_graph's canonical
+    (n,) inputs, detached."""
+    if k is None:
+        cs = _contact_offsets_oblate(a, b, r, f, theta)
+    else:
+        ci, consts = _orbit_consts(a, b, k, h, ew)
+        kc, hc = _contact_kh(k, h, ew)
+        cs = _contact_offsets_oblate(a, b, r, f, theta, kc, hc, ci,
+                                     consts=consts)
+    return mx.stack([mx.reshape(c, (-1,)) for c in cs], axis=1)
+
+
+# Evaluation points (sets x times x exposure nodes) per block of the fp64
+# graph (_in_blocks): ~1-3 KB of intermediates each, so ~0.3-0.8 GB.
+_OBLATE_BLOCK = 1 << 18
+
+
+def _nodes_per_time(exp_time, mode, n_gl, n_sub):
+    """Points the graph evaluates per time (``_tau_graph``'s exposure rule:
+    the contact rule's five pieces of n_gl nodes)."""
+    if mode == M._INT_NONE or exp_time == 0.0:
+        return 1
+    if mode == M._INT_SUPER:
+        return max(int(n_sub), 1)
+    return 5 * int(n_gl)
+
+
+_block_fns: dict = {}
+
+
+def _block_fn(exp_time, mode, n_gl, n_sub, law, basis, ew, present,
+              compiled):
+    """``run(tt, rows)`` for _in_blocks: _tau_graph on one block's rows
+    (``present``: which of them are arrays). ``compiled``: under
+    mx.compile, cached per configuration -- every block has one shape, so
+    one trace serves them all, where compiling a whole blocked call traces
+    every block (minutes at 30 blocks)."""
+    def raw(tt, *arrs):
+        it = iter(arrs)
+        *p6, w, kk, hh, c = [next(it) if p else None for p in present]
+        return _tau_graph(tt, *p6, w, exp_time, mode, n_gl, n_sub, law,
+                          basis=basis, k=kk, h=hh, ew=ew, contacts=c)
+    fn = raw
+    if compiled:
+        key = (float(exp_time), int(mode), int(n_gl), int(n_sub), law,
+               bool(basis), bool(ew), present)
+        fn = _block_fns.get(key)
+        if fn is None:
+            fn = _block_fns[key] = mx.compile(raw)
+    return lambda tt, rows: fn(tt, *[x for x in rows if x is not None])
+
+
+def _pad(x, size, axis):
+    """``x`` padded to ``size`` along ``axis`` (0 or 1) with its last slice."""
+    k = size - x.shape[axis]
+    if k == 0:
+        return x
+    last = x[-1:] if axis == 0 else x[:, -1:]
+    shape = list(x.shape)
+    shape[axis] = k
+    return mx.concatenate([x, mx.broadcast_to(last, shape)], axis=axis)
+
+
+def _in_blocks(run, tau2d, rows, nodes, block):
+    """``run(tau2d, rows)`` -- the oblate or ringed graph, (n, m[, ncol]) --
+    in blocks of at most ``block`` evaluation points, concatenated lazily.
+    The graphs hold their fp64 intermediates until evaluated (~1-3 KB per
+    point oblate, ~20-24 KB ringed: ~24 GB at 10^6 ringed points); MLX
+    evaluates the blocks one after another and frees each block's
+    intermediates before the next, so the peak is one block's, at no cost
+    in time. Each flux depends only on its own row (``rows``: the per-set
+    (n, ...) arrays, or None) and time. Blocks are whole rows
+    while a row fits, else one row's times; equal-sized, padded with the
+    last row or time and the padding dropped, so one compiled shape and one
+    cached buffer set serve every block (a shorter last block would
+    allocate, and cache, a second set)."""
+    n, m = tau2d.shape
+    per_row = nodes * m
+    if n * per_row <= block:
+        return run(tau2d, rows)
+
+    def equal(total, most):
+        nb = -(-total // max(most, 1))
+        return nb, -(-total // nb)
+
+    def sl(x, i, j):
+        return None if x is None else x[i:j]
+    if per_row <= block:
+        nb, size = equal(n, block // per_row)
+        tp = _pad(tau2d, nb * size, 0)
+        rp = [None if x is None else _pad(x, nb * size, 0) for x in rows]
+        return mx.concatenate(
+            [run(tp[i * size:(i + 1) * size],
+                 [sl(x, i * size, (i + 1) * size) for x in rp])
+             for i in range(nb)], axis=0)[:n]
+    nb, size = equal(m, block // nodes)
+    tp = _pad(tau2d, nb * size, 1)
+    return mx.concatenate(
+        [mx.concatenate([run(tp[j:j + 1, i * size:(i + 1) * size],
+                             [sl(x, j, j + 1) for x in rows])
+                         for i in range(nb)], axis=1)
+         for j in range(n)], axis=0)[:, :m]
+
+
 @fp64_on_cpu
 def flux_dev_from_tau_oblate(tau, period, a, b, r, f, theta, law, u,
                              exp_time, mode, n_gl, n_sub, basis=False,
-                             k=None, h=None, ew=False, use_metal=True):
+                             k=None, h=None, ew=False, use_metal=True,
+                             compile_blocks=False):
     """``metal.flux_dev_from_tau`` with ``f=`` (that function validates the
     keywords and delegates here). fp32 data on the GPU stream takes the
     oblate Metal kernels (``metal_oblate``) unless ``use_metal`` is False;
-    anything else runs this graph, fp64 on the CPU stream. ``ew``: (k, h)
-    hold (e, w [rad]) -- TransitModel's array-ecc route (_orbit_consts)."""
+    anything else runs this graph, fp64 on the CPU stream, in blocks of at
+    most _OBLATE_BLOCK points (_in_blocks) -- each block compiled once for
+    all (they share one shape) with ``compile_blocks``, TransitModel's
+    route for a call too large to compile whole. ``ew``: (k, h) hold (e, w
+    [rad]) -- TransitModel's array-ecc route (_orbit_consts)."""
     from .metal_hybrid import _canon_w
     law = get_law(law)
     if tau.ndim not in (1, 2):
@@ -374,6 +480,15 @@ def flux_dev_from_tau_oblate(tau, period, a, b, r, f, theta, law, u,
         ok = _in_domain(pc[3], pc[4])[:, None]
         out = mx.where(ok[..., None] if basis else ok, out, mx.nan)
     else:
-        out = _tau_graph(tau2d, *pc[:6], w2d, exp_time, mode, n_gl, n_sub,
-                         law, basis=basis, k=kh[0], h=kh[1], ew=ew)
+        # the contact rule's contacts depend on the parameters alone: once
+        # per set, not per block
+        contact = mode not in (M._INT_NONE, M._INT_SUPER) and exp_time != 0.0
+        cs = _graph_contacts(*pc[1:6], kh[0], kh[1], ew) if contact else None
+
+        rows = [*pc[:6], w2d, *kh, cs]
+        run = _block_fn(exp_time, mode, n_gl, n_sub, law, basis, ew,
+                        tuple(x is not None for x in rows), compile_blocks)
+        out = _in_blocks(run, tau2d, rows,
+                         _nodes_per_time(exp_time, mode, n_gl, n_sub),
+                         _OBLATE_BLOCK)
     return out[0] if squeeze and n == 1 else out

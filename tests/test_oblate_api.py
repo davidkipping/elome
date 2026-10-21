@@ -285,3 +285,76 @@ def test_use_metal_false_runs_the_graph(kw):
     finally:
         MO.flux_dev_from_tau_oblate_kernel = orig
     assert np.abs(on - off).max() < 3e-7
+
+
+def _spy_graph(monkeypatch):
+    """The (n, m) of every block oblate_tau's graph evaluates."""
+    from elome import oblate_tau
+    shapes, orig = [], oblate_tau._tau_graph
+
+    def spy(tau, *a, **k):
+        shapes.append(tuple(tau.shape))
+        return orig(tau, *a, **k)
+    monkeypatch.setattr(oblate_tau, "_tau_graph", spy)
+    return shapes
+
+
+@pytest.mark.parametrize("pkw,mkw", [
+    ({}, {}), (dict(ecc=0.3, w=40.0), {}),
+    ({}, dict(integration="contact", exp_time=EXP, n_gl=2)),
+    (dict(ecc=0.3, w=40.0), dict(integration="contact", exp_time=EXP, n_gl=2)),
+    ({}, dict(supersample_factor=3, exp_time=EXP))],
+    ids=["circular", "eccentric", "contact", "eccentric contact", "supersampled"])
+def test_long_grids_are_evaluated_in_blocks(pkw, mkw, monkeypatch):
+    """The fp64 graph holds ~1-3 KB per evaluation point until evaluated,
+    so it is built in blocks of at most _OBLATE_BLOCK points (times x sets x
+    exposure nodes). flux_dev_from_tau gives the same curve bit for bit;
+    TransitModel, whose blocked call compiles one block instead of the
+    whole call, to rounding."""
+    from elome import oblate_tau
+    p = P(**pkw)
+    m = el.TransitModel(p, T, **mkw)
+    sets = [p, P(**{**pkw, "f": 0.1, "theta": 80.0, "rp": 0.08})]
+    whole, whole_sets = m.light_curve(p), m.light_curves(sets)
+    nodes = 5 * 2 if mkw.get("integration") == "contact" else 1
+    monkeypatch.setattr(oblate_tau, "_OBLATE_BLOCK", 50 * nodes)
+    assert np.abs(m.light_curve(p) - whole).max() < 1e-15
+    assert np.abs(m.light_curves(sets) - whole_sets).max() < 1e-15
+
+    tau = np.linspace(-0.15, 0.15, 230)
+    kw = dict(limb_dark="hybrid5", f=0.3, theta=0.6, exp_time=EXP,
+              integration=mkw.get("integration", "none"), n_gl=2)
+    if "ecc" in pkw:
+        kw.update(secosw=0.4, sesinw=0.3)
+    with mx.stream(mx.cpu):
+        t2 = mx.broadcast_to(mx.array(tau, dtype=mx.float64), (2, tau.size))
+        rp = mx.array([0.1, 0.08], dtype=mx.float64)
+        monkeypatch.setattr(oblate_tau, "_OBLATE_BLOCK", 1 << 18)
+        ref = np.array(el.flux_dev_from_tau(t2, PER, 8.8, 0.3, rp, u=W5, **kw))
+        monkeypatch.setattr(oblate_tau, "_OBLATE_BLOCK", 50 * nodes)
+        shapes = _spy_graph(monkeypatch)
+        got = np.array(el.flux_dev_from_tau(t2, PER, 8.8, 0.3, rp, u=W5, **kw))
+    assert np.array_equal(got, ref)
+    assert shapes == 2 * [(1, 46)] * 5      # each set's 230 times, 5 equal blocks
+
+
+def test_many_short_rows_are_blocked_by_sets(monkeypatch):
+    """Sets that fit a block whole go in groups of rows (padded with the
+    last), bit for bit; the basis columns are blocked as well."""
+    from elome import oblate_tau
+    tau = np.linspace(-0.15, 0.15, 9)
+    rp = 0.06 + 0.004 * np.arange(7)
+    kw = dict(limb_dark="hybrid5", f=0.2, theta=0.4)
+    with mx.stream(mx.cpu):
+        t2 = mx.broadcast_to(mx.array(tau, dtype=mx.float64), (7, 9))
+        rpa = mx.array(rp, dtype=mx.float64)
+        whole = np.array(el.flux_dev_from_tau(t2, PER, 8.8, 0.3, rpa, u=W5, **kw))
+        basis = np.array(el.flux_dev_from_tau(t2, PER, 8.8, 0.3, rpa, ld_basis=True, **kw))
+        monkeypatch.setattr(oblate_tau, "_OBLATE_BLOCK", 20)
+        shapes = _spy_graph(monkeypatch)
+        assert np.array_equal(np.array(el.flux_dev_from_tau(t2, PER, 8.8, 0.3, rpa, u=W5,
+                                                            **kw)), whole)
+        assert shapes == [(2, 9)] * 4       # 7 rows of 9 points, 2 per block
+        assert np.array_equal(np.array(el.flux_dev_from_tau(t2, PER, 8.8, 0.3, rpa,
+                                                            ld_basis=True, **kw)), basis)
+    assert whole.shape == (7, 9) and basis.shape == (7, 9, 6)

@@ -39,14 +39,14 @@ The fp64 codes all reach rounding on these transits (JoJo's 100-step line integr
 
 | code | N = 1,000 | N = 10,000 | N = 100,000 | N = 1,000,000 | N = 10,000,000 |
 |---|---:|---:|---:|---:|---:|
-| Elómë fp64 (CPU) | 13.14 ms | 55.73 ms | 470.62 ms | 4,722.90 ms | 47.2 s |
+| Elómë fp64 (CPU) | 13.14 ms | 55.73 ms | 470.62 ms | 4,674.05 ms | 46.8 s |
 | Elómë fp32 (GPU, Metal) | 0.44 ms | 0.48 ms | 0.83 ms | 3.65 ms | 35.31 ms |
 | squishyplanet 0.6.0 (JAX, fp64, CPU) | 3.94 ms | 37.51 ms | 372.66 ms | 3,750.28 ms | 39.7 s |
 | JoJo 0.1.0 (numpy, fp64) | 0.64 ms | 4.81 ms | 45.04 ms | 561.60 ms | 6,206.20 ms |
 | GreenLantern 1.6 (OpenCL GPU, fp32) | 0.79 ms | 2.87 ms | 24.01 ms | 235.05 ms | 2,347.03 ms |
 | eclipsoid 0.0.2 (JAX, fp64, CPU) | 8.81 ms | 85.49 ms | 889.39 ms | 8,973.30 ms | -- |
 
-At N = 10^7 Elómë's fp32 kernel is 66x faster than GreenLantern 1.6 (OpenCL GPU, fp32), 176x faster than JoJo 0.1.0 (numpy, fp64), 1,125x faster than squishyplanet 0.6.0 (JAX, fp64, CPU), 1,336x faster than Elómë fp64 (CPU).
+At N = 10^7 Elómë's fp32 kernel is 66x faster than GreenLantern 1.6 (OpenCL GPU, fp32), 176x faster than JoJo 0.1.0 (numpy, fp64), 1,125x faster than squishyplanet 0.6.0 (JAX, fp64, CPU), 1,327x faster than Elómë fp64 (CPU).
 
 Elómë's fp32 kernel is the fastest code at every N measured; at the smallest, its 0.44 ms is mostly the GPU dispatch floor.
 
@@ -78,7 +78,7 @@ The process's physical footprint (what Activity Monitor shows), above its level 
 
 | code | N = 1,000 | N = 10,000 | N = 100,000 | N = 1,000,000 | N = 10,000,000 |
 |---|---:|---:|---:|---:|---:|
-| Elómë fp64 (CPU) | 75 MB | 98 MB | 288 MB | 2,189 MB | 21,189 MB |
+| Elómë fp64 (CPU) | 75 MB | 98 MB | 288 MB | 733 MB | 1,254 MB |
 | Elómë fp32 (GPU, Metal) | 10 MB | 10 MB | 13 MB | 30 MB | 239 MB |
 | squishyplanet 0.6.0 (JAX, fp64, CPU) | 120 MB | 131 MB | 127 MB | 270 MB | 1,681 MB |
 | JoJo 0.1.0 (numpy, fp64) | 2 MB | 3 MB | 31 MB | 77 MB | 9,442 MB |

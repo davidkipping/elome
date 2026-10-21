@@ -248,8 +248,8 @@ def check_comparisons():
             [(r"timed up to \$10\^6\$ points \((\S+ s),", ob["single"]["eclipsoid"]["1000000"]),
              (r"timed up to \$10\^6\$ points \(\S+ s, (\S+ MB)\)",
               ob["mem"]["single"]["eclipsoid"]["1000000"]["peak_mb"]),
-             (r"(about \S+ KB) per point",
-              ob["mem"]["single"]["elome_fp64"]["10000000"]["peak_mb"] / 1e7)]),
+             (r"which caps it near (\S+ GB)",
+              max(v["peak_mb"] for v in ob["mem"]["single"]["elome_fp64"].values()))]),
         "rings/accuracy-and-fitting.md": (
             {"The reference is an independent float64": compare_table(rg, rg_cols, rg_rows)},
             [(r"timed on (\S+) to \S+ sets", min(rg["batch_scaled_from"].values())),

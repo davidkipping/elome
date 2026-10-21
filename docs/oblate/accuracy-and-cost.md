@@ -87,7 +87,7 @@ $I(\mu) = 1 - 0.5\,(1 - \mu^2)$ (`benchmarks/oblate_compare/`):
 | 512 sets × $10^4$ points | 0.020 s | 1.2 s | 2.6 s | 29 s | 46 s | |
 | value + gradient, $N = 10^5$ | 2.7 ms | 54 ms | no gradients | 2.3 s | 1.5 s | 1.1 s |
 | memory, $N = 10^5$ | 13 MB | 14 MB | 31 MB | 127 MB | 37 MB | 288 MB |
-| memory, $N = 10^7$ | 239 MB | 89 MB | 9.4 GB | 1.7 GB | | 21 GB |
+| memory, $N = 10^7$ | 239 MB | 89 MB | 9.4 GB | 1.7 GB | | 1.3 GB |
 | memory, 512 sets × $10^4$ | 90 MB | 14 MB | 50 MB | 691 MB | 4.3 GB | |
 
 eclipsoid was timed up to $10^6$ points (9.0 s, 853 MB). Its largest
@@ -99,8 +99,9 @@ Monitor shows) during a call, above its level after importing the code:
 the call's working arrays and whatever the code keeps between calls,
 such as compiled code and memory pools. It counts CPU and Apple GPU
 memory alike; GreenLantern's OpenCL buffers count only as far as macOS
-attributes them to the process. Elómë's float64 path holds its whole
-graph's intermediates, about 2 KB per point.
+attributes them to the process. Elómë's float64 path builds its graph
+in blocks of 262,144 evaluation points, which caps it near 1.3 GB at any
+length.
 
 Elómë's float32 kernel is the fastest at every size measured; below
 about $10^4$ points its time is mostly the GPU's fixed dispatch cost.

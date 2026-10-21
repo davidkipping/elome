@@ -36,6 +36,15 @@ every release is tagged `vX.Y.Z` in git.
   does: 1.2-1.8 times faster (64 sets x 2,000 points, quadratic: 32 to
   23 ms; contact rule: 1.09 to 0.76 s; 256 x 4,000: 252 to 172 ms).
   Values move by a few float64 ulp (the fused arithmetic).
+- **Oblate planets' float64 graph runs in blocks** of at most 262,144
+  evaluation points, as the ringed planets' does, so its memory no longer
+  grows with the light curve: a 200,000-point contact-rule light curve
+  (5 million evaluation points) peaks at 0.6 GB, where it needed ~15 GB.
+  The contact rule's contacts are solved once per set, not per block. A
+  `TransitModel` call larger than one block compiles one block rather than
+  the whole call (compiling a blocked call whole traces every block:
+  minutes at 30 blocks). Values are unchanged bit for bit, but for a
+  `TransitModel` call over one block, which moves by an ulp.
 
 ### Documentation
 - The batching guide's `light_curves` figure, now measured by
@@ -44,6 +53,8 @@ every release is tagged `vX.Y.Z` in git.
 - Correction to 0.19.0's notes: re-measured on a quiet machine, the
   eccentric contact-rule kernel is about 2.6 times faster, not 3; the
   other figures stand.
+- The oblate cross-code comparison's float64 memory, re-measured with the
+  blocked graph: 1.3 GB at 10^7 points (was 21 GB), capped at any length.
 
 ## [0.19.0] — 2026-10-20
 
