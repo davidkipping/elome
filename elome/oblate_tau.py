@@ -233,15 +233,35 @@ def _contact_offsets_oblate(a, b, r, f, theta, k=None, h=None, ci=None,
     n = _N_CONTACT[dt]
     tol = 1e-8 if dt == mx.float64 else 1e-4
 
-    c1, g1 = _newton_contact(lo, a, b, ecc, A, B, cth, sth, -1, -1.0, lim, n)
-    c4, g4 = _newton_contact(hi, a, b, ecc, A, B, cth, sth, -1, 1.0, lim, n)
+    # Each pair's ingress and egress solves are independent: run them as
+    # one stacked (2m,) chain, ingress rows first, which halves the graph.
+    # Every op is elementwise or per row, so the bits are the separate
+    # solves'.
+    m = max(v.shape[0] if v.ndim else 1 for v in
+            (a, b, A, B, cth, sth, lo, hi, *(() if ecc is None
+                                              else (ecc[0], *ecc[1]))))
+
+    def t2(*vs):
+        return mx.concatenate([mx.broadcast_to(v, (m,) + tuple(v.shape[1:]))
+                               for v in vs], axis=0)
+
+    a2, b2, A2, B2, cth2, sth2 = (t2(v, v) for v in (a, b, A, B, cth, sth))
+    ecc2 = None if ecc is None else (t2(ecc[0], ecc[0]),
+                                     tuple(t2(c, c) for c in ecc[1]))
+    side = t2(mx.array(-1.0, dtype=dt), mx.array(1.0, dtype=dt))
+
+    def pair(start, end, kind, lim):
+        c, g = _newton_contact(t2(start, end), a2, b2, ecc2, A2, B2, cth2,
+                               sth2, kind, side, t2(lim, lim), n)
+        return c[:m], c[m:], g[:m], g[m:]
+
+    c1, c4, g1, g4 = pair(lo, hi, -1, lim)
     outer = (mx.abs(g1 - 1.0) < tol) & (mx.abs(g4 - 1.0) < tol) & (c1 < c4)
     mid = 0.5 * (lo + hi)
     c1, c4 = mx.where(outer, c1, mid), mx.where(outer, c4, mid)
 
     lim_i = mx.maximum(c4 - c1, 1e-12)
-    c2, g2 = _newton_contact(c1, a, b, ecc, A, B, cth, sth, 1, -1.0, lim_i, n)
-    c3, g3 = _newton_contact(c4, a, b, ecc, A, B, cth, sth, 1, 1.0, lim_i, n)
+    c2, c3, g2, g3 = pair(c1, c4, 1, lim_i)
     inner = (outer & (mx.abs(g2 - 1.0) < tol) & (mx.abs(g3 - 1.0) < tol)
              & (c1 <= c2) & (c2 < c3) & (c3 <= c4))
     mid = 0.5 * (c1 + c4)

@@ -45,6 +45,11 @@ every release is tagged `vX.Y.Z` in git.
   the whole call (compiling a blocked call whole traces every block:
   minutes at 30 blocks). Values are unchanged bit for bit, but for a
   `TransitModel` call over one block, which moves by an ulp.
+- **Oblate planets' contacts on the graph** (float64, and float32 off the
+  GPU): each pair of contacts (ingress and egress, outer then inner) is
+  one stacked solve rather than two, which halves the graph: the solve is
+  about 2 times faster for a few sets (1.5 at 1,024), a `TransitModel`
+  first call 6-14% faster and a steady one 2-5%. Bit for bit unchanged.
 
 ### Documentation
 - The batching guide's `light_curves` figure, now measured by
