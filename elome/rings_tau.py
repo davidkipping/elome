@@ -113,16 +113,27 @@ def _ring_kinks(a, b, r, f, theta, ring_in, ring_out, ring_f, k=None, h=None,
         ecc = (ci, consts)
     sth, cth = sincos(theta)
     planet, edges = ring_axes(r, f, ring_in, ring_out, ring_f)
-    out = []
-    for A, B in [planet] + edges:
-        if ecc is None:
-            cA = contact_offsets(A, a, b)
-        else:
-            cA = contact_offsets_anchored(A, a, b, k, h, ecc[0], consts=ecc[1])
-        lo, hi = cA[0], cA[3]
-        pad = 0.02 * (hi - lo) + 1e-9
-        ph, ok = _outline_kinks(a, b, ecc, A, B, cth, sth, (lo - pad, hi + pad), dt)
-        out.append(mx.where(ok, ph, mx.inf))
+    # The three outlines solved as one (3 n, 1) chain: each row's arithmetic
+    # is unchanged, with a third of the ops of three solves (eager, the
+    # sampled counts and bisections are ~2e5 small ops per outline).
+    outlines = [planet] + edges
+    n = max(v.shape[0] for v in (a, b, cth, *(x for o in outlines for x in o)))
+
+    def t3(v):
+        return mx.concatenate([mx.broadcast_to(v, (n,) + v.shape[1:])] * 3, axis=0)
+    A, B = (mx.concatenate([mx.broadcast_to(o[j], (n, 1)) for o in outlines],
+                           axis=0) for j in (0, 1))
+    a, b, cth, sth = (t3(v) for v in (a, b, cth, sth))
+    if ecc is None:
+        cA = contact_offsets(A, a, b)
+    else:
+        k, h = t3(k), t3(h)
+        ecc = (t3(ecc[0]), tuple(t3(c) for c in ecc[1]))
+        cA = contact_offsets_anchored(A, a, b, k, h, ecc[0], consts=ecc[1])
+    lo, hi = cA[0], cA[3]
+    pad = 0.02 * (hi - lo) + 1e-9
+    ph, ok = _outline_kinks(a, b, ecc, A, B, cth, sth, (lo - pad, hi + pad), dt)
+    out = mx.split(mx.where(ok, ph, mx.inf), 3, axis=0)
     return sg(mx.sort(mx.concatenate(out, axis=-1), axis=-1))
 
 

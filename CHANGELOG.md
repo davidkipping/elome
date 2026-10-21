@@ -11,6 +11,10 @@ every release is tagged `vX.Y.Z` in git.
   fused model kernel that `light_curve` uses, one row per set: 2.3-3.4
   times faster (256 sets x 4,096 points: 3.9 to 1.2 ms), and each row is
   `light_curve`'s bit for bit.
+- **Ringed planets' contact rule in float64**: the kinks of the planet and
+  both ring edges are found in one stacked solve instead of three, with
+  the same result bit for bit. A 200-point contact-rule `light_curve` is
+  2.7 times faster (3.9 to 1.5 s; the first call, 8.8 to 4.7 s).
 
 ### Documentation
 - The batching guide's `light_curves` figure, now measured by
