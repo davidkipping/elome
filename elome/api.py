@@ -468,9 +468,6 @@ class TransitModel:
                                  "'hybrid4' | 'hybrid5'")
             if transittype != "primary":
                 raise ValueError("a spotted star is primary-transit only")
-            if integration == "contact":
-                raise ValueError("the contact rule is not available for a "
-                                 "spotted star; use integration='supersample'")
             if params.spot_u is not None:
                 raise ValueError("params.spot_u is reserved; spots take the "
                                  "photosphere's law times their contrast")
@@ -1148,11 +1145,13 @@ class TransitModel:
         if fn is not None:
             return fn
         from .spots_tau import flux_dev_spots_t
-        law = self._hlaw
+        law, n_gl = self._hlaw, self.n_gl
+        exp_time = self.exp_time if self.integration == "contact" else 0.0
 
         def raw(tt, t0, ep, per, a, b, rp, prot, istar, lam, sp, uv, k=None, h=None):
             return 1.0 + flux_dev_spots_t(tt, t0, ep, per, a, b, rp, prot, istar, lam,
-                                          sp, law, uv, k=k, h=h, ew=orbit == "ew")
+                                          sp, law, uv, k=k, h=h, ew=orbit == "ew",
+                                          exp_time=exp_time, n_gl=n_gl)
         self._compiled[key] = raw
         return raw
 

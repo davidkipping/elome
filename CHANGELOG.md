@@ -19,7 +19,13 @@ every release is tagged `vX.Y.Z` in git.
   differentiable in every parameter through `light_curve_mx`, batched in
   `light_curves` (`spots` of shape (n_sets, K, 4)). `shape_cols_spots`
   and `flux_dev_spots` give the columns at a sky position directly.
-  Primary transits with `integration="supersample"` for now.
+  Primary transits. `integration="contact"` splits each exposure at the
+  planet's limb contacts and at every planet-spot tangency inside it,
+  found exposure by exposure (the star turns between transits); its
+  split points carry their implicit derivatives, so `light_curve_mx`'s
+  gradient is that of the quadrature evaluated. A spot rim reaching the
+  limb, and two spots starting to overlap, are not split (slow,
+  curvature-only kinks).
 
 ### Documentation
 - The sampler guide's exposure-kernel and hybrid-law tables and the oblate

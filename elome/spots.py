@@ -119,7 +119,7 @@ class _Rim:
         # mu = 0 on the rim: q = sin^2(alpha) - n_z^2, product form
         q = (sa - mx.abs(nz)) * (sa + mx.abs(nz))
         self.limb = q > 0.0
-        r = mx.sqrt(mx.where(self.limb, q, 0.0))
+        r = mx.where(self.limb, mx.sqrt(mx.where(self.limb, q, 1.0)), 0.0)
         den = mx.where(self.limb, sa * nxy, 1.0)
         mbs = mx.where(self.limb, self.mu_b, -1.0)
         self.psi_limb = mx.arctan2(-self.mu_a / mbs, r / den)        # and pi - it

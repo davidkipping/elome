@@ -316,10 +316,8 @@ def test_construction_checks(kw, msg):
         el.TransitModel(P(**kw), T)
 
 
-def test_contact_rule_and_secondary_are_refused():
+def test_secondary_is_refused():
     p = P()
-    with pytest.raises(ValueError, match="contact rule"):
-        el.TransitModel(p, T, integration="contact", exp_time=0.01)
     p.fp = 1e-3
     with pytest.raises(ValueError, match="primary-transit only"):
         el.TransitModel(p, T, transittype="secondary")
@@ -353,3 +351,108 @@ def test_star_fields_need_spots():
 def test_prot_required():
     with pytest.raises(ValueError, match="prot"):
         el.TransitModel(P(prot=None), T).light_curve(P(prot=None))
+
+
+# ---------------------------------------------------------------------------
+# the contact rule
+# ---------------------------------------------------------------------------
+
+LAT_CHORD = -math.degrees(math.asin(9.0 * math.cos(D(88.5))))
+EXP = 30.0 / 1440                                        # long cadence
+
+
+def exposure_mean(p, ti, e=EXP, n=40001):
+    """The exposure average of the instantaneous curve, by the trapezoid
+    rule on a fine grid (its kinks cost O(h^2))."""
+    tt = np.linspace(ti - e / 2, ti + e / 2, n)
+    return np.trapezoid(el.TransitModel(p, tt).light_curve(p), tt) / e
+
+
+@pytest.mark.parametrize("kw", [
+    dict(spots=[[8.0, LAT_CHORD, 5.0, 0.3], [40.0, 15.0, 10.0, 0.6]], prot=4.0),
+    dict(spots=[[8.0, LAT_CHORD, 12.0, 0.4]], prot=1.0, lam=30.0, istar=70.0),
+    dict(spots=[[-5.0, LAT_CHORD, 4.0, 0.2]], prot=3.0, ecc=0.3, w=50.0),
+], ids=["spot smaller than the planet", "fast rotator, oblique", "eccentric"])
+def test_contact_rule_against_the_exposure_average(kw):
+    """Long-cadence exposures across a spot crossing: the rule's kinks
+    include every planet-rim tangency, so it converges with n_gl as the
+    spherical rule does (a spot smaller than the planet is wholly covered
+    mid-crossing: four events in one exposure)."""
+    p = P(**kw)
+    ts = np.array([-0.01, -0.005, 0.0, 0.005, 0.01, 0.015])
+    ref = np.array([exposure_mean(p, ti) for ti in ts])
+    err = {}
+    for g in (5, 9):
+        got = el.TransitModel(p, ts, integration="contact", exp_time=EXP, n_gl=g).light_curve(p)
+        err[g] = np.max(np.abs(got - ref))
+    assert err[9] < 1e-7
+    assert err[9] < 0.2 * err[5]
+
+
+def test_contact_rule_beats_supersampling():
+    p = P(spots=[[8.0, LAT_CHORD, 5.0, 0.3]], prot=4.0)
+    ts = np.array([0.0, 0.005, 0.01])
+    ref = np.array([exposure_mean(p, ti) for ti in ts])
+    c = el.TransitModel(p, ts, integration="contact", exp_time=EXP, n_gl=5).light_curve(p)
+    s = el.TransitModel(p, ts, supersample_factor=35, exp_time=EXP).light_curve(p)
+    assert np.max(np.abs(c - ref)) < 0.02 * np.max(np.abs(s - ref))
+
+
+def test_contact_rule_out_of_transit_is_the_modulation():
+    """Away from transit the rule integrates the modulation; on a fast
+    rotator spots cross the limb within an exposure, a kink it does not
+    split (a curvature discontinuity: about 5e-9 here)."""
+    p = P(prot=0.8)
+    ts = np.array([0.5, 1.0, 1.4])
+    got = el.TransitModel(p, ts, integration="contact", exp_time=EXP, n_gl=7).light_curve(p)
+    ref = np.array([exposure_mean(p, ti, n=4001) for ti in ts])
+    assert np.max(np.abs(got - ref)) < 2e-8
+
+
+def test_contact_rule_batched_and_float32():
+    seq = [P(spots=[[8.0, LAT_CHORD, 5.0, 0.3]], prot=4.0),
+           P(spots=[[20.0, LAT_CHORD + 3.0, 8.0, 0.5]], prot=2.0, lam=20.0, ecc=0.1, w=80.0)]
+    ts = np.linspace(-0.05, 0.05, 11)
+    m = el.TransitModel(seq[0], ts, integration="contact", exp_time=EXP)
+    got = m.light_curves(seq)
+    for i, p in enumerate(seq):
+        assert np.max(np.abs(got[i] - m.light_curve(p))) < 1e-15
+    m32 = el.TransitModel(seq[0], ts, integration="contact", exp_time=EXP, dtype=mx.float32)
+    assert np.max(np.abs(m32.light_curves(seq) - got)) < 2e-6
+
+
+def test_contact_rule_gradients():
+    """light_curve_mx differentiates the quadrature it evaluates: the
+    split points carry their events' implicit derivatives, so the gradient
+    matches central differences of light_curve."""
+    p0 = P(spots=[[8.0, LAT_CHORD, 5.0, 0.3]], prot=4.0)
+    ts = np.array([-0.005, 0.0, 0.005, 0.01])
+    m = el.TransitModel(p0, ts, integration="contact", exp_time=EXP)
+    names = ["rp", "inc", "prot", "lam"]
+    base = {"rp": 0.1, "inc": 88.5, "prot": 4.0, "lam": 0.0}
+
+    def F(*vals):
+        p = P(spots=[[8.0, LAT_CHORD, 5.0, 0.3]])
+        for k, v in zip(names, vals):
+            setattr(p, k, v)
+        return mx.sum(m.light_curve_mx(p))
+
+    with mx.stream(mx.cpu):
+        g = mx.grad(F, argnums=list(range(len(names))))(
+            *[mx.array(base[k], dtype=mx.float64) for k in names])
+    for j, k in enumerate(names):
+        h = 1e-6 * max(abs(base[k]), 1.0)
+        up = [base[n] + (h if n == k else 0.0) for n in names]
+        dn = [base[n] - (h if n == k else 0.0) for n in names]
+        with mx.stream(mx.cpu):
+            fd = (F(*[mx.array(v, dtype=mx.float64) for v in up]).item()
+                  - F(*[mx.array(v, dtype=mx.float64) for v in dn]).item()) / (2 * h)
+        assert np.isfinite(g[j].item())
+        assert abs(g[j].item() - fd) < 1e-6 * max(abs(fd), 1e-3), k
+
+
+def test_sample_count():
+    from elome.spots_tau import _S_MAX, _S_MIN, sample_count
+    assert sample_count(1e-4, 9.0, 3.0, 0.1) == _S_MIN               # short cadence
+    assert sample_count(30 / 1440, 9.0, 3.0, 0.1) == 16
+    assert sample_count(30 / 1440, 9.0, 3.0, 1e-4) == _S_MAX
