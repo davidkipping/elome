@@ -254,8 +254,11 @@ def test_events_match_the_graph():
     half = 0.5 * EXP
     S = ST.sample_count(EXP, p.a, p.per, p.rp)
     with mx.stream(mx.gpu):
-        ek = np.array(ST._kernel_events(tt, half, *args, sp4, law, S))
-        eg = np.array(ST._events_fn(mx.float32, S, False, False)(tt - half, tt + half, *args, sp4))
+        ek, ekf = ST._kernel_events(tt, half, *args, sp4, law, S)
+        eg, egf = ST._events_fn(mx.float32, S, False, False)(tt - half, tt + half, *args, sp4)
+        assert np.array_equal(np.array(ek), np.array(ekf))      # the frozen copy
+        assert np.array_equal(np.array(eg), np.array(egf))
+        ek, eg = np.array(ek), np.array(eg)
     ek, eg = np.sort(ek, axis=-1), np.sort(eg, axis=-1)
     assert np.array_equal(np.isfinite(ek), np.isfinite(eg))
     fin = np.isfinite(eg)

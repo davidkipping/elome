@@ -478,6 +478,32 @@ def test_contact_rule_gradient_across_blocks(monkeypatch):
     assert np.max(np.abs(many - one)) < 1e-12 * np.max(np.abs(one))
 
 
+def test_contact_rule_active_nodes_are_every_node(monkeypatch):
+    """Evaluating only the nodes with nonzero weight (the default) gives
+    the light curve and gradient of evaluating every node."""
+    from elome import spots_tau as ST
+    p0 = P(spots=[[8.0, LAT_CHORD, 5.0, 0.3], [40.0, 15.0, 10.0, 0.6]], prot=4.0,
+           ecc=0.2, w=60.0)
+    ts = np.linspace(-0.06, 0.06, 30)
+
+    def run():
+        m = el.TransitModel(p0, ts, integration="contact", exp_time=EXP)
+
+        def F(prot, rp):
+            p = P(spots=p0.spots, ecc=0.2, w=60.0)
+            p.prot, p.rp = prot, rp
+            return mx.sum(m.light_curve_mx(p) * mx.array(np.linspace(1, 2, ts.size),
+                                                         dtype=mx.float64))
+        with mx.stream(mx.cpu):
+            v, g = mx.value_and_grad(F, argnums=[0, 1])(mx.array(4.0, dtype=mx.float64),
+                                                        mx.array(0.1, dtype=mx.float64))
+        return np.array([v.item()] + [x.item() for x in g])
+    active = run()
+    monkeypatch.setattr(ST, "_active_nodes", lambda *a, **k: None)
+    every = run()
+    assert np.max(np.abs(active - every) / np.abs(every)) < 1e-13
+
+
 def test_sample_count():
     from elome.spots_tau import _S_MAX, _S_MIN, sample_count
     assert sample_count(1e-4, 9.0, 3.0, 0.1) == _S_MIN               # short cadence

@@ -53,10 +53,9 @@ float32 times are.
 Every spot's visible outline is integrated at every time, in transit or
 not, and each splits into arcs where it meets the limb, the planet and
 the other spots. The cost therefore grows with the number of spots. Under
-the contact rule an exposure also pays for its event search, and is laid
-out as up to seven pieces of `n_gl` nodes each: most exposures need only
-one, and the kernels skip the empty ones, but the nodes' inputs and the
-gradient's graph operations still cover all of them.
+the contact rule an exposure also pays for its event search, and up to
+seven pieces of `n_gl` nodes each; most exposures need only one or two,
+and only the nodes of non-empty pieces are evaluated.
 
 Fused float32 kernels, 512 parameter sets × 5,000 points around a
 transit, `hybrid4`, spots of 6–12°, two of them on the transit chord, on
@@ -65,21 +64,20 @@ a star turning in 12 days, against the same transit with no spots
 
 | | forward | vs no spots | value + grad | vs no spots |
 |---|---:|---:|---:|---:|
-| one spot, one evaluation per point | 51 ms | 69× | 248 ms | 145× |
-| two spots, one evaluation per point | 79 ms | 107× | 394 ms | 230× |
-| four spots, one evaluation per point | 155 ms | 210× | 732 ms | 427× |
-| one spot, contact rule (`n_gl = 5`) | 1.29 s | 367× | 5.07 s | 661× |
-| two spots, contact rule (`n_gl = 5`) | 1.86 s | 529× | 9.17 s | 1,195× |
-| four spots, contact rule (`n_gl = 5`) | 4.49 s | 1,276× | 21.2 s | 2,767× |
+| one spot, one evaluation per point | 46 ms | 62× | 231 ms | 140× |
+| two spots, one evaluation per point | 75 ms | 102× | 371 ms | 224× |
+| four spots, one evaluation per point | 150 ms | 203× | 698 ms | 422× |
+| one spot, contact rule (`n_gl = 5`) | 1.24 s | 352× | 3.51 s | 458× |
+| two spots, contact rule (`n_gl = 5`) | 1.72 s | 488× | 4.95 s | 647× |
+| four spots, contact rule (`n_gl = 5`) | 4.33 s | 1,231× | 12.1 s | 1,578× |
 
 The gradients are in every input: the orbit, the planet, the star, every
 entry of the spot table and the weights. Two spots under the contact rule
-cost about as much as a ringed planet (see
-{doc}`../rings/accuracy-and-fitting`).
+cost less than a ringed planet (see {doc}`../rings/accuracy-and-fitting`).
 
 float64 on the CPU is the reference, not a route for sampling: one light
 curve of 1,000 points with two spots takes 0.086 s for its value and
-0.38 s with its gradient, and under the contact rule 4.8 s and 9.3 s.
+0.36 s with its gradient, and under the contact rule 3.0 s and 3.6 s.
 
 ## Other codes
 

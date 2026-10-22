@@ -5,49 +5,49 @@
  "gpu": {
   "none": {
    "spherical": {
-    "forward_ms": 0.7412920240312815,
-    "value_grad_ms": 1.7143340082839131
+    "forward_ms": 0.737916911020875,
+    "value_grad_ms": 1.6527080442756414
    },
    "spots1": {
-    "forward_ms": 51.191541948355734,
-    "value_grad_ms": 248.0746660148725
+    "forward_ms": 45.993917039595544,
+    "value_grad_ms": 231.43725004047155
    },
    "spots2": {
-    "forward_ms": 79.35737504158169,
-    "value_grad_ms": 393.74654192943126
+    "forward_ms": 75.30091609805822,
+    "value_grad_ms": 371.0221250075847
    },
    "spots4": {
-    "forward_ms": 155.49562498927116,
-    "value_grad_ms": 731.568832998164
+    "forward_ms": 149.97516700532287,
+    "value_grad_ms": 697.7077090414241
    }
   },
   "contact": {
    "spherical": {
-    "forward_ms": 3.5190420458093286,
-    "value_grad_ms": 7.671040948480368
+    "forward_ms": 3.519000019878149,
+    "value_grad_ms": 7.659624912776053
    },
    "spots1": {
-    "forward_ms": 1292.1132919145748,
-    "value_grad_ms": 5067.697457969189
+    "forward_ms": 1237.691625021398,
+    "value_grad_ms": 3510.6617499841377
    },
    "spots2": {
-    "forward_ms": 1860.682375030592,
-    "value_grad_ms": 9165.463833021931
+    "forward_ms": 1715.8129579620436,
+    "value_grad_ms": 4954.35333403293
    },
    "spots4": {
-    "forward_ms": 4489.430332905613,
-    "value_grad_ms": 21229.069292079657
+    "forward_ms": 4331.612834008411,
+    "value_grad_ms": 12090.709915966727
    }
   }
  },
  "cpu_1000_points_two_spots": {
   "none": {
-   "forward_s": 0.0857057495159097,
-   "value_grad_s": 0.38100854150252417
+   "forward_s": 0.08560670801671222,
+   "value_grad_s": 0.36070614552590996
   },
   "contact": {
-   "forward_s": 4.768883208045736,
-   "value_grad_s": 9.284481270529795
+   "forward_s": 3.0229477500543,
+   "value_grad_s": 3.5966502085211687
   }
  }
 }
