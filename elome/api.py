@@ -91,9 +91,36 @@ def _is_ringed(params) -> bool:
     return ringed
 
 
+_SPOT_FIELDS = ("prot", "istar", "lam", "spot_epoch")
+
+
+def _is_spotted(params) -> bool:
+    """params.spots given = a spotted star; the star's rotation fields
+    without it are an error."""
+    spotted = getattr(params, "spots", None) is not None
+    if not spotted and any(getattr(params, k, None) is not None
+                           for k in _SPOT_FIELDS + ("spot_u",)):
+        raise ValueError("params.prot / istar / lam / spot_epoch / spot_u "
+                         "describe a spotted star; set params.spots too (or "
+                         "leave them all None)")
+    return spotted
+
+
+def _spot_shape(spots):
+    """The shape of params.spots: (K, 4), or (n_sets, K, 4) for batches."""
+    shape = tuple(spots.shape) if isinstance(spots, mx.array) else np.shape(spots)
+    if len(shape) not in (2, 3) or shape[-1] != 4 or shape[-2] < 1:
+        raise ValueError("params.spots must be (K, 4) -- longitude, latitude, "
+                         "angular radius [degrees], contrast per spot -- or "
+                         "(n_sets, K, 4) in light_curves; got shape "
+                         f"{shape}")
+    return shape
+
+
 # a batched field left None: its value (fp, theta, a ringed planet's f: 0;
-# ring_tau: an opaque ring)
-_BATCH_DEFAULTS = {"ring_tau": math.inf}
+# ring_tau: an opaque ring; istar: equator-on; spot_epoch: t0, filled in
+# by _stack_params)
+_BATCH_DEFAULTS = {"ring_tau": math.inf, "istar": 90.0}
 
 
 def _is_oblate(params) -> bool:
@@ -140,6 +167,20 @@ class TransitParams:
         self.ring_out = None
         self.ring_f = None
         self.ring_tau = None
+        # starspots (hybrid laws only; elome.spots): a (K, 4) array of
+        # longitude, latitude and angular radius [degrees] and contrast
+        # (the spot's intensity over the photosphere's; 1 = no spot) per
+        # spot, on a star with rotation period prot, spin inclination
+        # istar to the line of sight [degrees; None: 90] and sky-projected
+        # obliquity lam [degrees; None: 0]. Longitudes are measured at
+        # spot_epoch (None: t0) from the meridian facing the observer.
+        # The flux is normalised to the unspotted star. None = no spots.
+        self.spots = None
+        self.prot = None
+        self.istar = None
+        self.lam = None
+        self.spot_epoch = None
+        self.spot_u = None        # reserved: a limb-darkening law for spots
 
 
 def _u_vector(u, sets=False):
@@ -410,10 +451,30 @@ class TransitModel:
         # oblate planet: fixed per model, like the law (its own graphs)
         self._oblate = _is_oblate(params)
         self._ringed = _is_ringed(params)
+        self._spotted = _is_spotted(params)
         self._shaped = self._oblate or self._ringed
         self._batch_keys = self._BATCH_KEYS + (
             ("f", "theta") + _RING_FIELDS if self._ringed
-            else ("f", "theta") if self._oblate else ())
+            else ("f", "theta") if self._oblate
+            else _SPOT_FIELDS if self._spotted else ())
+        self._n_spots = 0
+        if self._spotted:
+            if self._shaped:
+                raise ValueError("spots are for a spherical planet: leave "
+                                 "params.f and params.ring_in None")
+            if _hybrid_law(params.limb_dark) is None:
+                raise ValueError("a spotted star (params.spots) takes a "
+                                 "hybrid law: limb_dark='hybrid2' | "
+                                 "'hybrid4' | 'hybrid5'")
+            if transittype != "primary":
+                raise ValueError("a spotted star is primary-transit only")
+            if integration == "contact":
+                raise ValueError("the contact rule is not available for a "
+                                 "spotted star; use integration='supersample'")
+            if params.spot_u is not None:
+                raise ValueError("params.spot_u is reserved; spots take the "
+                                 "photosphere's law times their contrast")
+            self._n_spots = _spot_shape(params.spots)[-2]
         if self._ringed:
             if _hybrid_law(params.limb_dark) is None:
                 raise ValueError("a ringed planet (params.ring_in) takes a "
@@ -497,6 +558,8 @@ class TransitModel:
             names.append("f")
         if self._ringed:
             names += ["ring_in", "ring_out", "ring_f"]
+        if self._spotted:
+            names.append("prot")
         return names
 
     # -- internals ---------------------------------------------------------
@@ -805,6 +868,8 @@ class TransitModel:
             return cast(math.radians(float(x)))   # on the host, in fp64
 
         self._require(lambda k: getattr(params, k), self._required_fields())
+        if self._spotted:
+            return self._spot_eval(params, uv, cast, rad, is_arr)
         if self._ringed:
             return self._ring_eval(params, uv, cast, rad, is_arr)
         if self._oblate:
@@ -1068,6 +1133,78 @@ class TransitModel:
             out = self._ring_fn("kh")(*head, b, rp, *ring, cast(uv), k, h)
         return self._apply_masks(out, emask, gmask)
 
+    # -- spotted stars ---------------------------------------------------------
+    #
+    # The ring route's structure, with spots_tau's graph, which takes the
+    # absolute times as well (the star turns): the planet sees the time
+    # since each point's own mid-transit, the spots the time since their
+    # epoch. Not compiled whole (as the ring graph); the graph is built in
+    # blocks of a bounded number of points (oblate_tau._in_blocks).
+
+    def _spot_fn(self, orbit: str):
+        """The spotted-star model; ``orbit`` as _oblate_fn's."""
+        key = ("spots", orbit)
+        fn = self._compiled.get(key)
+        if fn is not None:
+            return fn
+        from .spots_tau import flux_dev_spots_t
+        law = self._hlaw
+
+        def raw(tt, t0, ep, per, a, b, rp, prot, istar, lam, sp, uv, k=None, h=None):
+            return 1.0 + flux_dev_spots_t(tt, t0, ep, per, a, b, rp, prot, istar, lam,
+                                          sp, law, uv, k=k, h=h, ew=orbit == "ew")
+        self._compiled[key] = raw
+        return raw
+
+    def _spot_array(self, spots, cast):
+        """params.spots -> (..., K, 4) in the model dtype, angles in
+        radians; host values validated."""
+        from .spots_tau import _check_spots
+        shape = _spot_shape(spots)
+        if shape[-2] != self._n_spots:
+            raise ValueError(f"the number of spots changed since model "
+                             f"construction ({self._n_spots} -> {shape[-2]}); "
+                             f"build a new TransitModel")
+        scale = np.array([math.pi / 180.0] * 3 + [1.0])
+        if isinstance(spots, mx.array):
+            return cast(spots) * mx.array(scale, dtype=self.dtype)
+        s = np.asarray(spots, dtype=np.float64) * scale
+        _check_spots(s)
+        return mx.array(s, dtype=self.dtype)
+
+    def _spot_eval(self, params, uv, cast, rad, is_arr):
+        """light_curve / light_curve_mx for a spotted star, as _ring_eval."""
+        t0_off, per, a, rp, ci, ci_py, gmask = self._prep(params, cast, rad,
+                                                          is_arr)
+        ep = params.spot_epoch
+        if ep is None:
+            ep_off = t0_off
+        elif is_arr(ep):
+            with mx.stream(mx.cpu):
+                ep_off = (ep.astype(mx.float64) - self._t_ref).astype(self.dtype)
+        else:
+            ep_off = cast(ep - self._t_ref)
+        star = (cast(params.prot), rad(90.0 if params.istar is None else params.istar),
+                rad(0.0 if params.lam is None else params.lam),
+                self._spot_array(params.spots, cast))
+        head = (self._t_mx, t0_off, ep_off, per, a)
+        route = self._ecc_route(params, cast, rad, is_arr)
+        if route[0] == "ew":
+            _, e, wr, emask = route
+            b = contact_geometry(a, e, e * sincos(wr)[0], ci)[1]
+            out = self._spot_fn("ew")(*head, b, rp, *star, cast(uv), e, wr)
+        elif route[0] == "circ":
+            emask = None
+            b = (a * ci if is_arr(params.a) or is_arr(params.inc)
+                 else cast(float(params.a) * ci_py))
+            out = self._spot_fn("circ")(*head, b, rp, *star, cast(uv))
+        else:
+            _, k, h, ev, sq = route
+            emask = None
+            b = contact_geometry(a, cast(ev), h * sq, ci)[1]
+            out = self._spot_fn("kh")(*head, b, rp, *star, cast(uv), k, h)
+        return self._apply_masks(out, emask, gmask)
+
     def _check_shape_kind(self, params):
         """Oblate or spherical, ringed or not, is fixed per model (separate
         graphs)."""
@@ -1076,6 +1213,10 @@ class TransitModel:
                              "model construction; build a new TransitModel")
         if _is_ringed(params) != self._ringed:
             raise ValueError("params.ring_in changed between None and a value "
+                             "since model construction; build a new "
+                             "TransitModel")
+        if _is_spotted(params) != self._spotted:
+            raise ValueError("params.spots changed between None and a value "
                              "since model construction; build a new "
                              "TransitModel")
 
@@ -1145,8 +1286,13 @@ class TransitModel:
                 # only optional fields are None here: fp of a primary
                 # transit, theta, f of a ringed planet, ring_tau (opaque)
                 dflt = _BATCH_DEFAULTS.get(k, 0.0)
+                if k == "spot_epoch":
+                    vals = [p.t0 if v is None else v for p, v in zip(seq, vals)]
                 cols[k] = np.array([dflt if v is None else float(v)
                                     for v in vals], dtype=np.float64)
+            if self._spotted:
+                cols["spots"] = np.stack([np.asarray(p.spots, dtype=np.float64)
+                                          for p in seq])
             rows = []
             for p in seq:
                 # the same validation the single-set path performs: an
@@ -1179,13 +1325,26 @@ class TransitModel:
             raise ValueError(f"inconsistent parameter-array lengths: "
                              f"{sorted(sizes)}")
         n = sizes.pop() if sizes else 1
+        if self._spotted:
+            sp = np.asarray(p.spots, dtype=np.float64)
+            if sp.ndim == 3:
+                if sp.shape[0] not in (1, n) and n != 1:
+                    raise ValueError(f"inconsistent parameter-array lengths: "
+                                     f"spots has {sp.shape[0]} sets, the "
+                                     f"other fields {n}")
+                n = max(n, sp.shape[0])
         cols = {}
         for k in self._batch_keys:
             v = getattr(p, k)
+            if k == "spot_epoch" and v is None:
+                v = p.t0
             v = _BATCH_DEFAULTS.get(k, 0.0) if v is None else v
             cols[k] = np.broadcast_to(
                 np.atleast_1d(np.asarray(v, dtype=np.float64)),
                 (n,)).astype(np.float64)
+        if self._spotted:
+            cols["spots"] = np.broadcast_to(sp if sp.ndim == 3 else sp[None],
+                                            (n,) + sp.shape[-2:])
         if u.shape[0] not in (1, n):
             raise ValueError(f"inconsistent parameter-array lengths: u has "
                              f"{u.shape[0]} sets, the other fields {n}")
@@ -1240,7 +1399,20 @@ class TransitModel:
                 u1, u2 = _ld_coeffs_batch(self.limb_dark, u_np)
                 u1, u2 = col(u1), col(u2)
 
-            if self._ringed:
+            if self._spotted:
+                b_np = contact_geometry(
+                    cols["a"], ecc, ecc * np.sin(w), np.cos(inc),
+                    sqrt=np.sqrt, maximum=np.maximum)[1]
+                sp = self._spot_array(cols["spots"], None)
+                args = (self._t_mx[None, :], t0, col(cols["spot_epoch"] - self._t_ref),
+                        per, a, col(b_np), rp, col(cols["prot"]),
+                        col(np.radians(cols["istar"])), col(np.radians(cols["lam"])),
+                        sp, uvec)
+                if bool(np.any(ecc > 0.0)):
+                    out = self._spot_fn("kh")(*args, k, h)
+                else:
+                    out = self._spot_fn("circ")(*args)
+            elif self._ringed:
                 from .rings import _check_ring
                 _check_ring(cols["f"], cols["ring_in"], cols["ring_out"],
                             cols["ring_f"], cols["ring_tau"])

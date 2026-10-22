@@ -444,9 +444,38 @@ def shape_cols_spots(X, Y, rp, n, alpha, contrast, law) -> mx.array:
     N = hybrid_norms(law), the unspotted star's). Arguments as
     ``generator_cols_spots``; all cast to X's dtype."""
     law = get_law(law)
+    X, Y, rp, spots, c = _prep(X, Y, rp, n, alpha, contrast)
+    args = [X, Y, rp] + [v for s in spots for v in s] + c
+    from .metal import _gpu_stream_active
+    if _gpu_stream_active():
+        return _shape_cols(law, len(spots))(*args)
+    return _shape_cols_compiled(law, len(spots))(*args)
+
+
+def _shape_cols(law, K):
     S = law.generator_matrix()
-    gen = generator_cols_spots(X, Y, rp, n, alpha, contrast, law)
-    return mx.stack([gen[0]] + [_combine(gen, S[j]) for j in range(law.n_w)], axis=-1)
+
+    def cols(X, Y, rp, *rest):
+        spots = [tuple(rest[4 * k:4 * k + 4]) for k in range(K)]
+        occ = _region_cols(X, Y, rp, spots, list(rest[4 * K:]), law, X.dtype)
+        gen = [-o for o in occ]
+        return mx.stack([gen[0]] + [_combine(gen, S[j]) for j in range(law.n_w)], axis=-1)
+    return cols
+
+
+# On the CPU the columns' graph is compiled once per law and spot count, as
+# rings.py's (only this piece: the orbit and the spots' rotation feeding it
+# stay eager). Not on the GPU, where MLX's fused kernels for a graph this
+# size abort.
+_COMPILED = {}
+
+
+def _shape_cols_compiled(law, K):
+    key = (law.definition, K)
+    fn = _COMPILED.get(key)
+    if fn is None:
+        fn = _COMPILED[key] = mx.compile(_shape_cols(law, K))
+    return fn
 
 
 @fp64_on_cpu(any_arg=True)

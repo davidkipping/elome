@@ -78,6 +78,9 @@ __all__ = [
     "flux_dev_ring",
     "shape_cols_ring",
     "ring_kinks",
+    "flux_dev_spots",
+    "shape_cols_spots",
+    "spot_vector",
     "HYBRID4",
     "HYBRID5",
     "HYBRID_LAWS",
@@ -99,12 +102,15 @@ __all__ = [
 
 __version__ = "0.20.0"
 
-# Ringed planets, exported lazily: the ring modules are imported only when
-# one of these is first used (or a ring parameter is set), so a spherical
-# or oblate model never loads them.
+# Ringed planets and spotted stars, exported lazily: their modules are
+# imported only when one of these is first used (or a ring or spot
+# parameter is set), so a model without them never loads them.
 _LAZY = {"flux_dev_ring": ("rings", "flux_dev_ring"),
          "shape_cols_ring": ("rings", "shape_cols_ring"),
-         "ring_kinks": ("rings_tau", "ring_kinks")}
+         "ring_kinks": ("rings_tau", "ring_kinks"),
+         "flux_dev_spots": ("spots", "flux_dev_spots"),
+         "shape_cols_spots": ("spots", "shape_cols_spots"),
+         "spot_vector": ("spots", "spot_vector")}
 
 
 def __getattr__(name):

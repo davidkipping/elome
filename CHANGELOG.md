@@ -6,16 +6,20 @@ every release is tagged `vX.Y.Z` in git.
 ## [Unreleased]
 
 ### Added
-- **Starspots crossed by a planet, the reference graph** (`elome.spots`,
-  hybrid laws only): circular spots on the stellar surface (centre,
-  angular radius, contrast; overlapping spots add, so an umbra in a
-  penumbra is two concentric spots) and a spherical planet, exact by
-  Green's theorem in float64 and float32 with gradients in every
-  parameter. `shape_cols_spots` keeps the `ld_basis` contract, normalised
-  to the unspotted star, so the columns carry the spots' rotational
-  modulation as well as the crossing. Checked against an independent
-  two-method reference (`tests/spot_oracle.py`). Not yet a `TransitModel`
-  option.
+- **Starspots** (`params.spots`, hybrid laws only): circular spots on a
+  rotating star crossed by a spherical planet. Each spot is a row of
+  longitude, latitude, angular radius (degrees) and contrast (its
+  intensity over the photosphere's; above 1, a facula); overlapping spots
+  add, so an umbra in a penumbra is two concentric spots. The star turns
+  with period `prot` about a spin axis set by `istar` and the
+  sky-projected obliquity `lam` (Fabrycky & Winn's lambda), from
+  longitudes measured at `spot_epoch` (default `t0`). The flux is
+  normalised to the unspotted star, so out of transit it is the spots'
+  rotational modulation. Exact by Green's theorem in float64 and float32,
+  differentiable in every parameter through `light_curve_mx`, batched in
+  `light_curves` (`spots` of shape (n_sets, K, 4)). `shape_cols_spots`
+  and `flux_dev_spots` give the columns at a sky position directly.
+  Primary transits with `integration="supersample"` for now.
 
 ### Documentation
 - The sampler guide's exposure-kernel and hybrid-law tables and the oblate
