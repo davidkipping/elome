@@ -451,6 +451,33 @@ def test_contact_rule_gradients():
         assert abs(g[j].item() - fd) < 1e-6 * max(abs(fd), 1e-3), k
 
 
+def test_contact_rule_gradient_across_blocks(monkeypatch):
+    """A light curve long enough to be evaluated in blocks: the gradient is
+    the one-block gradient (the event search runs once, outside the
+    blocks, and nothing in it is re-traced by the backward pass)."""
+    from elome import spots_tau as ST
+    p0 = P(spots=[[8.0, LAT_CHORD, 5.0, 0.3], [40.0, 15.0, 10.0, 0.6]], prot=4.0)
+    ts = np.linspace(-0.06, 0.06, 40)
+
+    def grad():
+        m = el.TransitModel(p0, ts, integration="contact", exp_time=EXP)
+
+        def F(prot, rp):
+            p = P(spots=p0.spots)
+            p.prot, p.rp = prot, rp
+            return mx.sum(m.light_curve_mx(p))
+        with mx.stream(mx.cpu):
+            g = mx.grad(F, argnums=[0, 1])(mx.array(4.0, dtype=mx.float64),
+                                            mx.array(0.1, dtype=mx.float64))
+        return np.array([v.item() for v in g])
+    one = grad()
+    monkeypatch.setattr(ST, "_SPOT_BLOCK", 400)            # 40 times x 49 nodes: 5 blocks
+    monkeypatch.setattr(ST, "_EVENT_SAMPLES", 300)         # and a chunked search
+    many = grad()
+    assert np.all(np.isfinite(many))
+    assert np.max(np.abs(many - one)) < 1e-12 * np.max(np.abs(one))
+
+
 def test_sample_count():
     from elome.spots_tau import _S_MAX, _S_MIN, sample_count
     assert sample_count(1e-4, 9.0, 3.0, 0.1) == _S_MIN               # short cadence

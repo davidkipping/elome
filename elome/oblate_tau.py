@@ -416,7 +416,7 @@ def _pad(x, size, axis):
     return mx.concatenate([x, mx.broadcast_to(last, shape)], axis=axis)
 
 
-def _in_blocks(run, tau2d, rows, nodes, block):
+def _in_blocks(run, tau2d, rows, nodes, block, per_time=None):
     """``run(tau2d, rows)`` -- the oblate or ringed graph, (n, m[, ncol]) --
     in blocks of at most ``block`` evaluation points, concatenated lazily.
     The graphs hold their fp64 intermediates until evaluated (~1-3 KB per
@@ -428,11 +428,16 @@ def _in_blocks(run, tau2d, rows, nodes, block):
     while a row fits, else one row's times; equal-sized, padded with the
     last row or time and the padding dropped, so one compiled shape and one
     cached buffer set serve every block (a shorter last block would
-    allocate, and cache, a second set)."""
+    allocate, and cache, a second set). ``per_time``: (n, m, ...) arrays
+    sliced and padded with tau2d, passed on as ``run(tt, rows, *per_time)``."""
     n, m = tau2d.shape
     per_row = nodes * m
+    pts = list(per_time or ())
+
+    def call(tt, rws, pt):
+        return run(tt, rws, *pt) if per_time is not None else run(tt, rws)
     if n * per_row <= block:
-        return run(tau2d, rows)
+        return call(tau2d, rows, pts)
 
     def equal(total, most):
         nb = -(-total // max(most, 1))
@@ -444,15 +449,19 @@ def _in_blocks(run, tau2d, rows, nodes, block):
         nb, size = equal(n, block // per_row)
         tp = _pad(tau2d, nb * size, 0)
         rp = [None if x is None else _pad(x, nb * size, 0) for x in rows]
+        pp = [_pad(x, nb * size, 0) for x in pts]
         return mx.concatenate(
-            [run(tp[i * size:(i + 1) * size],
-                 [sl(x, i * size, (i + 1) * size) for x in rp])
+            [call(tp[i * size:(i + 1) * size],
+                  [sl(x, i * size, (i + 1) * size) for x in rp],
+                  [x[i * size:(i + 1) * size] for x in pp])
              for i in range(nb)], axis=0)[:n]
     nb, size = equal(m, block // nodes)
     tp = _pad(tau2d, nb * size, 1)
+    pp = [_pad(x, nb * size, 1) for x in pts]
     return mx.concatenate(
-        [mx.concatenate([run(tp[j:j + 1, i * size:(i + 1) * size],
-                             [sl(x, j, j + 1) for x in rows])
+        [mx.concatenate([call(tp[j:j + 1, i * size:(i + 1) * size],
+                              [sl(x, j, j + 1) for x in rows],
+                              [x[j:j + 1, i * size:(i + 1) * size] for x in pp])
                          for i in range(nb)], axis=1)
          for j in range(n)], axis=0)[:, :m]
 

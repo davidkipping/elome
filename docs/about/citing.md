@@ -12,7 +12,7 @@ published. Until then, please cite the software by its repository,
 ## The hybrid limb-darkening laws
 
 If you use the hybrid laws (`hybrid2`, `hybrid4`, `hybrid5`), or model an
-oblate or ringed planet, please also cite:
+oblate or ringed planet or a spotted star, please also cite:
 
 - **The hybrid-law paper**, which introduces the laws and proves that they
   give elementary transit light curves for spherical and oblate planets
@@ -31,3 +31,7 @@ oblate or ringed planet, please also cite:
   Dynamical Astronomy* 63, 101.
 - The frontend's design follows batman: Kreidberg (2015), *PASP* 127,
   1161, [arXiv:1507.08285](https://arxiv.org/abs/1507.08285).
+- Starspots as circular caps on the stellar surface: Kipping (2012),
+  *MNRAS* 427, 2487, [arXiv:1209.2985](https://arxiv.org/abs/1209.2985).
+- The sky-projected obliquity convention: Fabrycky & Winn (2009), *ApJ*
+  696, 1230, [arXiv:0902.0737](https://arxiv.org/abs/0902.0737).

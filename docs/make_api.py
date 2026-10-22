@@ -46,13 +46,15 @@ SECTIONS = [
       "elome.HYBRID_LAWS", "elome.hybrid_norms", "elome.hybrid4_basis",
       "elome.hybrid.ladder"]),
     ("Light curves from separations (float64 reference graphs)",
-     "Functions of the sky separation z (spherical) or the planet's centre "
-     "in its principal frame (oblate, ringed). They follow MLX's broadcasting and "
+     "Functions of the sky separation z (spherical), the planet's centre "
+     "in its principal frame (oblate, ringed), or the planet's and the spots' "
+     "positions on the sky (starspots). They follow MLX's broadcasting and "
      "type-promotion rules; see {doc}`../guides/gradients-and-precision`.",
      ["elome.flux_dev", "elome.flux_dev_analytic", "elome.flux_dev_poly",
       "elome.flux_dev_hybrid", "elome.shape_cols", "elome.flux_dev_oblate",
       "elome.shape_cols_oblate", "elome.flux_dev_ring", "elome.shape_cols_ring",
-      "elome.oblate.principal_frame",
+      "elome.oblate.principal_frame", "elome.flux_dev_spots", "elome.shape_cols_spots",
+      "elome.spot_vector",
       "elome.light_curve", "elome.sn_dev", "elome.sn_dev_with_aux",
       "elome.sn_dev_poly"]),
     ("Orbits and time",

@@ -860,7 +860,7 @@ as plain Python floats.
 
 ## Light curves from separations (float64 reference graphs)
 
-Functions of the sky separation z (spherical) or the planet's centre in its principal frame (oblate, ringed). They follow MLX's broadcasting and type-promotion rules; see {doc}`../guides/gradients-and-precision`.
+Functions of the sky separation z (spherical), the planet's centre in its principal frame (oblate, ringed), or the planet's and the spots' positions on the sky (starspots). They follow MLX's broadcasting and type-promotion rules; see {doc}`../guides/gradients-and-precision`.
 
 ### `flux_dev`
 
@@ -998,6 +998,48 @@ Sky position (X along the orbit, Y across) -> the planet centre in
 the ellipse's principal frame, the long axis at sky angle theta from
 the along-orbit direction: x0 = X cos theta + Y sin theta,
 y0 = -X sin theta + Y cos theta.
+```
+
+### `flux_dev_spots`
+
+```python
+flux_dev_spots(X, Y, rp, n, alpha, contrast, w, law) -> mx.array
+```
+
+```text
+F - 1 of a spotted star crossed by a planet, normalised to the
+unspotted star, for a hybrid law with shape weights w; arguments as
+``shape_cols_spots``.
+```
+
+### `shape_cols_spots`
+
+```python
+shape_cols_spots(X, Y, rp, n, alpha, contrast, law) -> mx.array
+```
+
+```text
+Shape-basis columns [E0, S_1..S_n] stacked on a trailing axis -- the
+``ld_basis`` contract (flux - 1 == (B @ c) / (N @ c), c = (1, -w),
+N = hybrid_norms(law), the unspotted star's) -- of a spotted star
+crossed by a planet, elementwise over the point shape. (X, Y): the
+planet's sky position, rp its radius (stellar radii); n (..., K, 3)
+the spots' unit centre vectors in the same sky frame, z towards the
+observer (``spot_vector``); alpha (..., K) their angular radii
+(radians); contrast (..., K) their intensities over the photosphere's.
+All cast to X's dtype; float64 on the CPU stream unless float32.
+```
+
+### `spot_vector`
+
+```python
+spot_vector(lon, lat)
+```
+
+```text
+Unit centre vector of a spot at sky-frame longitude lon (from the
+line of sight towards +x) and latitude lat (towards +y), radians:
+(cos lat sin lon, sin lat, cos lat cos lon). mx or host values.
 ```
 
 ### `light_curve`

@@ -117,6 +117,37 @@ evaluate each outline with its own dual numbers and chain the results to
 the ring parameters by hand. A separate kernel finds the moments each
 outline touches the limb, which are the exposure rule's split points.
 
+## Starspots
+
+A spotted star is the same weighted-outline problem with the weights on
+the star rather than on the occultor: the blocked fraction is 1 inside
+the planet and $\sum_k (1 - c_k)$ over the visible spots $k$ elsewhere.
+Each spot's rim is a circle on the sphere, which projects to an ellipse
+with its own frame, so its arcs are again the oblate integrals. Along
+the rim $\mu$ is linear in the sine of the rim angle, because the rim
+lies on the sphere. A pole's quartic then splits into two quadratics with
+root product $-1$, whose roots have a closed form, and the rim meets the
+limb where $\mu = 0$, also in closed form. The latter is written as a
+product so that a small spot on the limb, whose rim and limb arcs cancel
+to a sliver, keeps its digits. The planet's corners with a rim come from
+the ring code's crossing solver, in a frame centred on the planet and
+scaled by its radius. Two rims meet at the intersection of two circles on
+the sphere, in closed form. Which spots a point belongs to is read at
+each arc's midpoint, from the point on the star's front surface.
+
+A rim's frame turns with its spot, as $1/|n_{xy}|$ near the disc's
+centre. The gradients therefore take the frame's turn separately, as a
+corner term multiplying a difference formed without cancellation. They
+take the ellipse's $(a^2 - b^2)/4$ in its form on the sphere,
+$\sin^2\!\alpha\,|n_{xy}|^2/4$, and stay finite at the centre itself.
+The float32 kernels evaluate the columns per point, with dual numbers
+seeded in the planet's position and radius and in each spot's centre
+and radius; the orbit and the star's rotation stay graph operations, so
+their gradients chain automatically. The contact rule's split points
+depend on the rotating star and so differ between transits. A separate
+kernel finds them exposure by exposure, and graph operations give them
+their implicit derivatives.
+
 ## MLX caveats
 
 - `mx.sin`, `mx.cos`, `mx.exp` and `mx.erf` are only float32-accurate on

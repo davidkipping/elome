@@ -484,8 +484,13 @@ def generator_cols_spots(X, Y, rp, n, alpha, contrast, law):
 def shape_cols_spots(X, Y, rp, n, alpha, contrast, law) -> mx.array:
     """Shape-basis columns [E0, S_1..S_n] stacked on a trailing axis -- the
     ``ld_basis`` contract (flux - 1 == (B @ c) / (N @ c), c = (1, -w),
-    N = hybrid_norms(law), the unspotted star's). Arguments as
-    ``generator_cols_spots``; all cast to X's dtype."""
+    N = hybrid_norms(law), the unspotted star's) -- of a spotted star
+    crossed by a planet, elementwise over the point shape. (X, Y): the
+    planet's sky position, rp its radius (stellar radii); n (..., K, 3)
+    the spots' unit centre vectors in the same sky frame, z towards the
+    observer (``spot_vector``); alpha (..., K) their angular radii
+    (radians); contrast (..., K) their intensities over the photosphere's.
+    All cast to X's dtype; float64 on the CPU stream unless float32."""
     law = get_law(law)
     X, Y, rp, spots, c = _prep(X, Y, rp, n, alpha, contrast)
     args = [X, Y, rp] + [v for s in spots for v in s] + c

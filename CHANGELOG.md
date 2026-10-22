@@ -32,6 +32,11 @@ every release is tagged `vX.Y.Z` in git.
   around them.
 
 ### Documentation
+- A **Starspots** section: overview, geometry and conventions, light
+  curves (from the frontend and at sky positions; the contact rule's
+  split points), and accuracy, cost and fitting; a "How it works" section
+  on spots, and `flux_dev_spots`, `shape_cols_spots` and `spot_vector` in
+  the API reference.
 - The sampler guide's exposure-kernel and hybrid-law tables and the oblate
   kernel table, re-measured (the spherical contact-rule kernels are about
   15% faster than those tables said; an oblate planet under the contact

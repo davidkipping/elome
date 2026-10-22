@@ -17,9 +17,9 @@ CPU. Both run through [MLX](https://github.com/ml-explore/mlx).
   parameter sets are batched.
 - **Differentiable.** Every parameter, including the limb darkening,
   the eccentricity and the planet's shape, has an analytic gradient.
-- **Spherical, oblate and ringed planets.** A flattened planet's light
-  curve, and a ringed one's, stays elementary with the *hybrid*
-  limb-darkening laws.
+- **Spherical, oblate and ringed planets, and spotted stars.** A
+  flattened planet's light curve, a ringed one's and a spotted star's
+  stay elementary with the *hybrid* limb-darkening laws.
 
 ```python
 import numpy as np
@@ -67,6 +67,15 @@ and the same fast, differentiable machinery.
 
 A spherical or oblate planet with a flat ring in its equatorial plane,
 opaque or translucent: four more parameters, exact limb darkening, every
+gradient.
+:::
+
+:::{grid-item-card} Starspots
+:link: spots/index
+:link-type: doc
+
+Circular spots and faculae on a rotating star, crossed by the planet:
+the crossings and the rotational modulation, exact limb darkening, every
 gradient.
 :::
 ::::
@@ -121,6 +130,16 @@ rings/index
 rings/geometry
 rings/light-curves
 rings/accuracy-and-fitting
+```
+
+```{toctree}
+:hidden:
+:caption: Starspots
+
+spots/index
+spots/geometry
+spots/light-curves
+spots/accuracy-and-fitting
 ```
 
 ```{toctree}
