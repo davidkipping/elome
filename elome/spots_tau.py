@@ -466,22 +466,23 @@ def _tau_graph(tt, t0, epoch, period, a, b, r, prot, istar, lam, spots4, w2d, la
     search by the fp32 Metal kernels (``metal_spots``)."""
     dt = tt.dtype
 
-    def cols(nk):
-        sh = (-1,) + (1,) * nk
+    def cols(nk, lead=0):
+        sh = (1,) * lead + (-1,) + (1,) * nk
         c = [mx.reshape(p, sh) for p in (t0, epoch, period, a, b, r, prot, istar, lam)]
         eo = None if k is None else _orbit_consts(c[3], c[4], mx.reshape(k, sh),
                                                   mx.reshape(h, sh), ew)
         return c + [eo]
 
-    def inst(T, nk, active=None):
-        t0c, ep, per, av, bv, rv, prot_, istar_, lam_, eo = cols(nk)
+    def inst(T, nk, active=None, lead=0):
+        t0c, ep, per, av, bv, rv, prot_, istar_, lam_, eo = cols(nk, lead)
         tau = T - t0c
         tau = tau - per * mx.round(tau / per)
         X, Y, _, _, front = _sky((_TWO_PI / per) * tau, av, bv, eo)
         far = 2.0 + 2.0 * mx.stop_gradient(rv)                   # clear of the star
         X = mx.where(front, X, far)
         Y = mx.where(front, Y, 0.0)
-        sp = mx.reshape(spots4, (spots4.shape[0],) + (1,) * nk + spots4.shape[-2:])
+        sp = mx.reshape(spots4, (1,) * lead + (spots4.shape[0],) + (1,) * nk
+                        + spots4.shape[-2:])
         n = spot_vectors(T - ep, prot_, istar_, lam_, sp[..., 0], sp[..., 1])
         if kernel:
             from .metal_spots import spot_cols_kernel
@@ -495,7 +496,14 @@ def _tau_graph(tt, t0, epoch, period, a, b, r, prot, istar, lam, spots4, w2d, la
             events = _all_events(tt, t0, epoch, period, a, b, r, prot, istar, lam, spots4,
                                  law, k, h, ew, exp_time, n_sample, kernel)
         T, W = _exposure_nodes(tt, exp_time, events, int(n_gl), dt)
-        Bc = mx.sum(inst(T, 2, W > 0.0) * W[..., None], axis=-2)
+        if kernel:
+            # nodes outermost: an exposure's empty sub-intervals (most of
+            # its nodes) then fill whole SIMD groups, which return at once,
+            # where interleaved with the occupied ones they cost as much
+            Bt = inst(mx.moveaxis(T, -1, 0), 1, mx.moveaxis(W > 0.0, -1, 0), lead=1)
+            Bc = mx.sum(mx.moveaxis(Bt, 0, -2) * W[..., None], axis=-2)
+        else:
+            Bc = mx.sum(inst(T, 2, W > 0.0) * W[..., None], axis=-2)
     if basis:
         return Bc
     return combine_cols(Bc, w2d, law)

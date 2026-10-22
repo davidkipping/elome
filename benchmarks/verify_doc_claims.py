@@ -11,8 +11,8 @@ contain it. Run the measurements on an otherwise-idle GPU.
 
 --check also reads the GPU kernel tables back to the results files their
 benchmarks write (tau_kernel.json, hybrid_kernels.json,
-oblate_kernels.json: bench_tau_kernel.py, bench_hybrid.py,
-bench_oblate.py), and the cross-code comparison tables (spherical, oblate and
+oblate_kernels.json, spot_kernels.json: bench_tau_kernel.py,
+bench_hybrid.py, bench_oblate.py, bench_spots.py), and the cross-code comparison tables (spherical, oblate and
 ringed planets) back to the results files the comparison runs write
 (precision*.json, speed.json, batch_scaling.json,
 oblate_compare/results_oblate.json, ring_compare/results_ring.json). A
@@ -81,9 +81,10 @@ def check():
                    f"({claims['lcs_vs_loop']['speedup_arrays']})")
     n_cmp, bad_cmp, pages_cmp = check_comparisons()
     n_ker, bad_ker, pages_ker = check_kernels()
-    bad += bad_cmp + bad_ker
-    n_cmp += n_ker
-    pages = len(set(expect) | pages_cmp | pages_ker)
+    n_sp, bad_sp, pages_sp = check_spots()
+    bad += bad_cmp + bad_ker + bad_sp
+    n_cmp += n_ker + n_sp
+    pages = len(set(expect) | pages_cmp | pages_ker | pages_sp)
     print("\n".join(bad) if bad else f"docs agree with the measurements "
           f"({sum(map(len, expect.values())) + n_cmp} numbers on {pages} pages)")
     return not bad
@@ -248,6 +249,31 @@ def check_kernels():
          "quadratic law's", dearer == ["hybrid5"]),
     ]
     n, bad = _check_pages(pages, claims)
+    return n, bad, set(pages)
+
+
+def check_spots():
+    """(numbers checked, failures, pages) for the spotted-star cost table
+    and its float64 prose, against spot_kernels.json (bench_spots.py)."""
+    sp = json.load(open(os.path.join(HERE, "spot_kernels.json")))
+    rows = {}
+    for rule, label in (("none", "one evaluation per point"),
+                        ("contact", "contact rule (`n_gl = 5`)")):
+        g = sp["gpu"][rule]
+        f0, v0 = g["spherical"]["forward_ms"], g["spherical"]["value_grad_ms"]
+        for k, word in ((1, "one spot"), (2, "two spots"), (4, "four spots")):
+            r = g[f"spots{k}"]
+            rows[f"{word}, {label}"] = [r["forward_ms"] * 1e-3, r["forward_ms"] / f0,
+                                        r["value_grad_ms"] * 1e-3,
+                                        r["value_grad_ms"] / v0]
+    c = sp["cpu_1000_points_two_spots"]
+    pages = {"spots/accuracy-and-fitting.md": (
+        {"(`benchmarks/bench_spots.py`": rows},
+        [(r"two spots takes (\S+ s) for its value", c["none"]["forward_s"]),
+         (r"for its value and (\S+ s) with its gradient", c["none"]["value_grad_s"]),
+         (r"under the contact rule (\S+ s) and", c["contact"]["forward_s"]),
+         (r"under the contact rule \S+ s and (\S+ s)", c["contact"]["value_grad_s"])])}
+    n, bad = _check_pages(pages)
     return n, bad, set(pages)
 
 

@@ -52,12 +52,34 @@ float32 times are.
 
 Every spot's visible outline is integrated at every time, in transit or
 not, and each splits into arcs where it meets the limb, the planet and
-the other spots. The cost therefore grows with the number of spots, and
-an exposure under the contact rule also pays for its event search and
-about fifty evaluations. float32 on the GPU runs fused kernels for both,
-in milliseconds for hundreds of exposures, and is the route for
-sampling. float64 on the CPU is the reference: under the contact rule it
-takes seconds for a few thousand exposures.
+the other spots. The cost therefore grows with the number of spots. Under
+the contact rule an exposure also pays for its event search, and is laid
+out as up to seven pieces of `n_gl` nodes each: most exposures need only
+one, and the kernels skip the empty ones, but the nodes' inputs and the
+gradient's graph operations still cover all of them.
+
+Fused float32 kernels, 512 parameter sets × 5,000 points around a
+transit, `hybrid4`, spots of 6–12°, two of them on the transit chord, on
+a star turning in 12 days, against the same transit with no spots
+(`benchmarks/bench_spots.py`, M2 Max):
+
+| | forward | vs no spots | value + grad | vs no spots |
+|---|---:|---:|---:|---:|
+| one spot, one evaluation per point | 51 ms | 69× | 248 ms | 145× |
+| two spots, one evaluation per point | 79 ms | 107× | 394 ms | 230× |
+| four spots, one evaluation per point | 155 ms | 210× | 732 ms | 427× |
+| one spot, contact rule (`n_gl = 5`) | 1.29 s | 367× | 5.07 s | 661× |
+| two spots, contact rule (`n_gl = 5`) | 1.86 s | 529× | 9.17 s | 1,195× |
+| four spots, contact rule (`n_gl = 5`) | 4.49 s | 1,276× | 21.2 s | 2,767× |
+
+The gradients are in every input: the orbit, the planet, the star, every
+entry of the spot table and the weights. Two spots under the contact rule
+cost about as much as a ringed planet (see
+{doc}`../rings/accuracy-and-fitting`).
+
+float64 on the CPU is the reference, not a route for sampling: one light
+curve of 1,000 points with two spots takes 0.086 s for its value and
+0.38 s with its gradient, and under the contact rule 4.8 s and 9.3 s.
 
 ## Other codes
 
