@@ -29,7 +29,12 @@ every release is tagged `vX.Y.Z` in git.
   kernels (`use_metal=False` for the graph): the columns and their
   gradient per point, and the contact rule's event search per exposure;
   the orbit, the star's rotation and the quadrature stay graph operations
-  around them.
+  around them. Samplers take a spotted star through `flux_dev_from_tau`
+  (`spots=`, `spot_time=`, `prot=`, `istar=`, `lam=`; angles in radians):
+  the planet on `tau`, the star on `spot_time`, each point's time since
+  the spots' epoch, both differentiable, with per-chain spot tables and
+  every exposure rule. A spotted model is called eagerly: under
+  `mx.compile` or `mx.vmap` it raises.
 
 ### Documentation
 - A **Starspots** section: overview, geometry and conventions, light

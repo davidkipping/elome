@@ -67,7 +67,7 @@ from .rings import _crossings
 from .spots import _Rim, shape_cols_spots
 from .trig import sincos
 
-__all__ = ["spin_frame", "spot_vectors", "flux_dev_spots_t"]
+__all__ = ["spin_frame", "spot_vectors", "flux_dev_spots_tau", "flux_dev_spots_t"]
 
 _TWO_PI = 2.0 * math.pi
 # evaluation points per block of the graph (oblate_tau._in_blocks): the
@@ -145,12 +145,13 @@ def sample_count(exp_time, a, per, rp):
     return int(min(max(s, _S_MIN), _S_MAX))
 
 
-def _spot_events(t1, t2, cols, sp, dt, n_sample):
+def _spot_events(t1, t2, off, cols, sp, dt, n_sample):
     """(…, _E_SPOT * K) times inside [t1, t2] at which a spot's visible
     corner count changes, +inf where none: sampled, then bisected, spot by
     spot (the spot axis is a batch axis; _search_events), then made live
-    (_live_events). ``cols(nk)`` gives the per-set parameters reshaped for
-    nk trailing axes.
+    (_live_events). Times are the planet's (since mid-transit); the star's
+    clock is ahead by ``off`` (n, m). ``cols(nk)`` gives the per-set
+    parameters reshaped for nk trailing axes.
 
     The times carry the implicit derivative of the event in the
     parameters (value unchanged), so the contact rule's gradient is that of
@@ -160,12 +161,12 @@ def _spot_events(t1, t2, cols, sp, dt, n_sample):
     dq/dpsi = 0, so q's partial derivatives at that frozen psi are its
     total ones; where a corner passes the rim's limb point (the count
     changing by 1) P is that limb point, live. Then dt_e = -q_theta / q_t."""
-    ev = _live_events(*_search_events(t1, t2, cols, sp, dt, n_sample),
-                      _event_geom(cols, sp), dt)
+    ev = _live_events(*_search_events(t1, t2, off, cols, sp, dt, n_sample),
+                      _event_geom(cols, sp, off), dt)
     return mx.reshape(ev, ev.shape[:-2] + (-1,))
 
 
-def _search_events(t1, t2, cols, sp, dt, n_sample):
+def _search_events(t1, t2, off, cols, sp, dt, n_sample):
     """The event search, frozen: (te, ok, tangency, psi_t, which), each
     (..., _E_SPOT, K) -- the times, their validity, their kind, a
     tangency's touching rim parameter and the limb point a corner passed
@@ -173,7 +174,7 @@ def _search_events(t1, t2, cols, sp, dt, n_sample):
     sg = mx.stop_gradient
     t1, t2 = sg(t1), sg(t2)
     K = sp.shape[-2]
-    geom = _event_geom(cols, sp)
+    geom = _event_geom(cols, sp, off)
 
     def count(tt):                           # tt (n, m, J, K) -> (n, m, J, K)
         return _corner_count(*geom(tt, False), dt)
@@ -220,23 +221,22 @@ def _search_events(t1, t2, cols, sp, dt, n_sample):
     return te, ok, tangency, sg(psi_t), which
 
 
-def _event_geom(cols, sp):
+def _event_geom(cols, sp, off):
     """geom(tt, live) -> (X, Y, front, r, n, alpha) of the planet and the
-    spots at times tt (n, m, J, K); frozen unless ``live``. ``cols(nk)``
-    the per-set parameters for nk trailing axes, sp (n, K, 4)."""
+    spots at planet times tt (n, m, J, K), the star's clock ahead by off
+    (n, m); frozen unless ``live``. ``cols(nk)`` the per-set parameters
+    for nk trailing axes, sp (n, K, 4)."""
     sg = mx.stop_gradient
     s4 = sp[:, None, None]                    # (n, 1, 1, K, 4)
+    o4 = off[..., None, None]                 # (n, m, 1, 1)
 
     def geom(tt, live, rates=False):
         f = (lambda v: v) if live else sg
-        t0, ep, per, a, b, r, prot, istar, lam, eo = cols(3)
-        t0, ep, per, a, b, r, prot, istar, lam = (f(v) for v in (t0, ep, per, a, b, r, prot,
-                                                                istar, lam))
+        per, a, b, r, prot, istar, lam, eo = cols(3)
+        per, a, b, r, prot, istar, lam = (f(v) for v in (per, a, b, r, prot, istar, lam))
         eo = None if eo is None else (f(eo[0]), tuple(f(c) for c in eo[1]))
-        tau = tt - t0
-        tau = tau - per * mx.round(tau / per)
-        X, Y, dX, dY, front = _sky((_TWO_PI / per) * tau, a, b, eo)
-        nv = _spot_xyz(tt - ep, prot, istar, lam, f(s4[..., 0]), f(s4[..., 1]))
+        X, Y, dX, dY, front = _sky((_TWO_PI / per) * tt, a, b, eo)
+        nv = _spot_xyz(tt + f(o4), prot, istar, lam, f(s4[..., 0]), f(s4[..., 1]))
         out = (X, Y, front, r, nv, f(s4[..., 2]))
         if rates:
             # the planet's sky velocity and the star's angular velocity
@@ -267,49 +267,48 @@ def _live_events(te, ok, tangency, psi_t, which, geom, dt):
     return mx.where(ok, te - mx.where(good, shift, 0.0), mx.inf)
 
 
+def _make_cols(params, k, h, ew):
+    """cols(nk): the per-set (period, a, b, r, prot, istar, lam) reshaped
+    for nk trailing axes, and the orbit constants (None if circular)."""
+    def cols(nk):
+        sh = (-1,) + (1,) * nk
+        c = [mx.reshape(v, sh) for v in params]
+        eo = None if k is None else _orbit_consts(c[1], c[2], mx.reshape(k, sh),
+                                                  mx.reshape(h, sh), ew)
+        return c + [eo]
+    return cols
+
+
 def _events_fn(dt, n_sample, ecc, ew):
-    """_spot_events as a function of arrays: (t1, t2, t0, epoch, period, a,
-    b, r, prot, istar, lam, spots4[, k, h]) -> events. The search runs on
-    detached copies of its inputs in chunks of exposures, each evaluated
-    before the next, and the live correction follows it on every
-    exposure at once. (Compiling the search trips an MLX 0.32 compile
-    error, "unordered_map::at"; chunked and evaluated it is as fast.)"""
-    def make_cols(params, kh):
-        t0, epoch, period, a, b, r, prot, istar, lam = params
+    """The graph's event search and its live correction, as a function of
+    arrays: (t1, t2, off, period, a, b, r, prot, istar, lam, spots4[, k,
+    h]) -> (live events, their frozen copy or None). The search runs on
+    host copies of its inputs in chunks of exposures, each evaluated before
+    the next, and the live correction follows it on every exposure at
+    once. (Compiling the search trips an MLX 0.32 compile error,
+    "unordered_map::at"; chunked and evaluated it is as fast.)"""
+    def split(args):
+        params, spots4, kh = args[:7], args[7], args[8:]
         k, h = kh if ecc else (None, None)
+        return params, spots4, k, h
 
-        def cols(nk):
-            sh = (-1,) + (1,) * nk
-            c = [mx.reshape(v, sh) for v in (t0, epoch, period, a, b, r, prot, istar, lam)]
-            eo = None if k is None else _orbit_consts(c[3], c[4], mx.reshape(k, sh),
-                                                      mx.reshape(h, sh), ew)
-            return c + [eo]
-        return cols
-
-    def search(t1, t2, *args):
-        *params, spots4 = args[:10]
-        return _search_events(t1, t2, make_cols(params, args[10:]), spots4, dt, n_sample)
-
-    def fn(t1, t2, *args):
+    def fn(t1, t2, off, *args):
         n, m = t1.shape
-        K = args[9].shape[-2]
+        K = args[7].shape[-2]
         B = max(1, _EVENT_SAMPLES // ((int(n_sample) + 1) * K))
-        # the search's inputs as fresh host copies: inside a traced gradient
-        # an array computed from traced ones keeps its graph alive even when
-        # evaluated and detached, and the search's (every bisection step's)
-        # exceeds MLX's buffer limit within a few thousand exposures. Under
-        # mx.compile or vmap, where nothing can be read, one graph.
-        ins, host = _host_copies((t1, t2, *args))
+        ins, host = _host_copies((t1, t2, off, *args))
         parts = []
         for rows, times in _chunks(n, m, B):
-            out = search(ins[0][rows, times], ins[1][rows, times], *(v[rows] for v in ins[2:]))
+            params, spots4, k, h = split([v[rows] for v in ins[3:]])
+            out = _search_events(ins[0][rows, times], ins[1][rows, times],
+                                 ins[2][rows, times], _make_cols(params, k, h, ew), spots4,
+                                 dt, n_sample)
             if host:
                 mx.eval(*out)    # free each chunk's search before the next
             parts.append((rows, out))
         frozen = _assemble(parts, n, m)
-        *params, spots4 = args[:10]
-        cols = make_cols(params, args[10:])
-        ev = _live_events(*frozen, _event_geom(cols, spots4), dt)
+        params, spots4, k, h = split(args)
+        ev = _live_events(*frozen, _event_geom(_make_cols(params, k, h, ew), spots4, off), dt)
         fz = mx.where(frozen[1], frozen[0], mx.inf) if host else None
         flat = lambda v: mx.reshape(v, v.shape[:-2] + (-1,))     # noqa: E731
         return flat(ev), (None if fz is None else flat(fz))
@@ -362,39 +361,31 @@ def _assemble(parts, n, m):
                                 axis=0) for q in range(nout))
 
 
-
-
-def _kernel_events(tt, half, t0, epoch, period, a, b, r, prot, istar, lam, spots4, law,
+def _kernel_events(tt, off, half, period, a, b, r, prot, istar, lam, spots4, law,
                    n_sample, k=None, h=None, ew=False):
-    """_events_fn's route on the fp32 kernels, for exposures centred on tt
-    (n, m): the search in one launch (``metal_spots.spot_events_kernel``),
-    on host copies of its inputs, the live correction (_live_events) as
-    graph operations. (live, frozen) events, frozen None under mx.compile
-    or vmap."""
+    """_events_fn's route on the fp32 kernels, for exposures centred on
+    planet times tt (n, m), the star's clock ahead by off: the search in
+    one launch (``metal_spots.spot_events_kernel``), on host copies of its
+    inputs, the live correction (_live_events) as graph operations. (live,
+    frozen) events, frozen None under mx.compile or vmap."""
     from .metal_spots import spot_events_kernel
     dt = tt.dtype
-
-    def cols(nk):
-        sh = (-1,) + (1,) * nk
-        c = [mx.reshape(v, sh) for v in (t0, epoch, period, a, b, r, prot, istar, lam)]
-        eo = None if k is None else _orbit_consts(c[3], c[4], mx.reshape(k, sh),
-                                                  mx.reshape(h, sh), ew)
-        return c + [eo]
-    hv, host = _host_copies([tt, t0, epoch, period, a, b, r, prot, istar, lam, spots4]
-                            + ([] if k is None else [k, h]))
-    ht, ht0, hep, hper, ha, hb, hr, hprot, histar, hlam, hsp = hv[:11]
+    params = (period, a, b, r, prot, istar, lam)
+    hv, host = _host_copies([tt, off, *params, spots4] + ([] if k is None else [k, h]))
+    ht, hoff, hper, ha, hb, hr, hprot, histar, hlam, hsp = hv[:10]
     if k is None:
         orbit, shape = "circ", hb
     else:
         from .anchored import pack_orbit_constants
-        ci, consts = _orbit_consts(ha, hb, hv[11], hv[12], ew)
+        ci, consts = _orbit_consts(ha, hb, hv[10], hv[11], ew)
         orbit, shape = "ecc", pack_orbit_constants(None, None, ci, consts=consts)
-    te, code, psit = spot_events_kernel(ht, half, ht0, hep, hper, ha, shape, hr, hprot,
-                                        histar, hlam, hsp, law, n_sample, orbit)
+    te, code, psit = spot_events_kernel(ht, hoff, half, hper, ha, shape, hr, hprot, histar,
+                                        hlam, hsp, law, n_sample, orbit)
     te, code, psit = (mx.transpose(v, (0, 1, 3, 2)) for v in (te, code, psit))
     ok = code > 0.0
     te = mx.where(ok, te, ht[..., None, None])        # finite geometry where none
-    ev = _live_events(te, ok, code == 1.0, psit, code == 3.0, _event_geom(cols, spots4), dt)
+    geom = _event_geom(_make_cols(params, k, h, ew), spots4, off)
+    ev = _live_events(te, ok, code == 1.0, psit, code == 3.0, geom, dt)
     flat = lambda v: mx.reshape(v, v.shape[:-2] + (-1,))         # noqa: E731
     return flat(ev), (flat(mx.where(ok, te, mx.inf)) if host else None)
 
@@ -427,10 +418,10 @@ def _q(rim, X, Y, r, psi):
     return (x - X) ** 2 + (y - Y) ** 2 - r * r
 
 
-def _contact_events(tt, t0, per, a, b, r, k, h, ew):
-    """The planet's four limb contacts nearest each time, (n, m, 4), from
-    the closed-form phase offsets -- live in the parameters, as the
-    spherical rule's."""
+def _contact_events(tt, per, a, b, r, k, h, ew):
+    """The planet's four limb contacts around the transit nearest each
+    planet time, (n, m, 4), from the closed-form phase offsets -- live in
+    the parameters, as the spherical rule's."""
     sg = mx.stop_gradient
     if k is None:
         cA = contact_offsets(r, a, b)
@@ -438,7 +429,7 @@ def _contact_events(tt, t0, per, a, b, r, k, h, ew):
         ci, consts = _orbit_consts(a, b, k, h, ew)
         kc, hc = _contact_kh(k, h, ew)
         cA = contact_offsets_anchored(r, a, b, kc, hc, ci, consts=consts)
-    tc = t0 + per * sg(mx.round((tt - t0) / per))                    # the epoch's centre
+    tc = per * sg(mx.round(tt / per))                                # the epoch's centre
     return mx.stack([tc + c * (per / _TWO_PI) for c in cA], axis=-1)
 
 
@@ -470,75 +461,83 @@ def _exposure_nodes(tt, exp_time, events, n_gl, dt):
     return mx.concatenate(times, axis=-1), W
 
 
-def _tau_graph(tt, t0, epoch, period, a, b, r, prot, istar, lam, spots4, w2d, law,
-               basis=False, k=None, h=None, ew=False, exp_time=0.0, n_gl=5,
-               n_sample=_S_MIN, kernel=False, events=None, frozen=None):
-    """F - 1 (or the basis columns) at times tt (n, m): per-set (n,)
-    parameters, spots4 (n, K, 4) of (lon, lat, alpha [rad], contrast).
-    ``exp_time`` > 0: the contact rule, n_gl nodes per piece and n_sample
-    count samples per exposure; ``events`` (n, m, ...) its split candidates
-    if already found and ``frozen`` their constant copy (_all_events).
-    ``kernel``: the columns and the event search by the fp32 Metal kernels
-    (``metal_spots``)."""
+def _tau_graph(tt, ts, period, a, b, r, prot, istar, lam, spots4, w2d, law,
+               basis=False, k=None, h=None, ew=False, exp_time=0.0, mode=M._INT_CONTACT,
+               n_gl=5, n_sub=1, n_sample=_S_MIN, kernel=False, events=None, frozen=None):
+    """F - 1 (or the basis columns) at planet times tt (n, m, since each
+    point's mid-transit) and star times ts (n, m, since the spots' epoch):
+    per-set (n,) parameters, spots4 (n, K, 4) of (lon, lat, alpha [rad],
+    contrast). ``exp_time`` > 0: an exposure per time, by the contact rule
+    (``mode``; n_gl nodes per piece and n_sample count samples for its
+    event search) or supersampled (n_sub uniform nodes); ``events`` (n, m,
+    ...) the contact rule's split candidates if already found and
+    ``frozen`` their constant copy (_all_events). ``kernel``: the columns
+    and the event search by the fp32 Metal kernels (``metal_spots``)."""
     dt = tt.dtype
+    params = (period, a, b, r, prot, istar, lam)
+    off = ts - tt                                   # the star's clock, ahead
 
     def cols(nk, lead=0):
         sh = (1,) * lead + (-1,) + (1,) * nk
-        c = [mx.reshape(p, sh) for p in (t0, epoch, period, a, b, r, prot, istar, lam)]
-        eo = None if k is None else _orbit_consts(c[3], c[4], mx.reshape(k, sh),
+        c = [mx.reshape(p, sh) for p in params]
+        eo = None if k is None else _orbit_consts(c[1], c[2], mx.reshape(k, sh),
                                                   mx.reshape(h, sh), ew)
         return c + [eo]
 
-    def inst(T, nk, active=None, lead=0):
+    def inst(T, Ts, nk, active=None, lead=0):
         *c, eo = cols(nk, lead)
         sp = mx.reshape(spots4, (1,) * lead + (spots4.shape[0],) + (1,) * nk
                         + spots4.shape[-2:])
-        return node_cols(T, c, eo, sp, active)
+        return node_cols(T, Ts, c, eo, sp, active)
 
-    def node_cols(T, c, eo, sp, active=None):
-        """The columns at times T: c the nine per-set parameters, eo the
-        orbit constants and sp (..., K, 4) the spots, broadcast to T."""
-        t0c, ep, per, av, bv, rv, prot_, istar_, lam_ = c
-        tau = T - t0c
-        tau = tau - per * mx.round(tau / per)
-        X, Y, _, _, front = _sky((_TWO_PI / per) * tau, av, bv, eo)
+    def node_cols(T, Ts, c, eo, sp, active=None):
+        """The columns at planet times T and star times Ts: c the seven
+        per-set parameters, eo the orbit constants and sp (..., K, 4) the
+        spots, broadcast to T."""
+        per, av, bv, rv, prot_, istar_, lam_ = c
+        X, Y, _, _, front = _sky((_TWO_PI / per) * T, av, bv, eo)
         far = 2.0 + 2.0 * mx.stop_gradient(rv)                   # clear of the star
         X = mx.where(front, X, far)
         Y = mx.where(front, Y, 0.0)
-        n = spot_vectors(T - ep, prot_, istar_, lam_, sp[..., 0], sp[..., 1])
+        n = spot_vectors(Ts, prot_, istar_, lam_, sp[..., 0], sp[..., 1])
         if kernel:
             from .metal_spots import spot_cols_kernel
             return spot_cols_kernel(X, Y, rv, n, sp[..., 2], sp[..., 3], law, active=active)
         return shape_cols_spots(X, Y, rv, n, sp[..., 2], sp[..., 3], law)
 
     if exp_time == 0.0:
-        Bc = inst(tt, 1)
+        Bc = inst(tt, ts, 1)
+    elif mode == M._INT_SUPER:
+        # n_sub uniform nodes, the sub-exposure midpoints (batman's rule)
+        x = mx.array((np.arange(n_sub) + 0.5) / n_sub - 0.5, dtype=dt) * exp_time
+        Bc = mx.mean(inst(tt[..., None] + x, ts[..., None] + x, 2), axis=-2)
     else:
         if events is None:
-            events, frozen = _all_events(tt, t0, epoch, period, a, b, r, prot, istar, lam,
-                                         spots4, law, k, h, ew, exp_time, n_sample, kernel)
+            events, frozen = _all_events(tt, ts, *params, spots4, law, k, h, ew, exp_time,
+                                         n_sample, kernel)
         T, W = _exposure_nodes(tt, exp_time, events, int(n_gl), dt)
+        Ts = T + off[..., None]
         Bc = None
         if frozen is not None:
             (htt,), _ = _host_copies([tt])
             mask = _exposure_nodes(htt, exp_time, frozen, int(n_gl), dt)[1] > 0.0
-            Bc = _active_nodes(T, W, mask, node_cols,
-                               (t0, epoch, period, a, b, r, prot, istar, lam), spots4, k, h, ew)
+            Bc = _active_nodes(T, Ts, W, mask, node_cols, params, spots4, k, h, ew)
         if Bc is None and kernel:
             # every node, nodes outermost: an exposure's empty sub-intervals
             # (most of its nodes) then fill whole SIMD groups, which return
             # at once, where interleaved with the occupied ones they cost as
             # much
-            Bt = inst(mx.moveaxis(T, -1, 0), 1, mx.moveaxis(W > 0.0, -1, 0), lead=1)
+            mv = lambda v: mx.moveaxis(v, -1, 0)                 # noqa: E731
+            Bt = inst(mv(T), mv(Ts), 1, mv(W > 0.0), lead=1)
             Bc = mx.sum(mx.moveaxis(Bt, 0, -2) * W[..., None], axis=-2)
         elif Bc is None:
-            Bc = mx.sum(inst(T, 2, W > 0.0) * W[..., None], axis=-2)
+            Bc = mx.sum(inst(T, Ts, 2, W > 0.0) * W[..., None], axis=-2)
     if basis:
         return Bc
     return combine_cols(Bc, w2d, law)
 
 
-def _active_nodes(T, W, mask, node_cols, params, spots4, k, h, ew):
+def _active_nodes(T, Ts, W, mask, node_cols, params, spots4, k, h, ew):
     """sum_j W_j B(T_j) per exposure over the nodes with W > 0 only: most of
     an exposure's (_K_SPLIT + 1) * n_gl nodes lie in empty sub-intervals,
     and gathering the rest first saves their orbit, rotation and columns
@@ -547,9 +546,8 @@ def _active_nodes(T, W, mask, node_cols, params, spots4, k, h, ew):
     eight sizes per octave so the float64 graph's compiled columns see few
     shapes; padded with weight 0), so the per-set parameters broadcast and
     their gradients are sums along an axis, not scatters into a few rows.
-    None under mx.compile or vmap, where the mask cannot be read: the
-    caller evaluates every node. ``mask``: W > 0, a constant (computed from
-    host copies, so reading it evaluates nothing traced)."""
+    ``mask``: W > 0, a constant (computed from host copies, so reading it
+    evaluates nothing traced)."""
     mask = np.asarray(mask)
     n, m, J = T.shape
     mask = mask.reshape(n, m * J)
@@ -565,46 +563,46 @@ def _active_nodes(T, W, mask, node_cols, params, spots4, k, h, ew):
     order[rows, pos] = cols
     real = np.arange(width)[None, :] < count[:, None]
     ii = mx.array(order)
-    Tc = mx.take_along_axis(mx.reshape(T, (n, m * J)), ii, axis=1)
-    Wc = mx.where(mx.array(real), mx.take_along_axis(mx.reshape(W, (n, m * J)), ii, axis=1),
-                  0.0)
+    take = lambda v: mx.take_along_axis(mx.reshape(v, (n, m * J)), ii, axis=1)   # noqa: E731
+    Wc = mx.where(mx.array(real), take(W), 0.0)
     c = [mx.reshape(p, (-1, 1)) for p in params]
-    eo = None if k is None else _orbit_consts(c[3], c[4], mx.reshape(k, (-1, 1)),
+    eo = None if k is None else _orbit_consts(c[1], c[2], mx.reshape(k, (-1, 1)),
                                               mx.reshape(h, (-1, 1)), ew)
-    B = node_cols(Tc, c, eo, spots4[:, None])                       # (n, width, ncol)
+    B = node_cols(take(T), take(Ts), c, eo, spots4[:, None])        # (n, width, ncol)
     slot = mx.array((np.arange(n)[:, None] * m + order // J).reshape(-1))
     acc = mx.zeros((n * m, B.shape[-1]), dtype=B.dtype).at[slot].add(
         mx.reshape(B * Wc[..., None], (-1, B.shape[-1])))
     return mx.reshape(acc, (n, m, B.shape[-1]))
 
 
-def _all_events(tt, t0, epoch, period, a, b, r, prot, istar, lam, spots4, law, k, h, ew,
+def _all_events(tt, ts, period, a, b, r, prot, istar, lam, spots4, law, k, h, ew,
                 exp_time, n_sample, kernel):
-    """The contact rule's split candidates for exposures centred on tt
-    (n, m): the planet's limb contacts and every spot's events, (n, m,
-    4 + _E_SPOT * K), live in the parameters -- and the same values as a
-    constant computed from host copies (None under mx.compile or vmap),
-    from which _active_nodes reads its mask without evaluating the traced
-    graph early."""
+    """The contact rule's split candidates for exposures centred on planet
+    times tt (n, m), the star at ts: the planet's limb contacts and every
+    spot's events, (n, m, 4 + _E_SPOT * K), live in the parameters -- and
+    the same values as a constant computed from host copies (None under
+    mx.compile or vmap), from which _active_nodes reads its mask without
+    evaluating the traced graph early."""
     half = 0.5 * exp_time
+    off = ts - tt
+    params = (period, a, b, r, prot, istar, lam)
     if kernel:
-        sp_ev, sp_fz = _kernel_events(tt, half, t0, epoch, period, a, b, r, prot, istar,
-                                      lam, spots4, law, n_sample, k, h, ew)
+        sp_ev, sp_fz = _kernel_events(tt, off, half, *params, spots4, law, n_sample, k, h, ew)
     else:
         ev_fn = _events_fn(tt.dtype, n_sample, k is not None, ew)
-        sp_ev, sp_fz = ev_fn(tt - half, tt + half, t0, epoch, period, a, b, r, prot, istar,
-                             lam, spots4, *(() if k is None else (k, h)))
+        sp_ev, sp_fz = ev_fn(tt - half, tt + half, off, *params, spots4,
+                             *(() if k is None else (k, h)))
 
-    def contacts(tt, t0, period, a, b, r, k, h):
-        pc = [mx.reshape(v, (-1, 1)) for v in (t0, period, a, b, r)]
+    def contacts(tt, period, a, b, r, k, h):
+        pc = [mx.reshape(v, (-1, 1)) for v in (period, a, b, r)]
         kh = (None, None) if k is None else (mx.reshape(k, (-1, 1)), mx.reshape(h, (-1, 1)))
         return _contact_events(tt, *pc, *kh, ew)
-    live = mx.concatenate([contacts(tt, t0, period, a, b, r, k, h), sp_ev], axis=-1)
+    live = mx.concatenate([contacts(tt, period, a, b, r, k, h), sp_ev], axis=-1)
     if sp_fz is None:
         return live, None
-    hv, _ = _host_copies([tt, t0, period, a, b, r] + ([] if k is None else [k, h]))
-    hk = (None, None) if k is None else tuple(hv[6:8])
-    return live, mx.concatenate([contacts(*hv[:6], *hk), sp_fz], axis=-1)
+    hv, _ = _host_copies([tt, period, a, b, r] + ([] if k is None else [k, h]))
+    hk = (None, None) if k is None else tuple(hv[5:7])
+    return live, mx.concatenate([contacts(*hv[:5], *hk), sp_fz], axis=-1)
 
 
 def _spots_ok(spots4):
@@ -615,9 +613,9 @@ def _spots_ok(spots4):
     return mx.all(ok, axis=-1)
 
 
-def _check_spots(spots4):
+def _check_spots(spots4, degrees=True):
     """Host values only: (K, 4) or (n, K, 4) of (lon, lat, alpha [rad],
-    contrast)."""
+    contrast). ``degrees``: the units the messages name."""
     if isinstance(spots4, mx.array):
         return
     s = np.asarray(spots4, dtype=np.float64)
@@ -627,48 +625,77 @@ def _check_spots(spots4):
     if not np.all(np.isfinite(s)):
         raise ValueError("spots must be finite")
     al, lat, c = s[..., 2], s[..., 1], s[..., 3]
+    unit = ("(0, 90] degrees", "[-90, 90] degrees") if degrees else ("(0, pi/2] radians",
+                                                                     "[-pi/2, pi/2] radians")
     if np.any(al <= 0.0) or np.any(al > 0.5 * math.pi):
-        raise ValueError("a spot's angular radius must be in (0, 90] degrees")
+        raise ValueError(f"a spot's angular radius must be in {unit[0]}")
     if np.any(np.abs(lat) > 0.5 * math.pi):
-        raise ValueError("a spot's latitude must be in [-90, 90] degrees")
+        raise ValueError(f"a spot's latitude must be in {unit[1]}")
     if np.any(c < 0.0):
         raise ValueError("a spot's contrast must be >= 0")
 
 
+def _refuse_transforms(arrays):
+    """A spotted star reads values back to the host (the event search's
+    sample count, its constant copy, the active nodes' mask) and its graph
+    trips MLX 0.32's compiler -- an error or a crash. Refuse mx.compile and
+    vmap up front, where nothing can be read."""
+    # mx.eval raises under a transform (np.asarray of a traced array there
+    # crashes the process)
+    for v in arrays:
+        if isinstance(v, mx.array) and v.size:
+            try:
+                mx.eval(mx.stop_gradient(mx.reshape(v, (-1,))[:1]))
+            except ValueError as e:
+                raise ValueError(
+                    "a spotted star cannot be evaluated under mx.compile or mx.vmap: "
+                    "call it eagerly (its float32 kernels are already fused)") from e
+
+
 @M.fp64_on_cpu
-def flux_dev_spots_t(t, t0, epoch, period, a, b, r, prot, istar, lam, spots4, law, u,
-                     basis=False, k=None, h=None, ew=False, exp_time=0.0, n_gl=5,
-                     n_sample=None, use_metal=True):
-    """F - 1 of a planet crossing a spotted star, at times t ((m,) or
-    (n, m)), normalised to the unspotted star. Per-set parameters are
-    scalars or (n,) / (n, 1) arrays: t0 (mid-transit), epoch (the spots'
-    reference time), period, a, b (impact parameter at conjunction), r,
-    prot, istar and lam (radians); spots4 (K, 4) or (n, K, 4) of
-    (longitude, latitude, angular radius [rad], contrast). (k, h) =
-    sqrt(e) (cos w, sin w) for an eccentric orbit, or (e, w [rad]) with
-    ``ew``. ``exp_time`` > 0: each time an exposure of that length,
-    integrated by the contact rule with ``n_gl`` nodes per piece and
-    ``n_sample`` count samples per exposure for its event search (None:
-    ``sample_count`` from host values of a, period and r, else 64; see the
-    module notes). Float64 on the CPU stream unless the data are
-    float32; float32 data on the GPU stream take the Metal kernels
-    (``metal_spots``) unless ``use_metal`` is False."""
+def flux_dev_spots_tau(tau, ts, period, a, b, r, prot, istar, lam, spots4, law, u,
+                       basis=False, k=None, h=None, ew=False, exp_time=0.0,
+                       mode=M._INT_CONTACT, n_gl=5, n_sub=1, n_sample=None,
+                       use_metal=True, degrees=False):
+    """F - 1 of a planet crossing a spotted star, normalised to the
+    unspotted star: the planet at tau ((m,) or (n, m), since each point's
+    mid-transit), the star at ts (the same shape, since the spots' epoch).
+    Per-set parameters are scalars or (n,) / (n, 1) arrays: period, a, b
+    (impact parameter at conjunction), r, prot, istar and lam (radians);
+    spots4 (K, 4) or (n, K, 4) of (longitude, latitude, angular radius
+    [rad], contrast). (k, h) = sqrt(e) (cos w, sin w) for an eccentric
+    orbit, or (e, w [rad]) with ``ew``. ``exp_time`` > 0: each time an
+    exposure of that length, by the contact rule (``mode``, ``n_gl`` nodes
+    per piece, ``n_sample`` count samples per exposure for its event
+    search: None for ``sample_count`` from host values of a, period and r)
+    or supersampled (``n_sub`` nodes). Float64 on the CPU stream unless
+    tau is float32; float32 on the GPU stream takes the Metal kernels
+    (``metal_spots``) unless ``use_metal`` is False. Not under mx.compile
+    or vmap."""
     law = get_law(law)
-    if t.ndim not in (1, 2):
-        raise ValueError(f"t must be (m,) or (n, m); got {t.shape}")
-    _check_spots(spots4)
-    if n_sample is None and exp_time != 0.0:
+    if tau.ndim not in (1, 2):
+        raise ValueError(f"tau must be (m,) or (n, m); got {tau.shape}")
+    _check_spots(spots4, degrees)
+    _refuse_transforms([tau, ts, period, a, b, r, prot, istar, lam, spots4, u, k, h])
+    if exp_time == 0.0:
+        mode = M._INT_NONE
+    if n_sample is None and mode == M._INT_CONTACT:
         try:
             host = [np.asarray(v, dtype=np.float64) for v in (a, period, r)]
             n_sample = max(sample_count(exp_time, x, P, y)
                            for x, P, y in np.broadcast(*host))
         except (TypeError, ValueError, RuntimeError):
             n_sample = 64
-    dt = t.dtype
-    squeeze = t.ndim == 1
-    t2d = t[None, :] if squeeze else t
+    dt = tau.dtype
+    ts = M._as_dtype(ts if isinstance(ts, mx.array) else mx.array(
+        np.asarray(ts, dtype=np.float64), dtype=dt), dt)
+    squeeze = tau.ndim == 1 and ts.ndim == 1
+    t2d = tau[None, :] if tau.ndim == 1 else tau
+    s2d = ts[None, :] if ts.ndim == 1 else ts
+    if s2d.shape[-1] != t2d.shape[-1]:
+        raise ValueError(f"spot_time must have tau's points: {ts.shape} against {tau.shape}")
     ecc = k is not None
-    params = (t0, epoch, period, a, b, r, prot, istar, lam) + ((k, h) if ecc else ())
+    params = (period, a, b, r, prot, istar, lam) + ((k, h) if ecc else ())
     sp = spots4 if isinstance(spots4, mx.array) else mx.array(
         np.asarray(spots4, dtype=np.float64), dtype=dt)
     sp = M._as_dtype(sp, dt)
@@ -676,10 +703,10 @@ def flux_dev_spots_t(t, t0, epoch, period, a, b, r, prot, istar, lam, spots4, la
                     else 1) for p in params] + [sp.shape[0] if sp.ndim == 3 else 1])
     if not basis and isinstance(u, mx.array) and u.ndim == 2:
         n_param = max(n_param, u.shape[0])
-    n = max(t2d.shape[0], n_param)
+    n = max(t2d.shape[0], s2d.shape[0], n_param)
     pc = [M._canon_param(p, n, dt) for p in params]
-    if t2d.shape[0] != n:
-        t2d = mx.broadcast_to(t2d, (n, t2d.shape[1]))
+    t2d = mx.broadcast_to(t2d, (n, t2d.shape[1]))
+    s2d = mx.broadcast_to(s2d, (n, s2d.shape[1]))
     sp = mx.broadcast_to(sp if sp.ndim == 3 else sp[None], (n,) + sp.shape[-2:])
     kh = pc[-2:] if ecc else [None, None]
     from .metal_hybrid import _canon_w
@@ -691,24 +718,44 @@ def flux_dev_spots_t(t, t0, epoch, period, a, b, r, prot, istar, lam, spots4, la
     # the contact rule's split candidates: found once for every exposure
     # (each costs a search, not an evaluation per node), then sliced with
     # the times into the blocks of the columns
-    per_time = None
-    if exp_time != 0.0:
-        events, frozen = _all_events(t2d, *pc[:9], sp, law, *kh, ew, exp_time,
+    per_time = [s2d]
+    if mode == M._INT_CONTACT:
+        events, frozen = _all_events(t2d, s2d, *pc[:7], sp, law, *kh, ew, exp_time,
                                      n_sample or _S_MIN, kernel)
-        per_time = [events] + ([] if frozen is None else [frozen])
+        per_time += [events] + ([] if frozen is None else [frozen])
 
-    def run(tt, rows, *ev):
-        *p9, s4, w, kk, hh = rows
-        return _tau_graph(tt, *p9, s4, w, law, basis=basis, k=kk, h=hh, ew=ew,
-                          exp_time=exp_time, n_gl=n_gl, n_sample=n_sample or _S_MIN,
-                          kernel=kernel, events=ev[0] if ev else None,
+    def run(tt, rows, ts, *ev):
+        *p7, s4, w, kk, hh = rows
+        return _tau_graph(tt, ts, *p7, s4, w, law, basis=basis, k=kk, h=hh, ew=ew,
+                          exp_time=exp_time, mode=mode, n_gl=n_gl, n_sub=n_sub,
+                          n_sample=n_sample or _S_MIN, kernel=kernel,
+                          events=ev[0] if ev else None,
                           frozen=ev[1] if len(ev) > 1 else None)
     # evaluation points per time: under the contact rule the active nodes
     # (_active_nodes), typically one or two pieces of n_gl
-    nodes = 1 if exp_time == 0.0 else 2 * int(n_gl)
-    out = _in_blocks(run, t2d, [*pc[:9], sp, w2d, *kh], nodes,
-                     _SPOT_BLOCK_KERNEL if kernel else _SPOT_BLOCK,
-                     per_time=per_time)
+    nodes = {M._INT_NONE: 1, M._INT_SUPER: max(int(n_sub), 1)}.get(mode, 2 * int(n_gl))
+    out = _in_blocks(run, t2d, [*pc[:7], sp, w2d, *kh], nodes,
+                     _SPOT_BLOCK_KERNEL if kernel else _SPOT_BLOCK, per_time=per_time)
     ok = _spots_ok(sp)[:, None]
     out = mx.where(ok[..., None] if basis else ok, out, mx.nan)
     return out[0] if squeeze and n == 1 else out
+
+
+@M.fp64_on_cpu
+def flux_dev_spots_t(t, t0, epoch, period, a, b, r, prot, istar, lam, spots4, law, u,
+                     basis=False, k=None, h=None, ew=False, exp_time=0.0, n_gl=5,
+                     n_sample=None, use_metal=True):
+    """``flux_dev_spots_tau`` from absolute times t ((m,) or (n, m)), the
+    per-set mid-transit t0 and the spots' epoch (TransitModel's route):
+    tau = t - t0 wrapped to the nearest transit, ts = t - epoch.
+    ``exp_time`` > 0 takes the contact rule."""
+    def ex(v):
+        return mx.reshape(v, (-1, 1)) if isinstance(v, mx.array) and v.ndim >= 1 else v
+    tau = t - ex(t0)
+    per = ex(period)
+    tau = tau - per * mx.round(tau / per)
+    ts = t - ex(epoch)
+    return flux_dev_spots_tau(tau, ts, period, a, b, r, prot, istar, lam, spots4, law, u,
+                              basis=basis, k=k, h=h, ew=ew, exp_time=exp_time,
+                              mode=M._INT_CONTACT, n_gl=n_gl, n_sample=n_sample,
+                              use_metal=use_metal, degrees=True)

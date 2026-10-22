@@ -1785,7 +1785,9 @@ def flux_dev_from_tau(tau: mx.array, period, a, b, r, u1=None, u2=None, *,
                       ld_basis: bool = False, secosw=None,
                       sesinw=None, limb_dark: str = "quadratic",
                       u=None, f=None, theta=None, ring_in=None,
-                      ring_out=None, ring_f=None, ring_tau=None) -> mx.array:
+                      ring_out=None, ring_f=None, ring_tau=None, spots=None,
+                      spot_time=None, prot=None, istar=None,
+                      lam=None) -> mx.array:
     """F - 1 from time-since-mid-transit, with the exposure integrated
     *inside* the kernel.
 
@@ -1864,6 +1866,28 @@ def flux_dev_from_tau(tau: mx.array, period, a, b, r, u1=None, u2=None, *,
             exposure at the kinks inside it (``rings_tau``). fp32 data on
             the GPU takes the ring Metal kernels (``metal_rings``); fp64
             the MLX graph on the CPU stream.
+        spots, spot_time, prot, istar, lam: a spotted star
+            (``elome.spots``; ``spots_tau`` for the frames). ``spots`` is
+            (K, 4) shared or (n, K, 4) per chain: longitude, latitude and
+            angular radius in **radians**, and contrast (the spot's
+            intensity over the photosphere's; 1 is no spot, so pad a chain
+            with fewer spots with contrast-1 rows). ``spot_time`` is the
+            star's clock: each point's time since the spots' reference
+            epoch, the shape of ``tau`` and in its units, as freely built
+            and as differentiable (an epoch shared by every transit, or
+            fitted). ``prot`` the rotation period (required), ``istar``
+            the spin axis's inclination to the line of sight (default pi/2)
+            and ``lam`` the sky-projected obliquity (Fabrycky & Winn's;
+            default 0), radians, scalars or (n,). The flux is normalised to
+            the unspotted star, so out of transit it is the spots' rotational
+            modulation, not 0. Hybrid laws and a spherical planet only.
+            ``integration="contact"`` also splits each exposure at every
+            planet-spot tangency inside it. fp32 data on the GPU takes the
+            spot Metal kernels (``metal_spots``); fp64 the MLX graph on the
+            CPU stream. Not under ``mx.compile`` or ``mx.vmap`` (raises):
+            call it eagerly. In float32 the star's phase 2 pi spot_time /
+            prot carries an absolute error of about 6e-8 times itself:
+            keep the epoch near the data (|spot_time| small).
         secosw, sesinw: (sqrt(e) cos w, sqrt(e) sin w), scalars or (n,).
             Omit both for a circular orbit (the default). Given, the orbit
             is the transit-anchored eccentric one (``anchored.py``), the
@@ -1919,6 +1943,18 @@ def flux_dev_from_tau(tau: mx.array, period, a, b, r, u1=None, u2=None, *,
     if ringed and limb_dark == "quadratic":
         raise ValueError("ringed planets take a hybrid law: "
                          "limb_dark='hybrid2' | 'hybrid4' | 'hybrid5'")
+    spotted = spots is not None
+    if not spotted and any(v is not None for v in (spot_time, prot, istar, lam)):
+        raise ValueError("spot_time=, prot=, istar=, lam= describe a spotted star; "
+                         "pass spots= too")
+    if spotted:
+        if spot_time is None or prot is None:
+            raise ValueError("a spotted star needs spot_time= and prot=")
+        if limb_dark == "quadratic":
+            raise ValueError("a spotted star takes a hybrid law: "
+                             "limb_dark='hybrid2' | 'hybrid4' | 'hybrid5'")
+        if f is not None or theta is not None or ringed:
+            raise ValueError("spots are for a spherical planet: no f=, theta= or ring")
     if theta is not None and f is None and not ringed:
         raise ValueError("theta= is an oblate planet's; pass f= too")
     if f is not None and limb_dark == "quadratic":
@@ -1933,6 +1969,13 @@ def flux_dev_from_tau(tau: mx.array, period, a, b, r, u1=None, u2=None, *,
         if u is None and not ld_basis:
             raise ValueError(f"{limb_dark} needs its weights as u= unless "
                              "ld_basis=True")
+        if spotted:
+            from .spots_tau import flux_dev_spots_tau
+            return flux_dev_spots_tau(
+                tau, spot_time, period, a, b, r, prot,
+                0.5 * math.pi if istar is None else istar, 0.0 if lam is None else lam,
+                spots, limb_dark, u, basis=bool(ld_basis), k=secosw, h=sesinw,
+                exp_time=float(exp_time), mode=mode, n_gl=int(n_gl), n_sub=int(n_sub))
         if ringed:
             from .rings_tau import flux_dev_from_tau_ring
             return flux_dev_from_tau_ring(

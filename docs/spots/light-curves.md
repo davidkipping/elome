@@ -54,6 +54,32 @@ As for oblate and ringed planets, prefer **`hybrid4`** or **`hybrid5`**: a
 spot near the limb and the planet's ingress both probe the limb, and a
 law that cannot follow it leaves residuals a fit can attribute to spots.
 
+## With the sampler API
+
+`flux_dev_from_tau` takes a spotted star as keywords, for samplers that
+build their own likelihood and batch their chains: `spots` (longitude,
+latitude and radius in **radians**, and contrast; `(K, 4)` or one table
+per chain), the star's clock `spot_time` (each point's time since the
+spots' epoch, beside `tau`, the time since its own mid-transit), `prot`,
+`istar` and `lam`:
+
+```python
+import mlx.core as mx
+from elome import flux_dev_from_tau
+
+tau = mx.array(np.linspace(-0.15, 0.15, 500), dtype=mx.float64)
+spots = np.concatenate([np.radians([[8.0, -9.0, 5.0], [40.0, 15.0, 10.0]]),
+                        [[0.3], [0.6]]], axis=1)
+dev = flux_dev_from_tau(tau, 3.0, 9.0, 0.24, 0.1, limb_dark="hybrid4",
+                        u=[0.2, 0.2, 0.1, 0.1], spots=spots,
+                        spot_time=tau, prot=4.0)      # the spots' epoch at t0
+```
+
+Gradients flow in both clocks and every parameter; transit-timing
+variations change `tau` and leave `spot_time` alone. See
+{doc}`../guides/sampler-api` for the rest, including why a spotted model
+is called eagerly rather than under `mx.compile`.
+
 ## At sky positions
 
 The light curve is also available at given sky positions, without an

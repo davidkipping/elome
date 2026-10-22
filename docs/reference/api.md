@@ -155,7 +155,7 @@ Per-chain parameters in, per-chain light curves out, with analytic gradients. Se
 ### `flux_dev_from_tau`
 
 ```python
-flux_dev_from_tau(tau: mx.array, period, a, b, r, u1=None, u2=None, *, exp_time: float = 0.0, integration: str = 'contact', n_gl: int = 5, n_sub: int = 1, ld_basis: bool = False, secosw=None, sesinw=None, limb_dark: str = 'quadratic', u=None, f=None, theta=None, ring_in=None, ring_out=None, ring_f=None, ring_tau=None) -> mx.array
+flux_dev_from_tau(tau: mx.array, period, a, b, r, u1=None, u2=None, *, exp_time: float = 0.0, integration: str = 'contact', n_gl: int = 5, n_sub: int = 1, ld_basis: bool = False, secosw=None, sesinw=None, limb_dark: str = 'quadratic', u=None, f=None, theta=None, ring_in=None, ring_out=None, ring_f=None, ring_tau=None, spots=None, spot_time=None, prot=None, istar=None, lam=None) -> mx.array
 ```
 
 ```text
@@ -237,6 +237,28 @@ Args:
         exposure at the kinks inside it (``rings_tau``). fp32 data on
         the GPU takes the ring Metal kernels (``metal_rings``); fp64
         the MLX graph on the CPU stream.
+    spots, spot_time, prot, istar, lam: a spotted star
+        (``elome.spots``; ``spots_tau`` for the frames). ``spots`` is
+        (K, 4) shared or (n, K, 4) per chain: longitude, latitude and
+        angular radius in **radians**, and contrast (the spot's
+        intensity over the photosphere's; 1 is no spot, so pad a chain
+        with fewer spots with contrast-1 rows). ``spot_time`` is the
+        star's clock: each point's time since the spots' reference
+        epoch, the shape of ``tau`` and in its units, as freely built
+        and as differentiable (an epoch shared by every transit, or
+        fitted). ``prot`` the rotation period (required), ``istar``
+        the spin axis's inclination to the line of sight (default pi/2)
+        and ``lam`` the sky-projected obliquity (Fabrycky & Winn's;
+        default 0), radians, scalars or (n,). The flux is normalised to
+        the unspotted star, so out of transit it is the spots' rotational
+        modulation, not 0. Hybrid laws and a spherical planet only.
+        ``integration="contact"`` also splits each exposure at every
+        planet-spot tangency inside it. fp32 data on the GPU takes the
+        spot Metal kernels (``metal_spots``); fp64 the MLX graph on the
+        CPU stream. Not under ``mx.compile`` or ``mx.vmap`` (raises):
+        call it eagerly. In float32 the star's phase 2 pi spot_time /
+        prot carries an absolute error of about 6e-8 times itself:
+        keep the epoch near the data (|spot_time| small).
     secosw, sesinw: (sqrt(e) cos w, sqrt(e) sin w), scalars or (n,).
         Omit both for a circular orbit (the default). Given, the orbit
         is the transit-anchored eccentric one (``anchored.py``), the

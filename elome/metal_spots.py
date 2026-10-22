@@ -652,20 +652,20 @@ def spot_cols_kernel(X, Y, rp, n, alpha, contrast, law, active=None):
 # ---------------------------------------------------------------------------
 
 _EV_FN = r"""
-// the planet and one spot at time t (spots_tau's frames)
-inline void sp_state(float t, float t0, float ep, float per, float av, ORB_ARGS,
+// the planet and one spot at planet time t (since mid-transit) and star
+// time t + ds (since the spots' epoch) (spots_tau's frames)
+inline void sp_state(float t, float ds, float per, float av, ORB_ARGS,
                      float prot, float istar, float lam, float lon, float lat,
                      float al, thread float *Xo, thread float *Yo, thread bool *fo,
                      thread sp_rim &R) {
-    float tau = t - t0;
-    tau = tau - per * metal::rint(tau / per);
+    float tau = t;
     float X, Y;
     bool front;
     ORB_XY
     *Xo = X; *Yo = Y; *fo = front;
     float si = metal::precise::sin(istar), ci = metal::precise::cos(istar);
     float sl = metal::precise::sin(lam), cl = metal::precise::cos(lam);
-    float ph = lon + MP_TWO_PI * (t - ep) / prot;
+    float ph = lon + MP_TWO_PI * (t + ds) / prot;
     float sp = metal::precise::sin(ph), cp = metal::precise::cos(ph);
     float sb = metal::precise::sin(lat), cb = metal::precise::cos(lat);
     float u = cb * cp, v = cb * sp;
@@ -676,13 +676,13 @@ inline void sp_state(float t, float t0, float ep, float per, float av, ORB_ARGS,
 }
 
 // planet-rim corners on the spot's visible rim (spots_tau._corner_count)
-inline int sp_count_at(float t, float t0, float ep, float per, float av, ORB_ARGS,
+inline int sp_count_at(float t, float ds, float per, float av, ORB_ARGS,
                        float prot, float istar, float lam, float lon, float lat,
                        float al, float r, thread float *psi, thread bool *vis) {
     float X, Y;
     bool front;
     sp_rim R;
-    sp_state(t, t0, ep, per, av, ORB_PASS, prot, istar, lam, lon, lat, al, &X, &Y,
+    sp_state(t, ds, per, av, ORB_PASS, prot, istar, lam, lon, lat, al, &X, &Y,
              &front, R);
     for (int i = 0; i < 4; ++i) vis[i] = false;
     if (!front) return 0;
@@ -703,8 +703,8 @@ _EV_SRC = """
     uint e = xk / (uint)NSPOT, k = xk - e * (uint)NSPOT;
     if (e >= (uint)m) return;
     uint i = y * (uint)m + e;
-    float tc = tci[i];
-    float t0 = t0in[y], ep = epin[y], per = perin[y], av = ain[y];
+    float tc = tci[i], ds = dsi[i];
+    float per = perin[y], av = ain[y];
 ORB_LOAD
     float r = rin[y], prot = protin[y], istar = isin[y], lam = lamin[y];
     float lon = spin[(y * (uint)NSPOT + k) * 4u], lat = spin[(y * (uint)NSPOT + k) * 4u + 1u];
@@ -713,12 +713,13 @@ ORB_LOAD
     int S = nsample;
     float ps[4]; bool vs[4];
     float lo[NEV], hi[NEV]; int clo[NEV];
+#define SP_COUNT(TT, PS, VS) sp_count_at(TT, ds, per, av, ORB_PASS, prot, istar, lam, lon, lat, al, r, PS, VS)
     int ne = 0;
     float tp = t1;
-    int cp = sp_count_at(t1, t0, ep, per, av, ORB_PASS, prot, istar, lam, lon, lat, al, r, ps, vs);
+    int cp = SP_COUNT(t1, ps, vs);
     for (int s = 1; s <= S; ++s) {
         float ts = t1 + (t2 - t1) * ((float)s / (float)S);
-        int c = sp_count_at(ts, t0, ep, per, av, ORB_PASS, prot, istar, lam, lon, lat, al, r, ps, vs);
+        int c = SP_COUNT(ts, ps, vs);
         if (c != cp && ne < NEV) { lo[ne] = tp; hi[ne] = ts; clo[ne] = cp; ++ne; }
         cp = c; tp = ts;
     }
@@ -728,15 +729,15 @@ ORB_LOAD
         float a = lo[q], b = hi[q];
         for (int it = 0; it < NBISECT; ++it) {
             float mid = 0.5f * (a + b);
-            int c = sp_count_at(mid, t0, ep, per, av, ORB_PASS, prot, istar, lam, lon, lat, al, r, ps, vs);
+            int c = SP_COUNT(mid, ps, vs);
             if (c == clo[q]) a = mid; else b = mid;
         }
         float tev = 0.5f * (a + b);
-        int chi = sp_count_at(b, t0, ep, per, av, ORB_PASS, prot, istar, lam, lon, lat, al, r, ps, vs);
+        int chi = SP_COUNT(b, ps, vs);
         bool tang = abs(chi - clo[q]) == 2;
         float more = (chi > clo[q]) ? b : a;
         float pm[4]; bool vm[4];
-        sp_count_at(more, t0, ep, per, av, ORB_PASS, prot, istar, lam, lon, lat, al, r, pm, vm);
+        SP_COUNT(more, pm, vm);
         float best = INFINITY, psi_t = 0.0f;
         for (int u1 = 0; u1 < 4; ++u1)
             for (int u2 = u1 + 1; u2 < 4; ++u2) {
@@ -746,7 +747,7 @@ ORB_LOAD
             }
         // the limb point the corner passed: |q| smaller at te
         float X, Y; bool front; sp_rim R;
-        sp_state(tev, t0, ep, per, av, ORB_PASS, prot, istar, lam, lon, lat, al, &X, &Y, &front, R);
+        sp_state(tev, ds, per, av, ORB_PASS, prot, istar, lam, lon, lat, al, &X, &Y, &front, R);
         float x1, y1, x2, y2, mu_;
         sp_rim_sky(R, R.psi_limb, &x1, &y1, &mu_);
         sp_rim_sky(R, MP_PI - R.psi_limb, &x2, &y2, &mu_);
@@ -756,6 +757,7 @@ ORB_LOAD
         code[oo + q] = tang ? 1.0f : ((fabs(q2) < fabs(q1)) ? 3.0f : 2.0f);
         psit[oo + q] = psi_t;
     }
+#undef SP_COUNT
 """
 
 
@@ -783,17 +785,19 @@ def _events_kernel(law, K, orbit):
             + M._subst(fill(_EV_FN))
         M._kernels[key] = mx.fast.metal_kernel(
             name=f"mp_spev_{_law_tag(law)}_k{int(K)}_{orbit}",
-            input_names=["tci", "t0in", "epin", "perin", "ain"] + plug["inputs"]
+            input_names=["tci", "dsi", "perin", "ain"] + plug["inputs"]
             + ["rin", "protin", "isin", "lamin", "spin", "hexp", "nsample", "m"],
             output_names=["te", "code", "psit"], header=hdr,
             source=M._subst(fill(_EV_SRC)))
     return M._kernels[key]
 
 
-def spot_events_kernel(tt, half, t0, epoch, period, a, shape, r, prot, istar, lam,
-                       spots4, law, n_sample, orbit="circ"):
+def spot_events_kernel(tt, ds, half, period, a, shape, r, prot, istar, lam, spots4, law,
+                       n_sample, orbit="circ"):
     """The event search of ``spots_tau._spot_events`` in one fp32 launch,
-    detached: for exposures centred on tt (n, m) of half-length ``half``,
+    detached: for exposures centred on planet times tt (n, m, since each
+    point's mid-transit) of half-length ``half``, the star's clock ahead of
+    the planet's by ds (n, m),
     per spot the first _E_SPOT times at which the visible planet-rim
     corner count changes, (n, m, K, E) each of: the time (+inf if none),
     its kind (0 none, 1 a tangency, 2 / 3 a corner passing the rim's first
@@ -804,7 +808,7 @@ def spot_events_kernel(tt, half, t0, epoch, period, a, shape, r, prot, istar, la
     n, m = tt.shape
     K = spots4.shape[-2]
     f32 = lambda v: sg(v).astype(mx.float32)
-    ins = [f32(tt), *(f32(v) for v in (t0, epoch, period, a, shape, r, prot, istar, lam)),
+    ins = [f32(tt), f32(ds), *(f32(v) for v in (period, a, shape, r, prot, istar, lam)),
            f32(spots4), float(half), int(n_sample), int(m)]
     shp = (n, m, K, _E_SPOT)
     te, code, psit = _events_kernel(law, K, orbit)(

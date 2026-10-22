@@ -4,8 +4,9 @@
 likelihood. It takes per-chain parameters and per-chain times and
 returns per-chain flux deviations $F - 1$, from one fused GPU kernel per
 call, with analytic gradients in every input. The same call covers
-spherical and oblate planets, every limb-darkening law, circular and
-eccentric orbits, and every exposure rule.
+spherical, oblate and ringed planets and spotted stars, every
+limb-darkening law, circular and eccentric orbits, and every exposure
+rule.
 
 ```python
 from elome import flux_dev_from_tau
@@ -24,6 +25,7 @@ flux = 1.0 + dev
 | `u1`, `u2` | scalar or `(n,)` | quadratic limb darkening |
 | `limb_dark`, `u` | name; `(n_w,)` or `(n, n_w)` | a hybrid law and its weights, instead of `u1`, `u2` |
 | `f`, `theta` | scalar or `(n,)` | an oblate planet; `theta` in radians |
+| `spots`, `spot_time`, `prot`, `istar`, `lam` | `(K, 4)` or `(n, K, 4)`; like `tau`; scalar or `(n,)` | a spotted star (below); angles in radians |
 | `secosw`, `sesinw` | scalar or `(n,)` | an eccentric orbit, $(\sqrt{e}\cos\omega, \sqrt{e}\sin\omega)$ |
 | `exp_time`, `integration`, `n_gl`, `n_sub` | | the exposure rule; see {doc}`exposures` |
 | `ld_basis` | bool | return the limb-darkening basis instead (below) |
@@ -132,6 +134,61 @@ The eccentric orbit costs a Kepler solve at each quadrature node: at
 (`benchmarks/bench_tau_ecc.py`). Chains at $e = 0$ skip the solve but
 still run in the larger kernel, so leave `secosw` and `sesinw` unset for
 a purely circular fit.
+
+## Starspots: `spots`, `spot_time`
+
+A spotted star (see {doc}`../spots/index`) needs a second clock. The
+planet's position follows `tau`, the time since each point's own
+mid-transit; the spots' positions follow `spot_time`, each point's time
+since the spots' reference epoch, because the star turns between
+transits. Both are ordinary differentiable inputs that the caller builds:
+
+```python
+import mlx.core as mx
+import numpy as np
+from elome import flux_dev_from_tau
+
+n, m = 64, 2000                                   # chains, points
+t = np.linspace(-0.14, 0.14, m)                   # times [days], here near one transit
+tau = mx.array(np.tile(t, (n, 1)), dtype=mx.float32)
+spot_time = tau + 0.4                             # the spots' epoch 0.4 d before t0
+spots = mx.array(np.radians([[10.0, -17.0, 8.0], [50.0, 15.0, 10.0]]), dtype=mx.float32)
+spots = mx.concatenate([spots, mx.array([[0.5], [0.6]], dtype=mx.float32)], axis=1)
+
+dev = flux_dev_from_tau(tau, 3.45, 8.84, 0.3, 0.115, limb_dark="hybrid4",
+                        u=[0.2, 0.2, 0.1, 0.1], spots=spots, spot_time=spot_time,
+                        prot=12.0, istar=1.4, lam=0.2,
+                        exp_time=29.4 / 60 / 24, integration="contact")
+```
+
+- `spots` holds one row per spot: longitude, latitude and angular radius
+  in **radians** (the frontend's are in degrees), and contrast. Shared
+  as `(K, 4)` or per chain as `(n, K, 4)`. Every chain in a call has
+  the same number of spots; a chain with fewer takes rows of contrast 1,
+  which are no spot.
+- `prot` is the rotation period in `tau`'s units, `istar` and `lam` the
+  spin axis's inclination and sky-projected obliquity in radians
+  (defaults $\pi/2$ and 0).
+- Gradients flow in `tau`, `spot_time`, every spot entry, `prot`,
+  `istar`, `lam` and the rest. A fitted spot epoch is
+  `spot_time = t - epoch` with `epoch` a sampled parameter; transit
+  timing variations change `tau` and leave `spot_time` alone.
+- The flux is normalised to the unspotted star, so out of transit it is
+  the spots' rotational modulation, not 0.
+- `integration="contact"` also splits each exposure at the moments the
+  planet meets a spot's edge (see {doc}`../spots/light-curves`);
+  `"supersample"` and `"none"` work as for any planet. `ld_basis=True`
+  returns the basis, under the usual contract.
+- **Call it eagerly, not under `mx.compile` or `mx.vmap`**, which raise.
+  The spotted model reads values back to the host (to find the exposures'
+  split points and skip the empty ones), which a transform cannot, and
+  its float32 kernels are already fused, so compiling would gain nothing.
+  Compile the rest of a likelihood separately if it helps.
+- In float32 the star's phase $2\pi\,$`spot_time`$/$`prot` carries a
+  relative error of about $6	imes10^{-8}$. Over a 1,000-day baseline
+  on a star turning in a day that is about $4	imes10^{-4}$ rad. Keep
+  `|spot_time|` small by putting the spots' epoch within the data, or
+  use float64 for long baselines on fast rotators.
 
 ## Separations instead of times: `flux_dev_metal`
 

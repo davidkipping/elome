@@ -509,3 +509,181 @@ def test_sample_count():
     assert sample_count(1e-4, 9.0, 3.0, 0.1) == _S_MIN               # short cadence
     assert sample_count(30 / 1440, 9.0, 3.0, 0.1) == 16
     assert sample_count(30 / 1440, 9.0, 3.0, 1e-4) == _S_MAX
+
+
+# ---------------------------------------------------------------------------
+# the sampler API: flux_dev_from_tau(..., spots=, spot_time=)
+# ---------------------------------------------------------------------------
+
+def _rad(spots):
+    s = np.asarray(spots, dtype=np.float64)
+    return np.concatenate([np.radians(s[..., :3]), s[..., 3:]], axis=-1)
+
+
+def _sampler(p, t, dtype=mx.float64, **kw):
+    """flux_dev_from_tau for TransitParams p at times t: tau since the
+    ephemeris' nearest transit, spot_time since the spots' epoch."""
+    epoch = p.t0 if p.spot_epoch is None else p.spot_epoch
+    tau = (t - p.t0 + 0.5 * p.per) % p.per - 0.5 * p.per
+    b = p.a * math.cos(D(p.inc))
+    ecc = {}
+    if p.ecc:
+        e, w = p.ecc, D(p.w)
+        b = b * (1 - e * e) / (1 + e * math.sin(w))
+        ecc = dict(secosw=math.sqrt(e) * math.cos(w), sesinw=math.sqrt(e) * math.sin(w))
+    stream = mx.cpu if dtype == mx.float64 else mx.gpu
+    with mx.stream(stream):
+        out = el.flux_dev_from_tau(
+            mx.array(tau, dtype=dtype), p.per, p.a, b, p.rp, limb_dark=p.limb_dark, u=p.u,
+            spots=_rad(p.spots), spot_time=mx.array(t - epoch, dtype=dtype), prot=p.prot,
+            istar=D(90.0 if p.istar is None else p.istar), lam=D(0.0 if p.lam is None else p.lam),
+            **ecc, **kw)
+        return np.array(out)
+
+
+@pytest.mark.parametrize("rule", ["none", "contact"])
+@pytest.mark.parametrize("kw", [dict(), dict(ecc=0.3, w=50.0, lam=25.0, istar=70.0)],
+                         ids=["circular", "eccentric oblique"])
+def test_sampler_api_is_the_model(kw, rule):
+    p = P(**kw, spot_epoch=0.4)
+    t = np.linspace(-0.12, 0.12, 61)
+    mk = dict(integration="contact", exp_time=EXP, n_gl=7) if rule == "contact" else {}
+    sk = dict(integration="contact", exp_time=EXP, n_gl=7) if rule == "contact" else {}
+    ref = el.TransitModel(p, t, **mk).light_curve(p) - 1.0
+    got = _sampler(p, t, **sk)
+    assert np.max(np.abs(got - ref)) < 1e-14
+
+
+def test_sampler_api_with_timing_variations():
+    """Each transit at its own mid-time (TTVs), the star on one clock: the
+    model of each transit with its own t0 and the shared spot epoch."""
+    per, shifts = 3.0, [0.0, 0.004, -0.006]
+    t = np.concatenate([k * per + np.linspace(-0.1, 0.1, 21) for k in range(3)])
+    mid = np.repeat([k * per + s for k, s in enumerate(shifts)], 21)
+    p = P(prot=4.0, spot_epoch=0.0)
+    b = p.a * math.cos(D(p.inc))
+    with mx.stream(mx.cpu):
+        got = np.array(el.flux_dev_from_tau(
+            mx.array(t - mid, dtype=mx.float64), per, p.a, b, p.rp, limb_dark=p.limb_dark,
+            u=p.u, spots=_rad(p.spots), spot_time=mx.array(t, dtype=mx.float64),
+            prot=p.prot, integration="contact", exp_time=EXP, n_gl=7))
+    ref = []
+    for k, s in enumerate(shifts):
+        q = P(prot=4.0, spot_epoch=0.0)
+        q.t0 = k * per + s
+        tk = t[21 * k:21 * (k + 1)]
+        ref.append(el.TransitModel(q, tk, integration="contact", exp_time=EXP).light_curve(q) - 1)
+    assert np.max(np.abs(got - np.concatenate(ref))) < 1e-14
+
+
+@pytest.mark.parametrize("rule", ["none", "contact"])
+def test_sampler_api_gradients(rule):
+    """Gradients in tau, spot_time, the orbit, the star and the spot table,
+    against central differences of the same call."""
+    p = P(spots=[[8.0, LAT_CHORD, 5.0, 0.3], [40.0, 15.0, 10.0, 0.6]], prot=4.0)
+    tau0 = np.linspace(-0.06, 0.06, 13)
+    kw = dict(integration="contact", exp_time=EXP) if rule == "contact" else {}
+    b = p.a * math.cos(D(p.inc))
+    wts = mx.array(np.linspace(1.0, 2.0, tau0.size), dtype=mx.float64)
+    names = ["tau", "spot_time", "r", "b", "prot", "istar", "lam", "spots"]
+    base = dict(tau=tau0, spot_time=tau0 + 0.7, r=0.1, b=b, prot=4.0, istar=D(80.0),
+                lam=D(10.0), spots=_rad(p.spots))
+
+    def F(*vals):
+        v = dict(zip(names, vals))
+        out = el.flux_dev_from_tau(v["tau"], p.per, p.a, v["b"], v["r"], limb_dark=p.limb_dark,
+                                   u=p.u, spots=v["spots"], spot_time=v["spot_time"],
+                                   prot=v["prot"], istar=v["istar"], lam=v["lam"], **kw)
+        return mx.sum(out * wts)
+    arr = lambda x: mx.array(np.asarray(x, dtype=np.float64), dtype=mx.float64)  # noqa: E731
+    with mx.stream(mx.cpu):
+        g = mx.grad(F, argnums=list(range(len(names))))(*[arr(base[k]) for k in names])
+        for j, k in enumerate(names):
+            x = np.asarray(base[k], dtype=np.float64)
+            for idx in [()] if x.ndim == 0 else [(3,), (7,)] if k in ("tau", "spot_time") \
+                    else [(0, 0), (0, 2), (1, 1), (1, 3)]:
+                hstep = 1e-6 * max(abs(float(x[idx])), 1.0)
+                up, dn = x.copy(), x.copy()
+                up[idx] += hstep
+                dn[idx] -= hstep
+                vals = lambda z: [arr(z if n == k else base[n]) for n in names]  # noqa: E731
+                fd = (F(*vals(up)).item() - F(*vals(dn)).item()) / (2 * hstep)
+                ad = float(np.asarray(g[j])[idx])
+                assert abs(ad - fd) < 1e-6 * max(abs(fd), 1e-3), (k, idx)
+
+
+def test_sampler_api_per_chain_spots_and_padding():
+    """(n, K, 4) spot tables equal one call per chain; a contrast-1 row is
+    no spot (how chains with fewer spots share a batch)."""
+    p = P()
+    tau = np.linspace(-0.1, 0.1, 31)
+    b = p.a * math.cos(D(p.inc))
+    sp = _rad(p.spots)
+    tables = np.stack([sp, sp * [1.2, 0.8, 1.1, 1.0], np.array([sp[0], [0.3, 0.1, 0.2, 1.0]])])
+    kw = dict(limb_dark=p.limb_dark, u=p.u, prot=12.0, integration="contact", exp_time=EXP)
+    with mx.stream(mx.cpu):
+        T = mx.array(tau, dtype=mx.float64)
+        st = mx.array(tau + 0.3, dtype=mx.float64)
+        batch = np.array(el.flux_dev_from_tau(T, p.per, p.a, b, p.rp, spots=tables,
+                                              spot_time=st, **kw))
+        for i in range(3):
+            one = np.array(el.flux_dev_from_tau(T, p.per, p.a, b, p.rp, spots=tables[i],
+                                                spot_time=st, **kw))
+            assert np.max(np.abs(batch[i] - one)) < 1e-15
+        one_spot = np.array(el.flux_dev_from_tau(T, p.per, p.a, b, p.rp, spots=sp[:1],
+                                                 spot_time=st, **kw))
+    assert np.max(np.abs(batch[2] - one_spot)) < 1e-9          # quadrature level
+    with mx.stream(mx.cpu):
+        none = np.array(el.flux_dev_from_tau(T, p.per, p.a, b, p.rp, limb_dark=p.limb_dark,
+                                             u=p.u))
+        flat = np.array(el.flux_dev_from_tau(T, p.per, p.a, b, p.rp, limb_dark=p.limb_dark,
+                                             u=p.u, spots=[[0.3, 0.1, 0.2, 1.0]],
+                                             spot_time=st, prot=12.0))
+    assert np.max(np.abs(flat - none)) < 2e-15
+
+
+def test_sampler_api_basis_and_supersampling():
+    p = P()
+    t = np.linspace(-0.1, 0.1, 21)
+    B = _sampler(p, t, ld_basis=True)
+    from elome.hybrid import get_law
+    law = get_law(p.limb_dark)
+    c = np.concatenate([[1.0], -np.asarray(p.u)])
+    assert np.max(np.abs((B @ c) / (hybrid_norms(law) @ c) - _sampler(p, t))) < 1e-15
+    sub = _sampler(p, t, integration="supersample", exp_time=EXP, n_sub=5)
+    x = ((np.arange(5) + 0.5) / 5 - 0.5) * EXP
+    nodes = np.mean([_sampler(p, t + dx) for dx in x], axis=0)
+    assert np.max(np.abs(sub - nodes)) < 1e-15
+
+
+def test_sampler_api_float32_kernels():
+    p = P(spots=[[8.0, LAT_CHORD, 5.0, 0.3], [40.0, 15.0, 10.0, 0.6]], prot=4.0)
+    t = np.linspace(-0.1, 0.1, 81)
+    for kw in (dict(), dict(integration="contact", exp_time=EXP)):
+        assert np.max(np.abs(_sampler(p, t, mx.float32, **kw) - _sampler(p, t, **kw))) < 2e-7
+
+
+@pytest.mark.parametrize("kw, msg", [
+    (dict(spots=[[0.1, 0.1, 0.1, 0.5]], prot=3.0), "spot_time= and prot="),
+    (dict(spot_time=np.zeros(5)), "pass spots= too"),
+    (dict(spots=[[0.1, 0.1, 0.1, 0.5]], spot_time=np.zeros(5), prot=3.0, f=0.1),
+     "spherical planet"),
+    (dict(spots=[[0.1, 0.1, 2.0, 0.5]], spot_time=np.zeros(5), prot=3.0), "radians"),
+])
+def test_sampler_api_checks(kw, msg):
+    with pytest.raises(ValueError, match=msg):
+        el.flux_dev_from_tau(np.zeros(5), 3.0, 9.0, 0.2, 0.1, limb_dark="hybrid4",
+                             u=W, **kw)
+    with pytest.raises(ValueError, match="hybrid law"):
+        el.flux_dev_from_tau(np.zeros(5), 3.0, 9.0, 0.2, 0.1, 0.4, 0.2,
+                             spots=[[0.1, 0.1, 0.1, 0.5]], spot_time=np.zeros(5), prot=3.0)
+
+
+def test_sampler_api_refuses_compile():
+    """Under mx.compile the spotted graph cannot read its values back (and
+    trips MLX's compiler): a clear error, not a crash."""
+    def f(tau):
+        return el.flux_dev_from_tau(tau, 3.0, 9.0, 0.2, 0.1, limb_dark="hybrid4", u=W,
+                                    spots=[[0.1, 0.1, 0.1, 0.5]], spot_time=tau, prot=3.0)
+    with mx.stream(mx.cpu), pytest.raises(ValueError, match="mx.compile"):
+        mx.compile(f)(mx.array(np.linspace(-0.1, 0.1, 5), dtype=mx.float64))

@@ -59,10 +59,12 @@ What differs:
 - **The flux is not 1 out of transit.** It is the spots' rotational
   modulation, relative to the unspotted star; see
   {doc}`accuracy-and-fitting` for what that means for a fit.
-- **The frontend only.** The sampler API (`flux_dev_from_tau`) takes the
-  time since mid-transit, but spots need absolute time, since the star
-  turns between transits. Batch parameter sets through `light_curves`
-  instead.
+- **Two clocks in the sampler API.** `flux_dev_from_tau` takes the
+  planet's time since mid-transit as for any planet, and the star's time
+  since the spots' epoch as `spot_time`, since the star turns between
+  transits (see {doc}`light-curves`).
+- **Not under `mx.compile` or `mx.vmap`.** Call a spotted model eagerly;
+  its float32 kernels are already fused.
 - **Cost.** Every visible spot's outline is integrated at every time, in
   transit or not, so a spotted star costs more than a bare transit, in
   proportion to the number of spots. Spherical, oblate and ringed models

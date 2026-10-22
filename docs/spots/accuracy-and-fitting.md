@@ -131,6 +131,11 @@ parameter, and batched float32 kernels on the GPU.
 - **Fix the number of spots per model.** Compare models with different
   numbers of spots by their evidence, not by letting a contrast run to
   1.
-- **Batch the chains.** `light_curves` evaluates every parameter set in
-  one call (`spots` of shape (n_sets, K, 4)); in float32 on the GPU it
-  runs the kernels. See {doc}`../guides/batching`.
+- **Batch the chains.** `flux_dev_from_tau` with `spots=` evaluates every
+  chain in one call, with gradients (`spots` of shape (n, K, 4)); in
+  float32 on the GPU it runs the kernels. Call it eagerly, not under
+  `mx.compile`. See {doc}`../guides/sampler-api`.
+- **Keep the spots' epoch near the data.** The star's phase grows with
+  the time since the epoch, and float32 carries it to about
+  $6\times10^{-8}$ of itself: an epoch in the middle of the data keeps
+  that error smallest.

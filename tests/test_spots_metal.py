@@ -250,12 +250,14 @@ def test_events_match_the_graph():
     tt = mx.array(np.linspace(-0.04, 0.04, 33)[None, :], dtype=mx.float32)
     sp4 = f(np.radians(np.array(p.spots)) * [1, 1, 1, 0] + [0, 0, 0, 1] * np.array(p.spots))[None]
     b = p.a * math.cos(D(p.inc))
-    args = [f(0.0), f(0.0), f(p.per), f(p.a), f(b), f(p.rp), f(p.prot), f(D(90.0)), f(0.0)]
+    args = [f(p.per), f(p.a), f(b), f(p.rp), f(p.prot), f(D(90.0)), f(0.0)]
+    off = mx.full(tt.shape, 0.37, dtype=mx.float32)        # the star's clock, ahead
     half = 0.5 * EXP
     S = ST.sample_count(EXP, p.a, p.per, p.rp)
     with mx.stream(mx.gpu):
-        ek, ekf = ST._kernel_events(tt, half, *args, sp4, law, S)
-        eg, egf = ST._events_fn(mx.float32, S, False, False)(tt - half, tt + half, *args, sp4)
+        ek, ekf = ST._kernel_events(tt, off, half, *args, sp4, law, S)
+        eg, egf = ST._events_fn(mx.float32, S, False, False)(tt - half, tt + half, off,
+                                                             *args, sp4)
         assert np.array_equal(np.array(ek), np.array(ekf))      # the frozen copy
         assert np.array_equal(np.array(eg), np.array(egf))
         ek, eg = np.array(ek), np.array(eg)
