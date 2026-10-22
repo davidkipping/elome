@@ -5,6 +5,18 @@ every release is tagged `vX.Y.Z` in git.
 
 ## [Unreleased]
 
+### Added
+- **Starspots crossed by a planet, the reference graph** (`elome.spots`,
+  hybrid laws only): circular spots on the stellar surface (centre,
+  angular radius, contrast; overlapping spots add, so an umbra in a
+  penumbra is two concentric spots) and a spherical planet, exact by
+  Green's theorem in float64 and float32 with gradients in every
+  parameter. `shape_cols_spots` keeps the `ld_basis` contract, normalised
+  to the unspotted star, so the columns carry the spots' rotational
+  modulation as well as the crossing. Checked against an independent
+  two-method reference (`tests/spot_oracle.py`). Not yet a `TransitModel`
+  option.
+
 ### Documentation
 - The sampler guide's exposure-kernel and hybrid-law tables and the oblate
   kernel table, re-measured (the spherical contact-rule kernels are about
