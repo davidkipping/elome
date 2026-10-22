@@ -25,7 +25,11 @@ every release is tagged `vX.Y.Z` in git.
   split points carry their implicit derivatives, so `light_curve_mx`'s
   gradient is that of the quadrature evaluated. A spot rim reaching the
   limb, and two spots starting to overlap, are not split (slow,
-  curvature-only kinks).
+  curvature-only kinks). A float32 model on the GPU runs fused Metal
+  kernels (`use_metal=False` for the graph): the columns and their
+  gradient per point, and the contact rule's event search per exposure;
+  the orbit, the star's rotation and the quadrature stay graph operations
+  around them.
 
 ### Documentation
 - The sampler guide's exposure-kernel and hybrid-law tables and the oblate

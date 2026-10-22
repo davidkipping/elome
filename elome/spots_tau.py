@@ -73,6 +73,7 @@ _TWO_PI = 2.0 * math.pi
 # evaluation points per block of the graph (oblate_tau._in_blocks): the
 # columns hold their fp64 intermediates until evaluated
 _SPOT_BLOCK = 1 << 14
+_SPOT_BLOCK_KERNEL = 1 << 18                      # the kernels hold nothing per point
 _K_SPLIT = 6                                      # split points per exposure
 _S_MIN, _S_MAX = 8, 256                           # count samples per exposure
 _E_SPOT = 4                                       # changes bisected per spot
@@ -161,19 +162,7 @@ def _spot_events(t1, t2, cols, sp, dt, n_sample):
     sg = mx.stop_gradient
     t1, t2 = sg(t1), sg(t2)
     K = sp.shape[-2]
-    s4 = sp[:, None, None]                    # (n, 1, 1, K, 4)
-
-    def geom(tt, live):
-        f = (lambda v: v) if live else sg
-        t0, ep, per, a, b, r, prot, istar, lam, eo = cols(3)
-        t0, ep, per, a, b, r, prot, istar, lam = (f(v) for v in (t0, ep, per, a, b, r, prot,
-                                                                istar, lam))
-        eo = None if eo is None else (f(eo[0]), tuple(f(c) for c in eo[1]))
-        tau = tt - t0
-        tau = tau - per * mx.round(tau / per)
-        X, Y, _, _, front = _sky((_TWO_PI / per) * tau, a, b, eo)
-        nv = _spot_xyz(tt - ep, prot, istar, lam, f(s4[..., 0]), f(s4[..., 1]))
-        return X, Y, front, r, nv, f(s4[..., 2])
+    geom = _event_geom(cols, sp)
 
     def count(tt):                           # tt (n, m, J, K) -> (n, m, J, K)
         return _corner_count(*geom(tt, False), dt)
@@ -213,25 +202,54 @@ def _spot_events(t1, t2, cols, sp, dt, n_sample):
             best = mx.where(closer, dist, best)
             psi_t = mx.where(closer, psis[i] + 0.5 * dpsi, psi_t)
 
-    def q_at(tt, live, which=None):
+    X, Y, _, r, nv, al = geom(te, False)
+    rim = _Rim(nv[..., 0], nv[..., 1], nv[..., 2], al, dt)
+    q1, q2 = (_q(rim, X, Y, r, p) for p in (rim.psi_limb, math.pi - rim.psi_limb))
+    which = mx.abs(q2) < mx.abs(q1)                 # the limb point the corner passed
+    ev = _live_events(te, ok, tangency, psi_t, which, geom, dt)
+    return mx.reshape(ev, ev.shape[:-2] + (_E_SPOT * K,))
+
+
+def _event_geom(cols, sp):
+    """geom(tt, live) -> (X, Y, front, r, n, alpha) of the planet and the
+    spots at times tt (n, m, J, K); frozen unless ``live``. ``cols(nk)``
+    the per-set parameters for nk trailing axes, sp (n, K, 4)."""
+    sg = mx.stop_gradient
+    s4 = sp[:, None, None]                    # (n, 1, 1, K, 4)
+
+    def geom(tt, live):
+        f = (lambda v: v) if live else sg
+        t0, ep, per, a, b, r, prot, istar, lam, eo = cols(3)
+        t0, ep, per, a, b, r, prot, istar, lam = (f(v) for v in (t0, ep, per, a, b, r, prot,
+                                                                istar, lam))
+        eo = None if eo is None else (f(eo[0]), tuple(f(c) for c in eo[1]))
+        tau = tt - t0
+        tau = tau - per * mx.round(tau / per)
+        X, Y, _, _, front = _sky((_TWO_PI / per) * tau, a, b, eo)
+        nv = _spot_xyz(tt - ep, prot, istar, lam, f(s4[..., 0]), f(s4[..., 1]))
+        return X, Y, front, r, nv, f(s4[..., 2])
+    return geom
+
+
+def _live_events(te, ok, tangency, psi_t, which, geom, dt):
+    """The event times te (frozen) with their implicit derivative in the
+    parameters (see _spot_events): ``tangency`` an event's kind, ``psi_t``
+    a tangency's touching rim parameter, ``which`` the limb point (pi -
+    psi_limb if True) a corner passed; +inf where not ``ok``."""
+    sg = mx.stop_gradient
+
+    def q_at(tt, live):
         X, Y, front, r, nv, al = geom(tt, live)
         rim = _Rim(nv[..., 0], nv[..., 1], nv[..., 2], al, dt)
-        pl = (rim.psi_limb, math.pi - rim.psi_limb)
-        if which is None:
-            return [_q(rim, X, Y, r, p) for p in pl]
-        psi = mx.where(tangency, sg(psi_t), mx.where(which, pl[1], pl[0]))
+        psi = mx.where(tangency, sg(psi_t),
+                       mx.where(which, math.pi - rim.psi_limb, rim.psi_limb))
         return _q(rim, X, Y, r, psi)
-
-    q1, q2 = q_at(te, False)
-    which = mx.abs(q2) < mx.abs(q1)                 # the limb point the corner passed
-    q_live = q_at(te, True, which)
-    _, q_t = mx.jvp(lambda tt: q_at(tt, False, which), [te], [mx.ones_like(te)])
+    q_live = q_at(te, True)
+    _, q_t = mx.jvp(lambda tt: q_at(tt, False), [te], [mx.ones_like(te)])
     q_t = sg(q_t[0])
     good = ok & (mx.abs(q_t) > 0.0)
     shift = (q_live - sg(q_live)) / mx.where(good, q_t, 1.0)
-
-    ev = mx.where(ok, te - mx.where(good, shift, 0.0), mx.inf)
-    return mx.reshape(ev, ev.shape[:-2] + (_E_SPOT * K,))
+    return mx.where(ok, te - mx.where(good, shift, 0.0), mx.inf)
 
 
 def _events_fn(dt, n_sample, ecc, ew):
@@ -259,6 +277,35 @@ def _events_fn(dt, n_sample, ecc, ew):
 
 
 _EVENTS: dict = {}
+
+
+def _kernel_events(tt, half, t0, epoch, period, a, b, r, prot, istar, lam, spots4, law,
+                   n_sample, k=None, h=None, ew=False):
+    """_events_fn's route on the fp32 kernels, for exposures centred on tt
+    (n, m): the search in one launch (``metal_spots.spot_events_kernel``),
+    the live correction (_live_events) as graph operations."""
+    from .metal_spots import spot_events_kernel
+    dt = tt.dtype
+
+    def cols(nk):
+        sh = (-1,) + (1,) * nk
+        c = [mx.reshape(v, sh) for v in (t0, epoch, period, a, b, r, prot, istar, lam)]
+        eo = None if k is None else _orbit_consts(c[3], c[4], mx.reshape(k, sh),
+                                                  mx.reshape(h, sh), ew)
+        return c + [eo]
+    if k is None:
+        orbit, shape = "circ", b
+    else:
+        from .anchored import pack_orbit_constants
+        ci, consts = _orbit_consts(a, b, k, h, ew)
+        orbit, shape = "ecc", pack_orbit_constants(None, None, ci, consts=consts)
+    te, code, psit = spot_events_kernel(tt, half, t0, epoch, period, a, shape, r, prot,
+                                        istar, lam, spots4, law, n_sample, orbit)
+    te, code, psit = (mx.transpose(v, (0, 1, 3, 2)) for v in (te, code, psit))
+    ok = code > 0.0
+    te = mx.where(ok, te, tt[..., None, None])        # finite geometry where none
+    ev = _live_events(te, ok, code == 1.0, psit, code == 3.0, _event_geom(cols, spots4), dt)
+    return mx.reshape(ev, ev.shape[:-2] + (-1,))
 
 
 def _q(rim, X, Y, r, psi):
@@ -312,11 +359,12 @@ def _exposure_nodes(tt, exp_time, events, n_gl, dt):
 
 def _tau_graph(tt, t0, epoch, period, a, b, r, prot, istar, lam, spots4, w2d, law,
                basis=False, k=None, h=None, ew=False, exp_time=0.0, n_gl=5,
-               n_sample=_S_MIN):
+               n_sample=_S_MIN, kernel=False):
     """F - 1 (or the basis columns) at times tt (n, m): per-set (n,)
     parameters, spots4 (n, K, 4) of (lon, lat, alpha [rad], contrast).
     ``exp_time`` > 0: the contact rule, n_gl nodes per piece and n_sample
-    count samples per exposure."""
+    count samples per exposure. ``kernel``: the columns and the event
+    search by the fp32 Metal kernels (``metal_spots``)."""
     dt = tt.dtype
 
     def cols(nk):
@@ -326,7 +374,7 @@ def _tau_graph(tt, t0, epoch, period, a, b, r, prot, istar, lam, spots4, w2d, la
                                                   mx.reshape(h, sh), ew)
         return c + [eo]
 
-    def inst(T, nk):
+    def inst(T, nk, active=None):
         t0c, ep, per, av, bv, rv, prot_, istar_, lam_, eo = cols(nk)
         tau = T - t0c
         tau = tau - per * mx.round(tau / per)
@@ -336,22 +384,29 @@ def _tau_graph(tt, t0, epoch, period, a, b, r, prot, istar, lam, spots4, w2d, la
         Y = mx.where(front, Y, 0.0)
         sp = mx.reshape(spots4, (spots4.shape[0],) + (1,) * nk + spots4.shape[-2:])
         n = spot_vectors(T - ep, prot_, istar_, lam_, sp[..., 0], sp[..., 1])
+        if kernel:
+            from .metal_spots import spot_cols_kernel
+            return spot_cols_kernel(X, Y, rv, n, sp[..., 2], sp[..., 3], law, active=active)
         return shape_cols_spots(X, Y, rv, n, sp[..., 2], sp[..., 3], law)
 
     if exp_time == 0.0:
         Bc = inst(tt, 1)
     else:
         half = 0.5 * exp_time
-        ev_fn = _events_fn(dt, n_sample, k is not None, ew)
-        sp_ev = ev_fn(tt - half, tt + half, t0, epoch, period, a, b, r, prot, istar, lam,
-                      spots4, *(() if k is None else (k, h)))
+        if kernel:
+            sp_ev = _kernel_events(tt, half, t0, epoch, period, a, b, r, prot, istar, lam,
+                                   spots4, law, n_sample, k, h, ew)
+        else:
+            ev_fn = _events_fn(dt, n_sample, k is not None, ew)
+            sp_ev = ev_fn(tt - half, tt + half, t0, epoch, period, a, b, r, prot, istar,
+                          lam, spots4, *(() if k is None else (k, h)))
         c1 = mx.reshape(t0, (-1, 1))
         pc = [mx.reshape(v, (-1, 1)) for v in (period, a, b, r)]
         kh = (None, None) if k is None else (mx.reshape(k, (-1, 1)), mx.reshape(h, (-1, 1)))
         ct_ev = _contact_events(tt, c1, *pc, *kh, ew)
         T, W = _exposure_nodes(tt, exp_time, mx.concatenate([ct_ev, sp_ev], axis=-1),
                                int(n_gl), dt)
-        Bc = mx.sum(inst(T, 2) * W[..., None], axis=-2)
+        Bc = mx.sum(inst(T, 2, W > 0.0) * W[..., None], axis=-2)
     if basis:
         return Bc
     return combine_cols(Bc, w2d, law)
@@ -388,7 +443,7 @@ def _check_spots(spots4):
 @M.fp64_on_cpu
 def flux_dev_spots_t(t, t0, epoch, period, a, b, r, prot, istar, lam, spots4, law, u,
                      basis=False, k=None, h=None, ew=False, exp_time=0.0, n_gl=5,
-                     n_sample=None):
+                     n_sample=None, use_metal=True):
     """F - 1 of a planet crossing a spotted star, at times t ((m,) or
     (n, m)), normalised to the unspotted star. Per-set parameters are
     scalars or (n,) / (n, 1) arrays: t0 (mid-transit), epoch (the spots'
@@ -401,7 +456,8 @@ def flux_dev_spots_t(t, t0, epoch, period, a, b, r, prot, istar, lam, spots4, la
     ``n_sample`` count samples per exposure for its event search (None:
     ``sample_count`` from host values of a, period and r, else 64; see the
     module notes). Float64 on the CPU stream unless the data are
-    float32."""
+    float32; float32 data on the GPU stream take the Metal kernels
+    (``metal_spots``) unless ``use_metal`` is False."""
     law = get_law(law)
     if t.ndim not in (1, 2):
         raise ValueError(f"t must be (m,) or (n, m); got {t.shape}")
@@ -434,12 +490,17 @@ def flux_dev_spots_t(t, t0, epoch, period, a, b, r, prot, istar, lam, spots4, la
     from .metal_hybrid import _canon_w
     w2d = None if basis else _canon_w(u, n, law.n_w, dt, law.name)
 
+    kernel = (use_metal and dt == mx.float32 and M._gpu_stream_active()
+              and M.metal_available())
+
     def run(tt, rows):
         *p9, s4, w, kk, hh = rows
         return _tau_graph(tt, *p9, s4, w, law, basis=basis, k=kk, h=hh, ew=ew,
-                          exp_time=exp_time, n_gl=n_gl, n_sample=n_sample or _S_MIN)
+                          exp_time=exp_time, n_gl=n_gl, n_sample=n_sample or _S_MIN,
+                          kernel=kernel)
     nodes = 1 if exp_time == 0.0 else (_K_SPLIT + 1) * int(n_gl)
-    out = _in_blocks(run, t2d, [*pc[:9], sp, w2d, *kh], nodes, _SPOT_BLOCK)
+    out = _in_blocks(run, t2d, [*pc[:9], sp, w2d, *kh], nodes,
+                     _SPOT_BLOCK_KERNEL if kernel else _SPOT_BLOCK)
     ok = _spots_ok(sp)[:, None]
     out = mx.where(ok[..., None] if basis else ok, out, mx.nan)
     return out[0] if squeeze and n == 1 else out

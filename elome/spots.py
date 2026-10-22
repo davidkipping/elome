@@ -60,7 +60,7 @@ import numpy as np
 
 from .dtypes import fp64_on_cpu
 from .hybrid import _combine, combine_cols, get_law
-from .oblate import (_C, _F_SW, _N_MAX, _coeffs, _csqrt, _cwhere, _even_arc, _mod2pi,
+from .oblate import (_C, _F_SW, _N_MAX, _alpha, _coeffs, _csqrt, _cwhere, _even_arc, _mod2pi,
                      _pole_arc, _q_coeffs, _to_dtype)
 from .rings import (_BIG, _S1_CENTRED, _TINY, _arcs, _centred, _circle_roots, _crossings,
                     _h)
@@ -125,9 +125,21 @@ class _Rim:
         self.psi_limb = mx.arctan2(-self.mu_a / mbs, r / den)        # and pi - it
         self.half_limb = mx.arctan2(r, ca)                            # limb arc / 2
         self.phi_n = mx.arctan2(ny, nx)
+        # for the outline's live evaluation, smooth through the disc centre
+        # (|n_xy| is not): y0 = cos(alpha) n . v and the frame's turn
+        # -n . u = |n_xy| d(phi), both on the frame held fixed, and (a^2 -
+        # b^2) / 4 on the sphere, where a ~ |b| near the centre cancels.
+        # Only derivatives along the sphere are used.
+        fu = (_sg(self.ux), _sg(self.uy))
+        self.yl = ca * (nx * _sg(self.vx) + ny * _sg(self.vy))
+        turn = -(nx * fu[0] + ny * fu[1])
+        self.turn = turn - _sg(turn)
+        self.s2 = 0.25 * (sa * sa) * (nx * nx + ny * ny)
         # a nearly centred rim: the pole roots' closed form divides by
-        # mu_b ~ a y0 (not |b| y0, which an edge-on rim also makes small)
-        self.cen = (self.a * self.y0 < _S1_CENTRED[dt]) | ~ok
+        # |mu_b| = sin(alpha) |n_xy| (not |b| y0, which an edge-on rim makes
+        # small, nor a y0, which a great circle does), and S1, S2 are then
+        # O(mu_b), O(mu_b^2): the centred expansion holds
+        self.cen = (self.sa * nxy < _S1_CENTRED[dt]) | ~ok
 
     def sky(self, psi):
         """Sky (x, y) and mu of the rim point at psi (live)."""
@@ -173,7 +185,7 @@ def _rim_roots(rim, eps, dt):
 def _safe_rim_coeffs(rim):
     """The stand-in rim's (x0, y0, a, b) on centred lanes, else the rim's."""
     sx, sy, sz = _SAFE_N
-    return (rim.x0, mx.where(rim.cen, rim.ca * math.hypot(sx, sy), rim.y0), rim.a,
+    return (rim.x0, mx.where(rim.cen, rim.ca * math.hypot(sx, sy), rim.yl), rim.a,
             mx.where(rim.cen, rim.sa * sz, rim.b))
 
 
@@ -185,20 +197,30 @@ def _hs(eps):
     return [(n, True) for n in range(3)] + [(1.0 + e, False) for e in eps]
 
 
-def _outline_cols(coef, pole_coef, roots, cen, LO, HI, kappa, OK, sky_live, sky_frozen, eps):
+def _outline_cols(coef, pole_coef, roots, cen, LO, HI, kappa, OK, sky_live, sky_frozen, eps,
+                  s2=None, turn=None):
     """kappa-weighted arc integrals of one outline over the arcs [LO, HI]
     (trailing axis), with the corner terms: a list of columns.
 
     coef, pole_coef: (x0, y0, a, b) of the outline in its own frame (live;
     pole_coef with a stand-in on centred lanes); roots: per eps, four
     frozen _C; cen: the centred lanes (first-order expansion);
-    sky_live(psi), sky_frozen(psi): the arc point on the sky."""
+    sky_live(psi), sky_frozen(psi): the arc point on the sky -- or, with
+    ``turn``, in a frame turning by d(phi), turn[0] = |n_xy| d(phi) a pure
+    tangent, which adds [g(s_lo) - g(s_hi)] d(phi), g = h s, to each arc's
+    corner term, with (s_lo - s_hi) / |n_xy| = turn[1](LO, HI) formed
+    without cancellation. s2: (a^2 - b^2) / 4 given (live), in place of
+    the coefficients'."""
     shp = LO.shape
     bx = lambda v: mx.broadcast_to(v[..., None], shp)
     X0, Y0, A, B = (bx(v) for v in coef)
     S0, S1, S2, K0, K1 = _coeffs(X0, Y0, A, B)
+    if s2 is not None:
+        S2 = bx(s2)
     cols = list(_even_arc(_q_coeffs(S0, S1, S2, K0, K1, _N_MAX), LO, HI))
     pS = _coeffs(*(bx(v) for v in pole_coef))
+    if s2 is not None:
+        pS = (pS[0], pS[1], mx.where(bx(cen), pS[2], S2), pS[3], pS[4])
     cenb = bx(cen)
     sl, cl = sincos(LO)
     sh, ch = sincos(HI)
@@ -221,12 +243,31 @@ def _outline_cols(coef, pole_coef, roots, cen, LO, HI, kappa, OK, sky_live, sky_
         return xf * yl - yf * xl, xf * xf + yf * yf
     Cl, s_lo = C(LO)
     Ch, s_hi = C(HI)
+    if turn is not None:
+        dphi, ds = bx(turn[0]), _sg(turn[1](LO, HI))
     out = []
     for idx, (arg, even) in enumerate(_hs(eps)):
         corner = _h(arg, s_lo, even) * Cl - _h(arg, s_hi, even) * Ch
         corner = corner - _sg(corner)
+        if turn is not None:
+            corner = corner + _g_diff(arg, s_lo, s_hi, ds, even) * dphi
         out.append(mx.sum(kappa * mx.where(OK, cols[idx] + corner, 0.0), axis=-1))
     return out
+
+
+def _g_diff(n_or_p, s_lo, s_hi, ds, even):
+    """g(s_lo) - g(s_hi) for g = h s, given ds = s_lo - s_hi."""
+    if even:
+        al = _alpha(_N_MAX)[n_or_p]
+        acc = 0.0 * ds
+        for j, a in enumerate(al):
+            pw = 0.0 * ds
+            for i in range(j + 1):
+                pw = pw + s_lo ** i * s_hi ** (j - i)
+            acc = acc + float(a) * pw
+        return ds * acc
+    p = n_or_p
+    return ds / (2.0 * (p - s_lo) * (p - s_hi))
 
 
 # --------------------------------------------------------------------------
@@ -369,21 +410,23 @@ def _region_cols(X, Y, rp, spots, c, law, dt):
         # other spots: none of their flags changes across rim k
         roots = [_rim_roots(g, e, dt) for e in eps]
 
+        # C in the rim's own frame; the frame's turn (1 / |n_xy| near the
+        # disc centre) separately, as d(C) = s d(phi) at each end
         def r_live(psi, rim=rim):
             s_, c2 = sincos(psi)
-            xr_ = rim.a[..., None] * c2
-            yr_ = rim.y0[..., None] + rim.b[..., None] * s_
-            return (xr_ * rim.ux[..., None] + yr_ * rim.vx[..., None],
-                    xr_ * rim.uy[..., None] + yr_ * rim.vy[..., None])
+            return rim.a[..., None] * c2, rim.yl[..., None] + rim.b[..., None] * s_
 
         def r_frozen(psi, g=g):
             s_, c2 = sincos(psi)
-            xr_ = g.a[..., None] * c2
-            yr_ = g.y0[..., None] + g.b[..., None] * s_
-            return (xr_ * g.ux[..., None] + yr_ * g.vx[..., None],
-                    xr_ * g.uy[..., None] + yr_ * g.vy[..., None])
-        cols = _outline_cols((rim.x0, rim.y0, rim.a, rim.b), _safe_rim_coeffs(rim), roots,
-                             g.cen, LO, HI, kappa, OK, r_live, r_frozen, eps)
+            return g.a[..., None] * c2, g.y0[..., None] + g.b[..., None] * s_
+
+        def ds(lo, hi, g=g):
+            sl, sh = sincos(lo)[0], sincos(hi)[0]
+            return ((sh - sl) * (sh + sl) * ex(g.sa * g.sa * g.nxy)
+                    + 2.0 * ex(g.ca * g.b) * (sl - sh))
+        cols = _outline_cols((rim.x0, rim.yl, rim.a, rim.b), _safe_rim_coeffs(rim), roots,
+                             g.cen, LO, HI, kappa, OK, r_live, r_frozen, eps,
+                             s2=rim.s2, turn=(rim.turn, ds))
         occ = [o + v for o, v in zip(occ, cols)]
 
     # ---- the limb ---------------------------------------------------------------

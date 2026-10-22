@@ -1145,13 +1145,14 @@ class TransitModel:
         if fn is not None:
             return fn
         from .spots_tau import flux_dev_spots_t
-        law, n_gl = self._hlaw, self.n_gl
+        law, n_gl, use_metal = self._hlaw, self.n_gl, self.use_metal
         exp_time = self.exp_time if self.integration == "contact" else 0.0
 
         def raw(tt, t0, ep, per, a, b, rp, prot, istar, lam, sp, uv, k=None, h=None):
             return 1.0 + flux_dev_spots_t(tt, t0, ep, per, a, b, rp, prot, istar, lam,
                                           sp, law, uv, k=k, h=h, ew=orbit == "ew",
-                                          exp_time=exp_time, n_gl=n_gl)
+                                          exp_time=exp_time, n_gl=n_gl,
+                                          use_metal=use_metal)
         self._compiled[key] = raw
         return raw
 

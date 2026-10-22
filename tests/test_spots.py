@@ -356,7 +356,7 @@ for f, ring in ((None, None), (0.3, None), (None, 1.5)):
     for dt in (mx.float64, mx.float32):
         for kw in ({}, {"integration": "contact", "exp_time": 0.02}):
             el.TransitModel(p, t, dtype=dt, **kw).light_curve(p)
-bad = [m for m in sys.modules if m.startswith("elome.spot")]
+bad = [m for m in sys.modules if m.startswith("elome.spot") or m == "elome.metal_spots"]
 print("IMPORTED:" + ",".join(bad))
 '''
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
