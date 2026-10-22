@@ -135,6 +135,17 @@ parameter, and batched float32 kernels on the GPU.
   chain in one call, with gradients (`spots` of shape (n, K, 4)); in
   float32 on the GPU it runs the kernels. Call it eagerly, not under
   `mx.compile`. See {doc}`../guides/sampler-api`.
+- **With anvil**, `make_transit_target(..., limb_dark="hybrid4",
+  n_spots=K)` builds the whole problem. Each spot is sampled as `lonj`
+  (degrees, at `tt.spot_epoch`), `sinlatj`, `radj` (degrees) and
+  `contrastj`, then the star as `prot` (days), `cos_istar` and `lam`
+  (degrees). The boxes are `elome.anvil.DEFAULT_BOUNDS`; a field's key
+  (`"rad"`) sets every spot's box and a numbered one (`"rad2"`) a single
+  spot's. `prot` has no default, so pass `bounds={"prot": (lo, hi)}`.
+  The longitude is a box, not a wrapped angle: if a spot's posterior
+  reaches ±180°, move `spot_epoch` or the box. The spots are left
+  unordered; relabel the draws afterwards. Run the sampler with
+  `compile_step=tt.compile_step`.
 - **Keep the spots' epoch near the data.** The star's phase grows with
   the time since the epoch, and float32 carries it to about
   $6\times10^{-8}$ of itself: an epoch in the middle of the data keeps

@@ -423,6 +423,52 @@ returns finite flux for unphysical geometries, exactly as the
 circular model does.
 ```
 
+### `anvil.make_hybrid_transit_flux`
+
+```python
+make_hybrid_transit_flux(period_ref: float, limb_dark: str = 'hybrid4', eccentric: bool = False, n_spots: int = 0, exp_time: float = 0.0, integration: str = 'contact', n_gl: int = 5, n_sub: int = 1)
+```
+
+```text
+Engine-contract batched model for a hybrid limb-darkening law:
+v = (n_chains, d) with ``transit_param_names(limb_dark, eccentric,
+n_spots)`` and x = (2, m) epoch-centered times -- (3, m) with spots,
+the third row each point's time since ``spot_epoch`` -- returning
+df0 + (F - 1), (n_chains, m).
+
+The photometry is ``metal.flux_dev_from_tau``: float32 on the GPU
+runs the hybrid (and, with spots, the spot) Metal kernels, float64 the
+graph on the CPU stream, so anvil's two precisions share this one
+function. ``exp_time`` (days) > 0 integrates each exposure by
+``integration`` ("contact", "supersample" or "none"; ``n_gl``,
+``n_sub`` as there). A spotted model is evaluated eagerly: it raises
+under ``mx.compile`` (run anvil with ``compile_step=False``).
+```
+
+### `anvil.transit_param_names`
+
+```python
+transit_param_names(limb_dark: str = 'quadratic', eccentric: bool = False, n_spots: int = 0) -> list
+```
+
+```text
+The model-space parameter vector's names, in order, for
+``make_transit_target``'s options:
+
+    t0_off, p_off, r, b, a, the limb darkening's q1..qn,
+    [secosw, sesinw], [per spot j = 1..K: lonj, sinlatj, radj,
+    contrastj, then prot, cos_istar, lam], df0
+
+The quadratic law's are ``PARAM_NAMES`` / ``PARAM_NAMES_ECC``. A
+hybrid law's q are those of its prior (``ld.hybrid2_from_q``,
+``ld.hybrid4_from_q``, ``ld.simplex_from_q``): n = 2, 4, 5. A spot's
+longitude (at ``spot_epoch``) and angular radius are in degrees, its
+latitude as its sine (uniform over the sphere), its contrast the
+spot's intensity over the photosphere's; the star's rotation period
+``prot`` in days, its spin axis's inclination as cos(istar) (isotropic)
+and the sky-projected obliquity ``lam`` in degrees.
+```
+
 ### `anvil.PARAM_NAMES`
 
 ```python
@@ -438,7 +484,7 @@ PARAM_NAMES_ECC = ['t0_off', 'p_off', 'r', 'b', 'a', 'q1', 'q2', 'secosw', 'sesi
 ### `anvil.make_transit_target`
 
 ```python
-make_transit_target(t, y, yerr, t0_guess, period_guess, eccentric: bool = False, bounds=None, policy=None, core: str = 'metal', strength: float = 1000000.0)
+make_transit_target(t, y, yerr, t0_guess, period_guess, eccentric: bool = False, bounds=None, policy=None, core: str = 'metal', strength: float = 1000000.0, limb_dark: str = 'quadratic', n_spots: int = 0, exp_time: float = 0.0, integration: str = 'contact', n_gl: int = 5, spot_epoch=None)
 ```
 
 ```text
@@ -473,7 +519,24 @@ Args:
         boxes (0.5 d and 0.05 d by default).
     eccentric: 10-parameter model with (sqrt(e) cos w, sqrt(e) sin w)
         instead of the 8-parameter circular one.
-    bounds: per-parameter (lo, hi) overrides on DEFAULT_BOUNDS. The
+    limb_dark: "quadratic" (Kipping's q1, q2) or a hybrid law,
+        "hybrid2" | "hybrid4" | "hybrid5", sampled through its q prior
+        (q1..qn, uniform on the law's physical profiles); see
+        ``transit_param_names`` for the vector's order.
+    n_spots: K > 0 fits a spotted star (hybrid laws only): K spots of
+        (lonj, sinlatj, radj, contrastj) and the star's (prot,
+        cos_istar, lam). ``prot`` has no default box: give one in
+        ``bounds``. Spots are interchangeable, so the posterior has K!
+        relabelled copies; sort the draws afterwards (by longitude, say).
+        Run anvil with ``compile_step=target.compile_step`` (False): a
+        spotted model is evaluated eagerly.
+    exp_time, integration, n_gl: an exposure time (in t's units) and
+        its rule, for hybrid laws (``make_hybrid_transit_flux``).
+    spot_epoch: when the spots' longitudes are measured (t's system);
+        default the predicted mid-transit nearest the data's middle,
+        which keeps the star's float32 phase accurate.
+    bounds: per-parameter (lo, hi) overrides on DEFAULT_BOUNDS (a spot
+        field, ``"rad"``, covers every spot; ``"rad2"`` one). The
         defaults cap r at 0.5, b at 1.2 and a at 200; an occultor
         larger than the star (a white-dwarf host) needs them widened,
         e.g. ``{"r": (1.0, 12.0), "b": (0.0, 13.0), "a": (1.5, 1000.0)}``.
@@ -485,7 +548,7 @@ Args:
 ### `anvil.TransitTarget`
 
 ```python
-TransitTarget(target: object, transform: object, loglike: object, model_fn: object, x64: np.ndarray, y_fit: np.ndarray, yerr: np.ndarray, t_ref: float, t0_ref: float, period_ref: float, param_names: list, eccentric: bool) -> None
+TransitTarget(target: object, transform: object, loglike: object, model_fn: object, x64: np.ndarray, y_fit: np.ndarray, yerr: np.ndarray, t_ref: float, t0_ref: float, period_ref: float, param_names: list, eccentric: bool, limb_dark: str = 'quadratic', n_spots: int = 0, spot_epoch: float | None = None, compile_step: bool = True) -> None
 ```
 
 ```text
@@ -544,7 +607,7 @@ Synthetic eccentric transit-fitting problem (anvil-ready).
 ### `anvil.ecc_constraint_penalty`
 
 ```python
-ecc_constraint_penalty(v, strength: float = 1000000.0, e_max: float = 0.999) -> mx.array
+ecc_constraint_penalty(v, strength: float = 1000000.0, e_max: float = 0.999, ik: int = 7) -> mx.array
 ```
 
 ```text
@@ -567,6 +630,9 @@ chain thrown into the corners of the +/-0.95 box (where e_raw reaches
 1.8) would sit on a plateau with no radial force pushing it back,
 only the ParamSpec sigmoid Jacobian. Penalising the UNPROJECTED
 e_raw restores a gradient that points inward.
+
+``ik`` is secosw's column: 7 in the quadratic layout, later for a
+hybrid law's longer weight block (``transit_param_names``).
 ```
 
 ### `anvil.PenalizedLogLike`
@@ -601,7 +667,7 @@ unrelated package of the same name) re-raises that error.
 ### `anvil.DEFAULT_BOUNDS`
 
 ```python
-DEFAULT_BOUNDS = {'t0_off': (-0.5, 0.5), 'p_off': (-0.05, 0.05), 'r': (0.005, 0.5), 'b': (0.0, 1.2), 'a': (1.5, 200.0), 'q1': (0.0, 1.0), 'q2': (0.0, 1.0), 'df0': (-0.01, 0.01), 'secosw': (-0.95, 0.95), 'sesinw': (-0.95, 0.95)}
+DEFAULT_BOUNDS = {'t0_off': (-0.5, 0.5), 'p_off': (-0.05, 0.05), 'r': (0.005, 0.5), 'b': (0.0, 1.2), 'a': (1.5, 200.0), 'q1': (0.0, 1.0), 'q2': (0.0, 1.0), 'df0': (-0.01, 0.01), 'secosw': (-0.95, 0.95), 'sesinw': (-0.95, 0.95), 'q3': (0.0, 1.0), 'q4': (0.0, 1.0), 'q5': (0.0, 1.0), 'lon': (-180.0, 180.0), 'sinlat': (-1.0, 1.0), 'rad': (1.0, 30.0), 'contrast': (0.0, 1.0), 'cos_istar': (0.0, 1.0), 'lam': (-180.0, 180.0)}
 ```
 
 ## Limb darkening

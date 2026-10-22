@@ -3,6 +3,22 @@
 All notable changes to Elómë. Versioning: semantic-ish (MAJOR.MINOR.PATCH);
 every release is tagged `vX.Y.Z` in git.
 
+## [Unreleased]
+
+### Added
+- **anvil targets for the hybrid laws and spotted stars.**
+  `make_transit_target(..., limb_dark="hybrid2" | "hybrid4" | "hybrid5")`
+  samples the law's weights through its q prior (uniform on its physical
+  profiles), circular or eccentric, with `exp_time=` integrating each
+  exposure; `n_spots=K` adds a spotted star (per spot `lonj`, `sinlatj`,
+  `radj`, `contrastj`; the star's `prot`, `cos_istar`, `lam`), its clock
+  measured from `spot_epoch` (default: the predicted mid-transit nearest
+  the data's middle). Bounds given by spot field (`"rad"`) cover every
+  spot. `transit_param_names` gives the parameter order for any options;
+  `make_hybrid_transit_flux` is the model function on its own. A spotted
+  target sets `compile_step=False`, to pass to `anvil.run`.
+  `ecc_constraint_penalty` takes the column of `secosw` (`ik=`).
+
 ## [0.21.0] — 2026-10-22
 
 ### Added

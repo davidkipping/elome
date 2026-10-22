@@ -68,6 +68,35 @@ over the same mean model, can wrap them. `examples/fit_mission_data.py`
 in the repository runs the whole thing end to end, and the first
 tutorial does it step by step.
 
+### Hybrid limb darkening and spotted stars
+
+`limb_dark="hybrid2" | "hybrid4" | "hybrid5"` fits a hybrid law instead
+of the quadratic one. Its weights are sampled through the law's own q
+prior (`q1` to `qn`, uniform on the cube and mapped onto exactly the
+physical profiles; see {doc}`../reference/hybrid-laws`), and `exp_time=`
+integrates each exposure, by the contact rule by default:
+
+```python
+tt = make_transit_target(t, y, yerr, t0_guess=..., period_guess=...,
+                         limb_dark="hybrid4", exp_time=29.4 / 1440)
+```
+
+`n_spots=K` (a hybrid law only) adds a spotted star: four parameters per
+spot and three for the star's rotation (see {doc}`../spots/accuracy-and-fitting`).
+`elome.anvil.transit_param_names` gives the vector's order for any
+combination of options, and `tt.param_names` the target's own. A spotted
+model is evaluated eagerly, so pass `compile_step=tt.compile_step` (False)
+to `engine.run`:
+
+```python
+tt = make_transit_target(t, y, yerr, t0_guess=..., period_guess=...,
+                         limb_dark="hybrid4", n_spots=2,
+                         bounds={"prot": (8.0, 14.0)})
+res = engine.run(engine.ChEESHMC(tt.target, max_leapfrog=128), tt.target,
+                 u0, n_warmup=300, n_samples=200,
+                 compile_step=tt.compile_step)
+```
+
 ### The eccentric model needs a barrier
 
 Two physical constraints couple parameters: the orbit must clear the

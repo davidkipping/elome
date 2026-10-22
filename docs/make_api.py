@@ -28,6 +28,7 @@ SECTIONS = [
      "Ready-made models and fitting problems for the anvil engine. See "
      "{doc}`../spherical/fitting`.",
      ["elome.anvil.make_quad_transit_flux", "elome.anvil.make_ecc_transit_flux",
+      "elome.anvil.make_hybrid_transit_flux", "elome.anvil.transit_param_names",
       "elome.anvil.PARAM_NAMES", "elome.anvil.PARAM_NAMES_ECC",
       "elome.anvil.make_transit_target", "elome.anvil.TransitTarget",
       "elome.anvil.make_target", "elome.anvil.QuadTransitTarget",

@@ -3,7 +3,9 @@ a synthetic transit-fitting target.
 
 ``make_quad_transit_flux`` returns the engine-contract model function
     model_fn(v: (n_chains, 8), x: (2, m)) -> (n_chains, m) flux deviation
-and is pure elome (mlx + numpy only). ``make_target`` assembles the
+and is pure elome (mlx + numpy only); ``make_hybrid_transit_flux`` is its
+counterpart for the hybrid limb-darkening laws, optionally on a spotted
+star. ``make_target`` assembles the
 full sampling problem (chunked likelihood + transform + synthetic data);
 the engine is imported lazily, so the core package stays standalone.
 
@@ -39,7 +41,8 @@ __all__ = ["make_quad_transit_flux", "make_target", "QuadTransitTarget",
            "import_engine", "make_ecc_transit_flux", "make_ecc_target",
            "EccTransitTarget", "ecc_constraint_penalty",
            "PenalizedLogLike", "PARAM_NAMES", "PARAM_NAMES_ECC",
-           "make_transit_target", "TransitTarget", "DEFAULT_BOUNDS"]
+           "make_transit_target", "TransitTarget", "DEFAULT_BOUNDS",
+           "make_hybrid_transit_flux", "transit_param_names"]
 
 PARAM_NAMES = ["t0_off", "p_off", "r", "b", "a", "q1", "q2", "df0"]
 
@@ -135,6 +138,130 @@ def _build_graph_model(period_ref: float, core):
         tau = tau_from_epochs(dt[None, :], k[None, :], t0_off, p_off, period)
         z = separation_circular(tau, period, b, a)
         return df0 + core(z, r, u1, u2)
+
+    return flux_dev_fn
+
+
+# ---------------------------------------------------------------------------
+# hybrid limb darkening, optionally on a spotted star
+# ---------------------------------------------------------------------------
+
+_HYBRID_LAWS = ("hybrid2", "hybrid4", "hybrid5")
+_SPOT_FIELDS = ("lon", "sinlat", "rad", "contrast")
+_DEG = math.pi / 180.0
+
+
+def transit_param_names(limb_dark: str = "quadratic", eccentric: bool = False,
+                        n_spots: int = 0) -> list:
+    """The model-space parameter vector's names, in order, for
+    ``make_transit_target``'s options:
+
+        t0_off, p_off, r, b, a, the limb darkening's q1..qn,
+        [secosw, sesinw], [per spot j = 1..K: lonj, sinlatj, radj,
+        contrastj, then prot, cos_istar, lam], df0
+
+    The quadratic law's are ``PARAM_NAMES`` / ``PARAM_NAMES_ECC``. A
+    hybrid law's q are those of its prior (``ld.hybrid2_from_q``,
+    ``ld.hybrid4_from_q``, ``ld.simplex_from_q``): n = 2, 4, 5. A spot's
+    longitude (at ``spot_epoch``) and angular radius are in degrees, its
+    latitude as its sine (uniform over the sphere), its contrast the
+    spot's intensity over the photosphere's; the star's rotation period
+    ``prot`` in days, its spin axis's inclination as cos(istar) (isotropic)
+    and the sky-projected obliquity ``lam`` in degrees."""
+    if limb_dark == "quadratic":
+        n_q = 2
+    elif limb_dark in _HYBRID_LAWS:
+        from .hybrid import get_law
+        n_q = get_law(limb_dark).n_w
+    else:
+        raise ValueError(f"unknown limb_dark {limb_dark!r}; expected "
+                         f"'quadratic' or one of {_HYBRID_LAWS}")
+    n_spots = int(n_spots)
+    if n_spots < 0:
+        raise ValueError("n_spots must be >= 0")
+    if n_spots and limb_dark == "quadratic":
+        raise ValueError("a spotted star needs a hybrid law (limb_dark="
+                         "'hybrid2' | 'hybrid4' | 'hybrid5')")
+    names = ["t0_off", "p_off", "r", "b", "a"]
+    names += [f"q{j}" for j in range(1, n_q + 1)]
+    if eccentric:
+        names += ["secosw", "sesinw"]
+    for j in range(1, n_spots + 1):
+        names += [f"{f}{j}" for f in _SPOT_FIELDS]
+    if n_spots:
+        names += ["prot", "cos_istar", "lam"]
+    return names + ["df0"]
+
+
+def _w_from_q(limb_dark: str, q: mx.array) -> mx.array:
+    """(n, n_w) q in the unit cube -> the law's shape weights, uniform on
+    its physical region (``elome.ld``)."""
+    from .ld import hybrid2_from_q, hybrid4_from_q, simplex_from_q
+    if limb_dark == "hybrid2":
+        return mx.stack(hybrid2_from_q(q[:, 0], q[:, 1]), axis=-1)
+    if limb_dark == "hybrid4":
+        return hybrid4_from_q(q)
+    return simplex_from_q(q)
+
+
+def make_hybrid_transit_flux(period_ref: float, limb_dark: str = "hybrid4",
+                             eccentric: bool = False, n_spots: int = 0,
+                             exp_time: float = 0.0,
+                             integration: str = "contact", n_gl: int = 5,
+                             n_sub: int = 1):
+    """Engine-contract batched model for a hybrid limb-darkening law:
+    v = (n_chains, d) with ``transit_param_names(limb_dark, eccentric,
+    n_spots)`` and x = (2, m) epoch-centered times -- (3, m) with spots,
+    the third row each point's time since ``spot_epoch`` -- returning
+    df0 + (F - 1), (n_chains, m).
+
+    The photometry is ``metal.flux_dev_from_tau``: float32 on the GPU
+    runs the hybrid (and, with spots, the spot) Metal kernels, float64 the
+    graph on the CPU stream, so anvil's two precisions share this one
+    function. ``exp_time`` (days) > 0 integrates each exposure by
+    ``integration`` ("contact", "supersample" or "none"; ``n_gl``,
+    ``n_sub`` as there). A spotted model is evaluated eagerly: it raises
+    under ``mx.compile`` (run anvil with ``compile_step=False``).
+    """
+    from .metal import flux_dev_from_tau
+    period_ref = float(period_ref)
+    if limb_dark not in _HYBRID_LAWS:
+        raise ValueError(f"limb_dark must be one of {_HYBRID_LAWS}; the "
+                         "quadratic law is make_quad_transit_flux")
+    names = transit_param_names(limb_dark, eccentric, n_spots)
+    col = {n: i for i, n in enumerate(names)}
+    iq, n_q = col["q1"], sum(n[0] == "q" and n[1:].isdigit() for n in names)
+    K = int(n_spots)
+    exp_time = float(exp_time)
+
+    def flux_dev_fn(v: mx.array, x: mx.array) -> mx.array:
+        t0_off, p_off = v[:, 0:1], v[:, 1:2]
+        period = period_ref + v[:, 1]
+        tau = tau_from_epochs(x[0][None, :], x[1][None, :], t0_off, p_off,
+                              period[:, None])
+        kw = {}
+        if eccentric:
+            k, h, _, _ = _ecc_orbit_from_v(v, ik=col["secosw"])
+            kw.update(secosw=k, sesinw=h)
+        if K:
+            sp = mx.reshape(v[:, col["lon1"]:col["lon1"] + 4 * K], (-1, K, 4))
+            # the sines kept off +-1, where arcsin's and arccos's slopes are
+            # infinite (a float32 sigmoid reaches its box's edge exactly)
+            lat = mx.arcsin(mx.clip(sp[..., 1], -1.0 + 1e-6, 1.0 - 1e-6))
+            kw.update(
+                spots=mx.stack([sp[..., 0] * _DEG, lat, sp[..., 2] * _DEG,
+                                sp[..., 3]], axis=-1),
+                spot_time=mx.broadcast_to(x[2][None, :], tau.shape),
+                prot=v[:, col["prot"]],
+                istar=mx.arccos(mx.clip(v[:, col["cos_istar"]], -1.0 + 1e-6,
+                                        1.0 - 1e-6)),
+                lam=v[:, col["lam"]] * _DEG)
+        dev = flux_dev_from_tau(
+            tau, period, v[:, 4], v[:, 3], v[:, 2], limb_dark=limb_dark,
+            u=_w_from_q(limb_dark, v[:, iq:iq + n_q]), exp_time=exp_time,
+            integration=integration if exp_time > 0.0 else "none",
+            n_gl=n_gl, n_sub=n_sub, **kw)
+        return v[:, -1:] + dev
 
     return flux_dev_fn
 
@@ -243,6 +370,12 @@ DEFAULT_BOUNDS = {
     "r": (0.005, 0.5), "b": (0.0, 1.2), "a": (1.5, 200.0),
     "q1": (0.0, 1.0), "q2": (0.0, 1.0), "df0": (-0.01, 0.01),
     "secosw": (-0.95, 0.95), "sesinw": (-0.95, 0.95),
+    "q3": (0.0, 1.0), "q4": (0.0, 1.0), "q5": (0.0, 1.0),
+    # a spotted star: every spot's (lon, sinlat, rad, contrast) -- a key
+    # here covers spots 1..K, a numbered one (``"lon2"``) a single spot --
+    # and the star's (cos_istar, lam); prot has no default box
+    "lon": (-180.0, 180.0), "sinlat": (-1.0, 1.0), "rad": (1.0, 30.0),
+    "contrast": (0.0, 1.0), "cos_istar": (0.0, 1.0), "lam": (-180.0, 180.0),
 }
 
 
@@ -268,6 +401,13 @@ class TransitTarget:
     period_ref: float
     param_names: list
     eccentric: bool
+    limb_dark: str = "quadratic"
+    n_spots: int = 0
+    #: the time (input system) the spots' longitudes refer to; None unspotted
+    spot_epoch: float | None = None
+    #: pass to ``anvil.run(..., compile_step=)``: a spotted model is
+    #: evaluated eagerly and raises under ``mx.compile``
+    compile_step: bool = True
 
     def model_params(self, t0, period, **kw):
         """Physical values -> the model-space vector the sampler uses.
@@ -287,7 +427,10 @@ class TransitTarget:
 
 def make_transit_target(t, y, yerr, t0_guess, period_guess,
                         eccentric: bool = False, bounds=None, policy=None,
-                        core: str = "metal", strength: float = 1e6):
+                        core: str = "metal", strength: float = 1e6,
+                        limb_dark: str = "quadratic", n_spots: int = 0,
+                        exp_time: float = 0.0, integration: str = "contact",
+                        n_gl: int = 5, spot_epoch=None):
     """Build an anvil fitting problem from REAL photometry.
 
     ``core`` is "metal" (default: fused fp32 kernels, falling back to the
@@ -319,7 +462,24 @@ def make_transit_target(t, y, yerr, t0_guess, period_guess,
             boxes (0.5 d and 0.05 d by default).
         eccentric: 10-parameter model with (sqrt(e) cos w, sqrt(e) sin w)
             instead of the 8-parameter circular one.
-        bounds: per-parameter (lo, hi) overrides on DEFAULT_BOUNDS. The
+        limb_dark: "quadratic" (Kipping's q1, q2) or a hybrid law,
+            "hybrid2" | "hybrid4" | "hybrid5", sampled through its q prior
+            (q1..qn, uniform on the law's physical profiles); see
+            ``transit_param_names`` for the vector's order.
+        n_spots: K > 0 fits a spotted star (hybrid laws only): K spots of
+            (lonj, sinlatj, radj, contrastj) and the star's (prot,
+            cos_istar, lam). ``prot`` has no default box: give one in
+            ``bounds``. Spots are interchangeable, so the posterior has K!
+            relabelled copies; sort the draws afterwards (by longitude, say).
+            Run anvil with ``compile_step=target.compile_step`` (False): a
+            spotted model is evaluated eagerly.
+        exp_time, integration, n_gl: an exposure time (in t's units) and
+            its rule, for hybrid laws (``make_hybrid_transit_flux``).
+        spot_epoch: when the spots' longitudes are measured (t's system);
+            default the predicted mid-transit nearest the data's middle,
+            which keeps the star's float32 phase accurate.
+        bounds: per-parameter (lo, hi) overrides on DEFAULT_BOUNDS (a spot
+            field, ``"rad"``, covers every spot; ``"rad2"`` one). The
             defaults cap r at 0.5, b at 1.2 and a at 200; an occultor
             larger than the star (a white-dwarf host) needs them widened,
             e.g. ``{"r": (1.0, 12.0), "b": (0.0, 13.0), "a": (1.5, 1000.0)}``.
@@ -354,13 +514,26 @@ def make_transit_target(t, y, yerr, t0_guess, period_guess,
     x64 = epoch_center_times(t_model, t0_ref=t0_ref, period_ref=period_ref)
     y_fit = y - 1.0
 
-    names = PARAM_NAMES_ECC if eccentric else PARAM_NAMES
-    lims = dict(DEFAULT_BOUNDS)
-    for k, v in (bounds or {}).items():
-        if k not in lims:
-            raise ValueError(f"unknown parameter {k!r}; expected "
-                             f"{sorted(lims)}")
-        lims[k] = v
+    hybrid = limb_dark != "quadratic"
+    names = transit_param_names(limb_dark, eccentric, n_spots)
+    if hybrid and core != "metal":
+        raise ValueError("core selects the quadratic law's implementation; "
+                         "a hybrid law runs flux_dev_from_tau (float32 on the "
+                         "GPU: the Metal kernels; float64: the graph)")
+    if not hybrid and exp_time:
+        raise ValueError("exp_time needs a hybrid law here; the quadratic "
+                         "targets are instantaneous")
+    lims = _param_bounds(names, bounds)
+    if n_spots:
+        # the star's clock: each point's time since spot_epoch, reduced in
+        # float64 like the planet's
+        if spot_epoch is None:
+            mid = 0.5 * (t_model.min() + t_model.max())
+            ep = t0_ref + round((mid - t0_ref) / period_ref) * period_ref
+        else:
+            ep = float(spot_epoch) - t_ref
+        x64 = np.vstack([x64, (t_model - ep)[None, :]])
+        spot_epoch = t_ref + ep
     report = {"t0_off": t_ref + t0_ref, "p_off": period_ref, "df0": 1.0}
     transform = engine.Transform([
         engine.ParamSpec(n, lo=lims[n][0], hi=lims[n][1],
@@ -368,21 +541,52 @@ def make_transit_target(t, y, yerr, t0_guess, period_guess,
                                if n in report else {}))
         for n in names])
 
-    model_fn = (make_ecc_transit_flux(period_ref=period_ref, core=core)
-                if eccentric
-                else make_quad_transit_flux(period_ref=period_ref,
-                                            core=core))
+    if hybrid:
+        model_fn = make_hybrid_transit_flux(
+            period_ref, limb_dark, eccentric=eccentric, n_spots=n_spots,
+            exp_time=exp_time, integration=integration, n_gl=n_gl)
+    elif eccentric:
+        model_fn = make_ecc_transit_flux(period_ref=period_ref, core=core)
+    else:
+        model_fn = make_quad_transit_flux(period_ref=period_ref, core=core)
     loglike = ChunkedGaussianLogLike(model_fn, x64, y_fit, yerr, policy)
     if eccentric:
+        ik = names.index("secosw")
         loglike = PenalizedLogLike(
-            loglike, lambda v: ecc_constraint_penalty(v, strength=strength))
+            loglike, lambda v: ecc_constraint_penalty(v, strength=strength,
+                                                      ik=ik))
     target = engine.TransformedLogDensity(
         loglike, transform, model_log_prob_hi=loglike.hi)
     return TransitTarget(
         target=target, transform=transform, loglike=loglike,
         model_fn=model_fn, x64=x64, y_fit=y_fit, yerr=yerr, t_ref=t_ref,
         t0_ref=t0_ref, period_ref=period_ref, param_names=list(names),
-        eccentric=eccentric)
+        eccentric=eccentric, limb_dark=limb_dark, n_spots=int(n_spots),
+        spot_epoch=spot_epoch if n_spots else None,
+        compile_step=not n_spots)
+
+
+def _param_bounds(names, bounds) -> dict:
+    """(lo, hi) per name: ``bounds`` by name, then by spot field (``"rad"``
+    for every ``"radj"``), then DEFAULT_BOUNDS likewise."""
+    bounds = dict(bounds or {})
+    family = {n: n.rstrip("0123456789") for n in names}
+    known = set(DEFAULT_BOUNDS) | set(names) | set(family.values())
+    for k in bounds:
+        if k not in known:
+            raise ValueError(f"unknown parameter {k!r}; expected "
+                             f"{sorted(known)}")
+    lims = {}
+    for n in names:
+        f = family[n] if family[n] in _SPOT_FIELDS else None
+        for src in (bounds, DEFAULT_BOUNDS):
+            if n in src or (f and f in src):
+                lims[n] = tuple(src[n] if n in src else src[f])
+                break
+        else:
+            raise ValueError(f"{n!r} has no default box: pass bounds="
+                             f"{{{n!r}: (lo, hi)}}")
+    return lims
 
 
 # ---------------------------------------------------------------------------
@@ -397,7 +601,7 @@ PARAM_NAMES_ECC = ["t0_off", "p_off", "r", "b", "a", "q1", "q2",
 E_MAX_NUMERICAL = 0.999
 
 
-def _ecc_orbit_from_v(v, e_max: float = E_MAX_NUMERICAL):
+def _ecc_orbit_from_v(v, e_max: float = E_MAX_NUMERICAL, ik: int = 7):
     """Sampler coordinates -> (k, h, ci, e) for the anchored orbit.
 
     (secosw, sesinw) is shrunk radially onto the disc of radius
@@ -405,9 +609,9 @@ def _ecc_orbit_from_v(v, e_max: float = E_MAX_NUMERICAL):
     *physical* limits (periastron clearance, cos i <= 1) are a prior
     concern and live in ``ecc_constraint_penalty``, not here. The shrink
     denominator is set to 1 where inactive rather than floored, per the
-    masked-division rule.
+    masked-division rule. ``ik`` is secosw's column (sesinw follows it).
     """
-    k_raw, h_raw = v[:, 7], v[:, 8]
+    k_raw, h_raw = v[:, ik], v[:, ik + 1]
     e_raw = k_raw * k_raw + h_raw * h_raw
     big = e_raw > e_max
     den = mx.where(big, e_raw, mx.ones_like(e_raw))
@@ -442,7 +646,8 @@ def _huber(c, delta: float = 1.0):
 
 
 def ecc_constraint_penalty(v, strength: float = 1e6,
-                           e_max: float = E_MAX_NUMERICAL) -> mx.array:
+                           e_max: float = E_MAX_NUMERICAL,
+                           ik: int = 7) -> mx.array:
     """Smooth barrier for the JOINT physical constraints that a box of
     ParamSpecs cannot express (returns <= 0, exactly 0 when feasible).
 
@@ -462,10 +667,13 @@ def ecc_constraint_penalty(v, strength: float = 1e6,
     1.8) would sit on a plateau with no radial force pushing it back,
     only the ParamSpec sigmoid Jacobian. Penalising the UNPROJECTED
     e_raw restores a gradient that points inward.
+
+    ``ik`` is secosw's column: 7 in the quadratic layout, later for a
+    hybrid law's longer weight block (``transit_param_names``).
     """
-    k, h, ci, e = _ecc_orbit_from_v(v, e_max)
+    k, h, ci, e = _ecc_orbit_from_v(v, e_max, ik)
     r, a, b = v[:, 2], v[:, 4], v[:, 3]
-    e_raw = v[:, 7] ** 2 + v[:, 8] ** 2
+    e_raw = v[:, ik] ** 2 + v[:, ik + 1] ** 2
     # e sin w of the PROJECTED orbit, as _ecc_orbit_from_v forms it (its
     # masked denominator is safe; re-deriving it here through
     # sqrt(e_max / max(e_raw, 1e-30)) gave NaN gradients in fp32 at e = 0,
