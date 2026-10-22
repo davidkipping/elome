@@ -433,12 +433,10 @@ def _contact_events(tt, per, a, b, r, k, h, ew):
     return mx.stack([tc + c * (per / _TWO_PI) for c in cA], axis=-1)
 
 
-def _exposure_nodes(tt, exp_time, events, n_gl, dt):
-    """Gauss-Legendre nodes and weights over [t - e/2, t + e/2] split at
-    the nearest _K_SPLIT events inside it: (times, weights), a trailing
-    axis of (_K_SPLIT + 1) * n_gl, weights summing to 1."""
-    xg, wg = gauss_legendre(n_gl)
-    xg, wg = mx.array(xg, dtype=dt), mx.array(wg, dtype=dt)
+def _exposure_pieces(tt, exp_time, events):
+    """[t - e/2, t + e/2] split at the nearest _K_SPLIT events inside it:
+    the pieces' midpoints and half-widths, a trailing axis of
+    _K_SPLIT + 1 (empty pieces have half-width 0)."""
     half = 0.5 * exp_time
     t1, t2 = tt - half, tt + half
     inside = (events > t1[..., None]) & (events < t2[..., None])
@@ -450,15 +448,28 @@ def _exposure_nodes(tt, exp_time, events, n_gl, dt):
                     for j in range(_K_SPLIT)] + [t2]
     for i in range(1, len(edges)):
         edges[i] = mx.maximum(edges[i], edges[i - 1])
-    times, weights = [], []
-    for i in range(len(edges) - 1):
-        lo, hi = edges[i], edges[i + 1]
-        mid, hw = 0.5 * (lo + hi), 0.5 * (hi - lo)
-        times.append(mid[..., None] + hw[..., None] * xg)
-        weights.append(hw[..., None] * wg / exp_time)
-    W = mx.concatenate(weights, axis=-1)
-    W = W / mx.sum(W, axis=-1, keepdims=True)
-    return mx.concatenate(times, axis=-1), W
+    lo, hi = mx.stack(edges[:-1], axis=-1), mx.stack(edges[1:], axis=-1)
+    return 0.5 * (lo + hi), 0.5 * (hi - lo)
+
+
+def _piece_nodes(mid, hw, exp_time, n_gl, dt):
+    """Gauss-Legendre nodes and weights over the pieces (mid, hw), n_gl
+    per piece along the trailing axis (unnormalised: they sum to about 1
+    over a whole exposure)."""
+    xg, wg = gauss_legendre(n_gl)
+    xg, wg = mx.array(xg, dtype=dt), mx.array(wg, dtype=dt)
+    T = mid[..., None] + hw[..., None] * xg
+    W = hw[..., None] * wg / exp_time
+    sh = mid.shape[:-1] + (mid.shape[-1] * n_gl,)
+    return mx.reshape(T, sh), mx.reshape(W, sh)
+
+
+def _exposure_nodes(tt, exp_time, events, n_gl, dt):
+    """Gauss-Legendre nodes and weights over [t - e/2, t + e/2] split at
+    the nearest _K_SPLIT events inside it: (times, weights), a trailing
+    axis of (_K_SPLIT + 1) * n_gl, weights summing to 1."""
+    T, W = _piece_nodes(*_exposure_pieces(tt, exp_time, events), exp_time, n_gl, dt)
+    return T, W / mx.sum(W, axis=-1, keepdims=True)
 
 
 def _tau_graph(tt, ts, period, a, b, r, prot, istar, lam, spots4, w2d, law,
@@ -515,13 +526,15 @@ def _tau_graph(tt, ts, period, a, b, r, prot, istar, lam, spots4, w2d, law,
         if events is None:
             events, frozen = _all_events(tt, ts, *params, spots4, law, k, h, ew, exp_time,
                                          n_sample, kernel)
-        T, W = _exposure_nodes(tt, exp_time, events, int(n_gl), dt)
-        Ts = T + off[..., None]
         Bc = None
         if frozen is not None:
             (htt,), _ = _host_copies([tt])
-            mask = _exposure_nodes(htt, exp_time, frozen, int(n_gl), dt)[1] > 0.0
-            Bc = _active_nodes(T, Ts, W, mask, node_cols, params, spots4, k, h, ew)
+            mask = _exposure_pieces(htt, exp_time, frozen)[1] > 0.0
+            Bc = _active_pieces(*_exposure_pieces(tt, exp_time, events), off, mask,
+                                exp_time, int(n_gl), node_cols, params, spots4, k, h, ew)
+        if Bc is None:
+            T, W = _exposure_nodes(tt, exp_time, events, int(n_gl), dt)
+            Ts = T + off[..., None]
         if Bc is None and kernel:
             # every node, nodes outermost: an exposure's empty sub-intervals
             # (most of its nodes) then fill whole SIMD groups, which return
@@ -537,19 +550,20 @@ def _tau_graph(tt, ts, period, a, b, r, prot, istar, lam, spots4, w2d, law,
     return combine_cols(Bc, w2d, law)
 
 
-def _active_nodes(T, Ts, W, mask, node_cols, params, spots4, k, h, ew):
-    """sum_j W_j B(T_j) per exposure over the nodes with W > 0 only: most of
-    an exposure's (_K_SPLIT + 1) * n_gl nodes lie in empty sub-intervals,
-    and gathering the rest first saves their orbit, rotation and columns
-    (and the gradient's graph over them). Each set's active nodes are
-    gathered to a common width (the largest set's, rounded up to one of
-    eight sizes per octave so the float64 graph's compiled columns see few
-    shapes; padded with weight 0), so the per-set parameters broadcast and
-    their gradients are sums along an axis, not scatters into a few rows.
-    ``mask``: W > 0, a constant (computed from host copies, so reading it
-    evaluates nothing traced)."""
+def _active_pieces(mid, hw, off, mask, exp_time, n_gl, node_cols, params, spots4, k, h, ew):
+    """sum_j W_j B(T_j) per exposure over the nodes of its non-empty pieces
+    only: most of an exposure's _K_SPLIT + 1 pieces (mid, hw) are empty,
+    and gathering the rest before laying out their n_gl nodes saves the
+    empty pieces' nodes, orbit, rotation and columns (and the gradient's
+    graph over them). Each set's active pieces are gathered to a common
+    width (the largest set's, rounded up to one of eight sizes per octave
+    so the float64 graph's compiled columns see few shapes; padded with
+    weight 0), so the per-set parameters broadcast and their gradients are
+    sums along an axis, not scatters into a few rows. ``off`` (n, m) the
+    star's clock ahead of the planet's; ``mask``: hw > 0, a constant
+    (computed from host copies, so reading it evaluates nothing traced)."""
     mask = np.asarray(mask)
-    n, m, J = T.shape
+    n, m, J = mid.shape
     mask = mask.reshape(n, m * J)
     count = mask.sum(axis=1)
     top = int(count.max())
@@ -559,20 +573,27 @@ def _active_nodes(T, Ts, W, mask, node_cols, params, spots4, k, h, ew):
     start = np.concatenate([[0], np.cumsum(count)[:-1]])
     pos = np.arange(rows.size) - start[rows]
     order = np.zeros((n, width), dtype=np.int32)
-    order[:] = cols[np.maximum(start + count - 1, 0)][:, None]   # pad: a real node
+    order[:] = cols[np.maximum(start + count - 1, 0)][:, None]   # pad: a real piece
     order[rows, pos] = cols
     real = np.arange(width)[None, :] < count[:, None]
     ii = mx.array(order)
     take = lambda v: mx.take_along_axis(mx.reshape(v, (n, m * J)), ii, axis=1)   # noqa: E731
-    Wc = mx.where(mx.array(real), take(W), 0.0)
+    # the weights' normalisation per exposure: they sum to 1 up to rounding
+    norm = mx.sum(hw, axis=-1) * (float(np.sum(gauss_legendre(n_gl)[1])) / exp_time)
+    T, W = _piece_nodes(take(mid), mx.where(mx.array(real), take(hw), 0.0), exp_time,
+                        n_gl, mid.dtype)
+    eo_ = mx.array(order // J)
+    W = W / mx.repeat(mx.take_along_axis(norm, eo_, axis=1), n_gl, axis=1)
+    Ts = T + mx.repeat(mx.take_along_axis(off, eo_, axis=1), n_gl, axis=1)
     c = [mx.reshape(p, (-1, 1)) for p in params]
     eo = None if k is None else _orbit_consts(c[1], c[2], mx.reshape(k, (-1, 1)),
                                               mx.reshape(h, (-1, 1)), ew)
-    B = node_cols(take(T), take(Ts), c, eo, spots4[:, None])        # (n, width, ncol)
+    B = node_cols(T, Ts, c, eo, spots4[:, None])        # (n, width * n_gl, ncol)
+    nc = B.shape[-1]
+    BW = mx.sum(mx.reshape(B * W[..., None], (n, width, n_gl, nc)), axis=2)
     slot = mx.array((np.arange(n)[:, None] * m + order // J).reshape(-1))
-    acc = mx.zeros((n * m, B.shape[-1]), dtype=B.dtype).at[slot].add(
-        mx.reshape(B * Wc[..., None], (-1, B.shape[-1])))
-    return mx.reshape(acc, (n, m, B.shape[-1]))
+    acc = mx.zeros((n * m, nc), dtype=B.dtype).at[slot].add(mx.reshape(BW, (-1, nc)))
+    return mx.reshape(acc, (n, m, nc))
 
 
 def _all_events(tt, ts, period, a, b, r, prot, istar, lam, spots4, law, k, h, ew,
@@ -581,7 +602,7 @@ def _all_events(tt, ts, period, a, b, r, prot, istar, lam, spots4, law, k, h, ew
     times tt (n, m), the star at ts: the planet's limb contacts and every
     spot's events, (n, m, 4 + _E_SPOT * K), live in the parameters -- and
     the same values as a constant computed from host copies (None under
-    mx.compile or vmap), from which _active_nodes reads its mask without
+    mx.compile or vmap), from which _active_pieces reads its mask without
     evaluating the traced graph early."""
     half = 0.5 * exp_time
     off = ts - tt
@@ -732,7 +753,7 @@ def flux_dev_spots_tau(tau, ts, period, a, b, r, prot, istar, lam, spots4, law, 
                           events=ev[0] if ev else None,
                           frozen=ev[1] if len(ev) > 1 else None)
     # evaluation points per time: under the contact rule the active nodes
-    # (_active_nodes), typically one or two pieces of n_gl
+    # (_active_pieces), typically one or two pieces of n_gl
     nodes = {M._INT_NONE: 1, M._INT_SUPER: max(int(n_sub), 1)}.get(mode, 2 * int(n_gl))
     out = _in_blocks(run, t2d, [*pc[:7], sp, w2d, *kh], nodes,
                      _SPOT_BLOCK_KERNEL if kernel else _SPOT_BLOCK, per_time=per_time)

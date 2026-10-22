@@ -64,20 +64,20 @@ a star turning in 12 days, against the same transit with no spots
 
 | | forward | vs no spots | value + grad | vs no spots |
 |---|---:|---:|---:|---:|
-| one spot, one evaluation per point | 46 ms | 62× | 231 ms | 140× |
-| two spots, one evaluation per point | 75 ms | 102× | 371 ms | 224× |
-| four spots, one evaluation per point | 150 ms | 203× | 698 ms | 422× |
-| one spot, contact rule (`n_gl = 5`) | 1.24 s | 352× | 3.51 s | 458× |
-| two spots, contact rule (`n_gl = 5`) | 1.72 s | 488× | 4.95 s | 647× |
-| four spots, contact rule (`n_gl = 5`) | 4.33 s | 1,231× | 12.1 s | 1,578× |
+| one spot, one evaluation per point | 47 ms | 59× | 232 ms | 137× |
+| two spots, one evaluation per point | 76 ms | 96× | 374 ms | 220× |
+| four spots, one evaluation per point | 151 ms | 190× | 697 ms | 410× |
+| one spot, contact rule (`n_gl = 5`) | 0.95 s | 270× | 3.22 s | 419× |
+| two spots, contact rule (`n_gl = 5`) | 1.43 s | 408× | 4.81 s | 626× |
+| four spots, contact rule (`n_gl = 5`) | 4.04 s | 1,154× | 12.3 s | 1,599× |
 
 The gradients are in every input: the orbit, the planet, the star, every
 entry of the spot table and the weights. Two spots under the contact rule
 cost less than a ringed planet (see {doc}`../rings/accuracy-and-fitting`).
 
 float64 on the CPU is the reference, not a route for sampling: one light
-curve of 1,000 points with two spots takes 0.086 s for its value and
-0.36 s with its gradient, and under the contact rule 3.0 s and 3.6 s.
+curve of 1,000 points with two spots takes 0.088 s for its value and
+0.37 s with its gradient, and under the contact rule 3.1 s and 3.7 s.
 
 ## Other codes
 

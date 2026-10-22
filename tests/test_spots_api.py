@@ -478,7 +478,7 @@ def test_contact_rule_gradient_across_blocks(monkeypatch):
     assert np.max(np.abs(many - one)) < 1e-12 * np.max(np.abs(one))
 
 
-def test_contact_rule_active_nodes_are_every_node(monkeypatch):
+def test_contact_rule_active_pieces_are_every_node(monkeypatch):
     """Evaluating only the nodes with nonzero weight (the default) gives
     the light curve and gradient of evaluating every node."""
     from elome import spots_tau as ST
@@ -499,7 +499,7 @@ def test_contact_rule_active_nodes_are_every_node(monkeypatch):
                                                         mx.array(0.1, dtype=mx.float64))
         return np.array([v.item()] + [x.item() for x in g])
     active = run()
-    monkeypatch.setattr(ST, "_active_nodes", lambda *a, **k: None)
+    monkeypatch.setattr(ST, "_active_pieces", lambda *a, **k: None)
     every = run()
     assert np.max(np.abs(active - every) / np.abs(every)) < 1e-13
 
