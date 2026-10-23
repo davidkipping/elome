@@ -160,6 +160,7 @@ tutorials/index
 tutorials/01_elome_with_anvil
 tutorials/02_joint_transit_and_gp
 tutorials/03_spherical_and_oblate_planets
+tutorials/04_starspots_on_hat_p_11
 ```
 
 ```{toctree}

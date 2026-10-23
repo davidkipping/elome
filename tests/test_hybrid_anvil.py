@@ -31,13 +31,16 @@ def _q(law):
 
 
 def _photometry(law="hybrid4", spots=False, ecc=0.0, w=90.0, exp_time=0.0,
-                n=300, yerr=2e-4, seed=1):
-    """Three transits through the frontend (spotted: on EP's star)."""
+                n=300, yerr=2e-4, seed=1, star_alone=False):
+    """Three transits through the frontend (spotted: on EP's star; with
+    ``star_alone`` the same times with the planet half an orbit away)."""
     rng = np.random.default_rng(seed)
     t = np.sort(np.concatenate([T0 + k * PER + rng.uniform(-0.2, 0.2, n)
                                 for k in range(3)]))
     p = elome.TransitParams()
     p.t0, p.per, p.rp, p.a, p.inc, p.ecc, p.w = T0, PER, RP, A, INC, ecc, w
+    if star_alone:
+        p.t0 = T0 + 0.5 * PER
     p.limb_dark, p.u = law, W[law]
     if spots:
         p.spots, p.prot, p.istar, p.lam, p.spot_epoch = SPOTS, PROT, ISTAR, LAM, EP
@@ -72,6 +75,11 @@ def _target(law="hybrid4", spots=False, **kw):
     t, y, yerr, flux = _photometry(law, spots, kw.pop("ecc", 0.0),
                                    kw.pop("w", 90.0), kw.get("exp_time", 0.0))
     extra = dict(n_spots=2, bounds={"prot": (5.0, 15.0)}, spot_epoch=EP) if spots else {}
+    if spots and kw.get("relative", True):
+        # relative to the spotted star's own level: the frontend's flux over
+        # its star-alone flux at the same times
+        star = _photometry(law, spots, star_alone=True)[3]
+        flux, y = flux / star, y / star
     tt = make_transit_target(t, y, yerr, T0 + 0.003, PER - 0.0005,
                              limb_dark=law, **extra, **kw)
     return tt, flux
@@ -151,9 +159,18 @@ def spotted():
 
 class TestSpottedTarget:
     def test_model_is_the_frontend(self, spotted):
+        """relative (the default): the frontend's flux over its flux with
+        the planet half an orbit away; out of transit exactly 0."""
         tt, flux = spotted
         assert not tt.compile_step and tt.n_spots == 2
         assert abs(tt.spot_epoch - EP) < 1e-9 and tt.x64.shape[0] == 3
+        m = _model64(tt, _truth(tt))
+        assert np.max(np.abs(m - (flux - 1.0))) < 1e-11
+        oot = np.abs(tt.x64[0]) > 0.1
+        assert np.max(np.abs(m[oot])) < 1e-15
+
+    def test_unspotted_normalisation(self):
+        tt, flux = _target("hybrid4", spots=True, relative=False)
         assert np.max(np.abs(_model64(tt, _truth(tt)) - (flux - 1.0))) < 1e-11
 
     def test_chi2_precision_and_gradient(self, spotted):

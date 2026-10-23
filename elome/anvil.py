@@ -208,7 +208,7 @@ def make_hybrid_transit_flux(period_ref: float, limb_dark: str = "hybrid4",
                              eccentric: bool = False, n_spots: int = 0,
                              exp_time: float = 0.0,
                              integration: str = "contact", n_gl: int = 5,
-                             n_sub: int = 1):
+                             n_sub: int = 1, relative: bool = True):
     """Engine-contract batched model for a hybrid limb-darkening law:
     v = (n_chains, d) with ``transit_param_names(limb_dark, eccentric,
     n_spots)`` and x = (2, m) epoch-centered times -- (3, m) with spots,
@@ -222,6 +222,14 @@ def make_hybrid_transit_flux(period_ref: float, limb_dark: str = "hybrid4",
     ``integration`` ("contact", "supersample" or "none"; ``n_gl``,
     ``n_sub`` as there). A spotted model is evaluated eagerly: it raises
     under ``mx.compile`` (run anvil with ``compile_step=False``).
+
+    ``relative`` (spots only): the flux relative to the spotted star's own
+    level at each time, (1 + dF) / (1 + dF_star) - 1, with dF_star the
+    same model with the planet half an orbit away -- what a light curve
+    normalised to its out-of-transit level measures, at twice the cost.
+    False: relative to the unspotted star (``flux_dev_from_tau``'s
+    normalisation), which leaves ``df0`` to absorb the spots' visible
+    deficit, a ridge HMC samples poorly.
     """
     from .metal import flux_dev_from_tau
     period_ref = float(period_ref)
@@ -256,12 +264,19 @@ def make_hybrid_transit_flux(period_ref: float, limb_dark: str = "hybrid4",
                 istar=mx.arccos(mx.clip(v[:, col["cos_istar"]], -1.0 + 1e-6,
                                         1.0 - 1e-6)),
                 lam=v[:, col["lam"]] * _DEG)
-        dev = flux_dev_from_tau(
-            tau, period, v[:, 4], v[:, 3], v[:, 2], limb_dark=limb_dark,
-            u=_w_from_q(limb_dark, v[:, iq:iq + n_q]), exp_time=exp_time,
-            integration=integration if exp_time > 0.0 else "none",
-            n_gl=n_gl, n_sub=n_sub, **kw)
-        return v[:, -1:] + dev
+        def dev(tt):
+            return flux_dev_from_tau(
+                tt, period, v[:, 4], v[:, 3], v[:, 2], limb_dark=limb_dark,
+                u=_w_from_q(limb_dark, v[:, iq:iq + n_q]), exp_time=exp_time,
+                integration=integration if exp_time > 0.0 else "none",
+                n_gl=n_gl, n_sub=n_sub, **kw)
+        if K and relative:
+            # the star alone: the same times on the star's clock, the planet
+            # at the opposite conjunction (behind the star, which hides it)
+            half = 0.5 * period[:, None]
+            star = dev(mx.where(tau < 0.0, tau + half, tau - half))
+            return v[:, -1:] + (dev(tau) - star) / (1.0 + star)
+        return v[:, -1:] + dev(tau)
 
     return flux_dev_fn
 
@@ -430,7 +445,8 @@ def make_transit_target(t, y, yerr, t0_guess, period_guess,
                         core: str = "metal", strength: float = 1e6,
                         limb_dark: str = "quadratic", n_spots: int = 0,
                         exp_time: float = 0.0, integration: str = "contact",
-                        n_gl: int = 5, spot_epoch=None):
+                        n_gl: int = 5, spot_epoch=None,
+                        relative: bool = True):
     """Build an anvil fitting problem from REAL photometry.
 
     ``core`` is "metal" (default: fused fp32 kernels, falling back to the
@@ -478,6 +494,10 @@ def make_transit_target(t, y, yerr, t0_guess, period_guess,
         spot_epoch: when the spots' longitudes are measured (t's system);
             default the predicted mid-transit nearest the data's middle,
             which keeps the star's float32 phase accurate.
+        relative: with spots, model the flux relative to the spotted
+            star's own level (True, for data normalised to their
+            out-of-transit level) or to the unspotted star (False); see
+            ``make_hybrid_transit_flux``.
         bounds: per-parameter (lo, hi) overrides on DEFAULT_BOUNDS (a spot
             field, ``"rad"``, covers every spot; ``"rad2"`` one). The
             defaults cap r at 0.5, b at 1.2 and a at 200; an occultor
@@ -544,7 +564,8 @@ def make_transit_target(t, y, yerr, t0_guess, period_guess,
     if hybrid:
         model_fn = make_hybrid_transit_flux(
             period_ref, limb_dark, eccentric=eccentric, n_spots=n_spots,
-            exp_time=exp_time, integration=integration, n_gl=n_gl)
+            exp_time=exp_time, integration=integration, n_gl=n_gl,
+            relative=relative)
     elif eccentric:
         model_fn = make_ecc_transit_flux(period_ref=period_ref, core=core)
     else:

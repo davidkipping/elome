@@ -145,7 +145,11 @@ parameter, and batched float32 kernels on the GPU.
   The longitude is a box, not a wrapped angle: if a spot's posterior
   reaches ±180°, move `spot_epoch` or the box. The spots are left
   unordered; relabel the draws afterwards. Run the sampler with
-  `compile_step=tt.compile_step`.
+  `compile_step=tt.compile_step`. By default (`relative=True`) the model
+  is the flux relative to the spotted star's own level at each time, which
+  is what a light curve normalised to its out-of-transit level measures;
+  it costs a second evaluation, without the planet. Tutorial 4 fits two
+  crossings in Kepler data this way, from finding the spots to sampling.
 - **Keep the spots' epoch near the data.** The star's phase grows with
   the time since the epoch, and float32 carries it to about
   $6\times10^{-8}$ of itself: an epoch in the middle of the data keeps

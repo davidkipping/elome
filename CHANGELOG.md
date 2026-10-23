@@ -16,8 +16,19 @@ every release is tagged `vX.Y.Z` in git.
   the data's middle). Bounds given by spot field (`"rad"`) cover every
   spot. `transit_param_names` gives the parameter order for any options;
   `make_hybrid_transit_flux` is the model function on its own. A spotted
-  target sets `compile_step=False`, to pass to `anvil.run`.
+  target sets `compile_step=False`, to pass to `anvil.run`, and by
+  default (`relative=True`) models the flux relative to the spotted star's
+  own level at each time, as data normalised to their out-of-transit
+  level measure it (relative to the unspotted star, `relative=False`,
+  `df0` must cancel the spots' visible deficit, a ridge HMC samples
+  poorly).
   `ecc_constraint_penalty` takes the column of `secosw` (`ik=`).
+
+### Documentation
+- **Tutorial 4: starspots on HAT-P-11.** Two spot crossings in a Kepler
+  short-cadence transit of HAT-P-11b, located with a batched grid search,
+  refined with `anvil.optimize` and sampled with ChEES-HMC, the spots
+  placed on the stellar disc and compared with the literature.
 
 ## [0.21.0] — 2026-10-22
 
