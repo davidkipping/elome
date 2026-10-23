@@ -41,8 +41,12 @@ every release is tagged `vX.Y.Z` in git.
   n_sub=)`.** `n_sub` is now a parameter; without it every exposure was
   evaluated at its midpoint only.
 - **anvil: unknown `bounds` keys raise.** A bare family name such as
-  `"q"` or `"df"` was accepted and ignored; only the spot fields
+  `"q"` or `"df"`, or a parameter the model does not have (`"secosw"` on
+  a circular target), was accepted and ignored; only the spot fields
   (`"lon"`, `"sinlat"`, `"rad"`, `"contrast"`) cover a family.
+- **anvil: the relative model on an eccentric orbit** puts the planet at
+  the occultation the orbit gives (the mean anomaly between the
+  conjunctions, in closed form), not half a period after transit.
 
 ## [0.22.0] — 2026-10-22
 

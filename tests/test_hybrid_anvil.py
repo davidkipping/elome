@@ -30,17 +30,28 @@ def _q(law):
     return hybrid4_to_q_np(w) if law == "hybrid4" else q_from_simplex_np(w)
 
 
+def _occultation(ecc, w):
+    """Time from transit to occultation, in orbits (numpy, by the mean
+    anomaly between the conjunctions)."""
+    def M(theta):
+        E = 2.0 * math.atan2(math.sqrt(1.0 - ecc) * math.sin(0.5 * theta),
+                             math.sqrt(1.0 + ecc) * math.cos(0.5 * theta))
+        return E - ecc * math.sin(E)
+    th = 0.5 * math.pi - math.radians(w)
+    return ((M(th + math.pi) - M(th)) / (2.0 * math.pi)) % 1.0
+
+
 def _photometry(law="hybrid4", spots=False, ecc=0.0, w=90.0, exp_time=0.0,
                 n=300, yerr=2e-4, seed=1, star_alone=False):
     """Three transits through the frontend (spotted: on EP's star; with
-    ``star_alone`` the same times with the planet half an orbit away)."""
+    ``star_alone`` the same times with the planet at occultation)."""
     rng = np.random.default_rng(seed)
     t = np.sort(np.concatenate([T0 + k * PER + rng.uniform(-0.2, 0.2, n)
                                 for k in range(3)]))
     p = elome.TransitParams()
     p.t0, p.per, p.rp, p.a, p.inc, p.ecc, p.w = T0, PER, RP, A, INC, ecc, w
     if star_alone:
-        p.t0 = T0 + 0.5 * PER
+        p.t0 = T0 + _occultation(ecc, w) * PER
     p.limb_dark, p.u = law, W[law]
     if spots:
         p.spots, p.prot, p.istar, p.lam, p.spot_epoch = SPOTS, PROT, ISTAR, LAM, EP
@@ -72,13 +83,15 @@ def _model64(tt, v):
 
 
 def _target(law="hybrid4", spots=False, **kw):
-    t, y, yerr, flux = _photometry(law, spots, kw.pop("ecc", 0.0),
-                                   kw.pop("w", 90.0), kw.get("exp_time", 0.0))
+    t, y, yerr, flux = _photometry(law, spots, kw.get("ecc", 0.0),
+                                   kw.get("w", 90.0), kw.get("exp_time", 0.0))
+    kw.pop("ecc", None), kw.pop("w", None)
     extra = dict(n_spots=2, bounds={"prot": (5.0, 15.0)}, spot_epoch=EP) if spots else {}
     if spots and kw.get("relative", True):
         # relative to the spotted star's own level: the frontend's flux over
         # its star-alone flux at the same times
-        star = _photometry(law, spots, exp_time=kw.get("exp_time", 0.0), star_alone=True)[3]
+        star = _photometry(law, spots, kw.get("ecc", 0.0), kw.get("w", 90.0),
+                           kw.get("exp_time", 0.0), star_alone=True)[3]
         flux, y = flux / star, y / star
     tt = make_transit_target(t, y, yerr, T0 + 0.003, PER - 0.0005,
                              limb_dark=law, **extra, **kw)
@@ -162,7 +175,8 @@ class TestHybridTarget:
                                 core="graph")
         with pytest.raises(ValueError, match="exp_time needs a hybrid law"):
             make_transit_target(t, y, yerr, T0, PER, exp_time=0.02)
-        for key in ("q", "df"):           # not a family: would be ignored
+        # not a family, or not in this model: would be ignored
+        for key in ("q", "df", "secosw", "contrast", "q5"):
             with pytest.raises(ValueError, match="unknown parameter"):
                 make_transit_target(t, y, yerr, T0, PER, limb_dark="hybrid4",
                                     bounds={key: (0.0, 0.5)})
@@ -186,10 +200,26 @@ class TestSpottedTarget:
         assert np.max(np.abs(m[oot])) < 1e-15
 
     def test_exposures(self):
-        """Long cadence: the star term by two-point Gauss-Legendre, against
+        """Long cadence: the star term by three-point Gauss-Legendre, against
         the frontend's contact rule for both terms."""
         tt, flux = _target("hybrid4", spots=True, exp_time=29.4 / 1440.0)
         assert np.max(np.abs(_model64(tt, _truth(tt)) - (flux - 1.0))) < 1e-10
+
+    def test_eccentric(self):
+        """e = 0.6 with occultation near periastron (w = 270): the planet is
+        put at the occultation the orbit gives, not half a period on."""
+        tt, flux = _target("hybrid4", spots=True, ecc=0.6, w=270.0, eccentric=True)
+        assert np.max(np.abs(_model64(tt, _truth(tt, 0.6, 270.0)) - (flux - 1.0))) < 1e-10
+
+    def test_supersampled_out_of_transit_is_flat(self):
+        """integration="supersample": the same rule serves both terms, so
+        out of transit the relative model is 0 to rounding."""
+        t, y, yerr, _ = _photometry(spots=True, n=60)
+        tt = make_transit_target(t, y, yerr, T0, PER, limb_dark="hybrid4", n_spots=2,
+                                 bounds={"prot": (5.0, 15.0)}, spot_epoch=EP,
+                                 exp_time=29.4 / 1440.0, integration="supersample")
+        m = _model64(tt, _truth(tt))
+        assert np.max(np.abs(m[np.abs(tt.x64[0]) > 0.1])) < 1e-15
 
     def test_unspotted_normalisation(self):
         tt, flux = _target("hybrid4", spots=True, relative=False)

@@ -33,9 +33,11 @@ from dataclasses import dataclass
 import mlx.core as mx
 import numpy as np
 
+from .exposure import gauss_legendre
 from .flux import flux_dev
 from .ld import q_to_u, q_to_u_np, u_to_q_np
 from .orbit import epoch_center_times, separation_circular, tau_from_epochs
+from .trig import sincos
 
 __all__ = ["make_quad_transit_flux", "make_target", "QuadTransitTarget",
            "import_engine", "make_ecc_transit_flux", "make_ecc_target",
@@ -206,8 +208,27 @@ def _w_from_q(limb_dark: str, q: mx.array) -> mx.array:
 
 # the star-alone term's exposure average (make_hybrid_transit_flux): the
 # three-point Gauss-Legendre nodes on [-1, 1] and weights summing to 1
-_STAR_GL_X = (-math.sqrt(0.6), 0.0, math.sqrt(0.6))
-_STAR_GL_W = (5.0 / 18.0, 8.0 / 18.0, 5.0 / 18.0)
+_STAR_GL_X, _STAR_GL_W = (tuple(float(v) for v in a) for a in gauss_legendre(3))
+_STAR_GL_W = tuple(w / 2.0 for w in _STAR_GL_W)
+
+
+def _occultation_offset(k, h):
+    """The time from transit to occultation in orbits, (0, 1), from
+    (k, h) = sqrt(e) (cos w, sin w): the mean anomaly between the two
+    conjunctions, in closed form (E from the true anomaly). 1/2 on a
+    circular orbit, where the slope in (k, h) is finite."""
+    e = k * k + h * h
+    circ = e == 0.0
+    w = mx.arctan2(mx.where(circ, 0.0, h), mx.where(circ, 1.0, k))
+    sq_m, sq_p = mx.sqrt(mx.maximum(1.0 - e, 0.0)), mx.sqrt(1.0 + e)
+
+    def mean_anomaly(theta):
+        s, c = sincos(0.5 * theta)
+        E = 2.0 * mx.arctan2(sq_m * s, sq_p * c)
+        return E - e * mx.sin(E)
+    th = 0.5 * math.pi - w                                   # transit
+    d = (mean_anomaly(th + math.pi) - mean_anomaly(th)) / (2.0 * math.pi)
+    return d - mx.floor(d)
 
 
 def make_hybrid_transit_flux(period_ref: float, limb_dark: str = "hybrid4",
@@ -283,13 +304,16 @@ def make_hybrid_transit_flux(period_ref: float, limb_dark: str = "hybrid4",
                 n_gl=n_gl, n_sub=n_sub, **{**kw, **over})
         if K and relative:
             # the star alone: the same times on the star's clock, the planet
-            # at the opposite conjunction (behind the star, which hides it)
-            half = 0.5 * period[:, None]
-            behind = mx.where(tau < 0.0, tau + half, tau - half)
-            if exp_time > 0.0 and integration != "none":
+            # at the opposite conjunction (behind the star, which hides it),
+            # the data's window around transit moved to one around occultation
+            shift = (0.5 if not eccentric else _occultation_offset(k, h)[:, None])
+            s = tau + shift * period[:, None]
+            behind = s - period[:, None] * mx.round(s / period[:, None])
+            if exp_time > 0.0 and integration == "contact":
                 # nothing to split (the planet makes no events, a spot
                 # turning onto the disc is split by no rule): each exposure
-                # by three-point Gauss-Legendre, with no event search
+                # by three-point Gauss-Legendre, with no event search; the
+                # supersample rule, searching nothing, serves both terms
                 m, st = tau.shape[1], kw["spot_time"]
                 d = [0.5 * exp_time * x for x in _STAR_GL_X]
                 nodes = dev(mx.concatenate([behind + x for x in d], axis=1), 0.0,
@@ -617,7 +641,7 @@ def _param_bounds(names, bounds) -> dict:
     for every ``"radj"``), then DEFAULT_BOUNDS likewise."""
     bounds = dict(bounds or {})
     family = {n: n.rstrip("0123456789") for n in names}
-    known = set(DEFAULT_BOUNDS) | set(names)
+    known = set(names) | {family[n] for n in names if family[n] in _SPOT_FIELDS}
     for k in bounds:
         if k not in known:
             raise ValueError(f"unknown parameter {k!r}; expected "
