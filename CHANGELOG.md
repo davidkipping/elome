@@ -3,7 +3,7 @@
 All notable changes to Elómë. Versioning: semantic-ish (MAJOR.MINOR.PATCH);
 every release is tagged `vX.Y.Z` in git.
 
-## [Unreleased]
+## [0.22.0] — 2026-10-22
 
 ### Added
 - **anvil targets for the hybrid laws and spotted stars.**

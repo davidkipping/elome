@@ -426,7 +426,7 @@ circular model does.
 ### `anvil.make_hybrid_transit_flux`
 
 ```python
-make_hybrid_transit_flux(period_ref: float, limb_dark: str = 'hybrid4', eccentric: bool = False, n_spots: int = 0, exp_time: float = 0.0, integration: str = 'contact', n_gl: int = 5, n_sub: int = 1)
+make_hybrid_transit_flux(period_ref: float, limb_dark: str = 'hybrid4', eccentric: bool = False, n_spots: int = 0, exp_time: float = 0.0, integration: str = 'contact', n_gl: int = 5, n_sub: int = 1, relative: bool = True)
 ```
 
 ```text
@@ -443,6 +443,14 @@ function. ``exp_time`` (days) > 0 integrates each exposure by
 ``integration`` ("contact", "supersample" or "none"; ``n_gl``,
 ``n_sub`` as there). A spotted model is evaluated eagerly: it raises
 under ``mx.compile`` (run anvil with ``compile_step=False``).
+
+``relative`` (spots only): the flux relative to the spotted star's own
+level at each time, (1 + dF) / (1 + dF_star) - 1, with dF_star the
+same model with the planet half an orbit away -- what a light curve
+normalised to its out-of-transit level measures, at twice the cost.
+False: relative to the unspotted star (``flux_dev_from_tau``'s
+normalisation), which leaves ``df0`` to absorb the spots' visible
+deficit, a ridge HMC samples poorly.
 ```
 
 ### `anvil.transit_param_names`
@@ -484,7 +492,7 @@ PARAM_NAMES_ECC = ['t0_off', 'p_off', 'r', 'b', 'a', 'q1', 'q2', 'secosw', 'sesi
 ### `anvil.make_transit_target`
 
 ```python
-make_transit_target(t, y, yerr, t0_guess, period_guess, eccentric: bool = False, bounds=None, policy=None, core: str = 'metal', strength: float = 1000000.0, limb_dark: str = 'quadratic', n_spots: int = 0, exp_time: float = 0.0, integration: str = 'contact', n_gl: int = 5, spot_epoch=None)
+make_transit_target(t, y, yerr, t0_guess, period_guess, eccentric: bool = False, bounds=None, policy=None, core: str = 'metal', strength: float = 1000000.0, limb_dark: str = 'quadratic', n_spots: int = 0, exp_time: float = 0.0, integration: str = 'contact', n_gl: int = 5, spot_epoch=None, relative: bool = True)
 ```
 
 ```text
@@ -535,6 +543,10 @@ Args:
     spot_epoch: when the spots' longitudes are measured (t's system);
         default the predicted mid-transit nearest the data's middle,
         which keeps the star's float32 phase accurate.
+    relative: with spots, model the flux relative to the spotted
+        star's own level (True, for data normalised to their
+        out-of-transit level) or to the unspotted star (False); see
+        ``make_hybrid_transit_flux``.
     bounds: per-parameter (lo, hi) overrides on DEFAULT_BOUNDS (a spot
         field, ``"rad"``, covers every spot; ``"rad2"`` one). The
         defaults cap r at 0.5, b at 1.2 and a at 200; an occultor
