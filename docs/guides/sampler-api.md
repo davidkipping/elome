@@ -4,9 +4,9 @@
 likelihood. It takes per-chain parameters and per-chain times and
 returns per-chain flux deviations $F - 1$, from one fused GPU kernel per
 call, with analytic gradients in every input. The same call covers
-spherical, oblate and ringed planets and spotted stars, every
-limb-darkening law, circular and eccentric orbits, and every exposure
-rule.
+spherical, oblate and ringed planets and spotted stars, the quadratic
+and hybrid limb-darkening laws, circular and eccentric orbits, and every
+exposure rule.
 
 ```python
 from elome import flux_dev_from_tau

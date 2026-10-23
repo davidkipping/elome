@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 120" width="200" height="120">
+<defs>
+  <radialGradient id="limb" cx="50%" cy="50%" r="50%">
+    <stop offset="0%" stop-color="#fff7da"/>
+    <stop offset="55%" stop-color="#ffe08a"/>
+    <stop offset="85%" stop-color="#ffbe55"/>
+    <stop offset="100%" stop-color="#f08a2c"/>
+  </radialGradient>
+  <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+    <stop offset="80%" stop-color="#ffb347" stop-opacity="0.35"/>
+    <stop offset="100%" stop-color="#ffb347" stop-opacity="0"/>
+  </radialGradient>
+</defs>
+<circle cx="128" cy="60" r="62" fill="url(#glow)"/>
+<circle cx="128" cy="60" r="54" fill="url(#limb)"/>
+<g fill="#b45f1e" opacity="0.62">
+  <ellipse cx="108" cy="40" rx="9" ry="7.5"/>
+  <ellipse cx="143" cy="73" rx="8" ry="7"/>
+  <ellipse cx="160" cy="34" rx="4.5" ry="6" transform="rotate(25 160 34)"/>
+  <ellipse cx="96" cy="86" rx="5" ry="3.5"/>
+</g>
+
+<line x1="18" y1="72" x2="196" y2="72" stroke="#7d8796" stroke-width="1"
+      stroke-dasharray="3 4" opacity="0.6"/>
+<circle cx="40" cy="72" r="11" fill="#7d8796" opacity="0.18"/>
+<circle cx="66" cy="72" r="11" fill="#7d8796" opacity="0.32"/>
+<circle cx="92" cy="72" r="11" fill="#7d8796" opacity="0.46"/>
+<circle cx="124" cy="72" r="11" fill="#1f2633" opacity="1.00"/>
+</svg>

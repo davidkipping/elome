@@ -46,6 +46,7 @@ watch for when fitting.
 :::{grid-item-card} Spherical planets
 :link: spherical/index
 :link-type: doc
+:class-card: path-card path-spherical
 
 The standard transit: uniform, linear, quadratic, polynomial or hybrid
 limb darkening; circular and eccentric orbits; secondary eclipses;
@@ -55,6 +56,7 @@ companions larger than their star.
 :::{grid-item-card} Oblate planets
 :link: oblate/index
 :link-type: doc
+:class-card: path-card path-oblate
 
 A planet flattened by rotation projects to an ellipse. Two more
 parameters (flattening and sky angle), the hybrid limb-darkening laws,
@@ -64,6 +66,7 @@ and the same fast, differentiable machinery.
 :::{grid-item-card} Ringed planets
 :link: rings/index
 :link-type: doc
+:class-card: path-card path-ringed
 
 A spherical or oblate planet with a flat ring in its equatorial plane,
 opaque or translucent: four more parameters, exact limb darkening, every
@@ -73,12 +76,51 @@ gradient.
 :::{grid-item-card} Starspots
 :link: spots/index
 :link-type: doc
+:class-card: path-card path-spots
 
 Circular spots and faculae on a rotating star, crossed by the planet:
 the crossings and the rotational modulation, exact limb darkening, every
 gradient.
 :::
 ::::
+
+## What combines with what
+
+A ringed planet may be spherical or oblate; a spotted star is crossed by
+a spherical planet.
+
+| | spherical planet | oblate planet | ringed planet | spotted star |
+|---|:---:|:---:|:---:|:---:|
+| hybrid limb-darkening laws | ✓ | ✓ | ✓ | ✓ |
+| polynomial laws | ✓ | ✗ | ✗ | ✗ |
+| eccentric orbits | ✓ | ✓ | ✓ | ✓ |
+| finite exposures | ✓ | ✓ | ✓ | ✓ |
+| secondary eclipses | ✓ | ✗ | ✗ | ✗ |
+| transit timing variations | ✓ | ✓ | ✓ | ✓ |
+| batches of parameter sets | ✓ | ✓ | ✓ | ✓ |
+| gradients in every parameter | ✓ | ✓ | ✓ | ✓ |
+| float32 GPU kernels | ✓ | ✓ | ✓ | ✓ |
+| occultor larger than the star | ✓ | ✗ | ✓ | untested |
+| `anvil` fitting target | ✓ | ✗ | ✗ | ✓ |
+
+- **Eccentric orbits**: Elómë computes the light curve up to $e < 1$
+  for a spherical planet and $e \le 0.999$ for the others; those are
+  the limits of its numerics, not of physics. It does not check that the
+  planet clears the star at periastron, $a(1-e) > 1 + r_p$ (for $a = 10$
+  and $r_p = 0.1$, $e < 0.89$). The `anvil` fitting targets add that
+  condition as a barrier.
+- **Finite exposures**: supersampling or the contact rule; secondary
+  eclipses take supersampling only. See {doc}`guides/exposures`.
+- **Transit timing variations**: through {doc}`guides/sampler-api`,
+  which takes each point's time since its own mid-transit, with a
+  hybrid law or a polynomial law up to quadratic. `TransitModel` uses
+  one linear ephemeris.
+- **float32 GPU kernels**: polynomial laws beyond quadratic run as a
+  float32 MLX graph instead.
+- **Occultor size**: an oblate planet needs $r_p \le (1-f)^{3/2}$, so
+  that its outline crosses the stellar limb at most twice.
+- **`anvil` fitting target** (`make_transit_target`): the quadratic or a
+  hybrid law; finite exposures with a hybrid law.
 
 New to Elómë? Start with {doc}`getting-started/installation` and the
 {doc}`getting-started/quickstart`.

@@ -2,3 +2,25 @@
 .navbar-brand img { max-height: 2.2rem; }
 /* tables of numbers read better right-aligned and compact */
 table.docutils td, table.docutils th { padding: 0.25rem 0.6rem; }
+/* landing-page path cards: a cartoon of each kind of transit in a
+   column at the right, its track fading out under the text
+   (docs/assets/make_card_images.py) */
+.sd-card.path-card { position: relative; overflow: hidden; }
+.sd-card.path-card::before {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background-repeat: no-repeat; background-position: right 0.3rem center;
+  background-size: 46% auto;
+  -webkit-mask-image: linear-gradient(to right, transparent 45%, #000 72%);
+  mask-image: linear-gradient(to right, transparent 45%, #000 72%);
+}
+html[data-theme="dark"] .sd-card.path-card::before { opacity: 0.85; }
+.sd-card.path-card > * { position: relative; }
+/* the theme paints the card body opaque: paint the card instead */
+.bd-content .sd-card.path-card { background-color: var(--pst-color-on-background); }
+.bd-content .sd-card.path-card .sd-card-body {
+  background-color: transparent; padding-right: 36%;
+}
+.path-spherical::before { background-image: url("cards/spherical.svg"); }
+.path-oblate::before { background-image: url("cards/oblate.svg"); }
+.path-ringed::before { background-image: url("cards/ringed.svg"); }
+.path-spots::before { background-image: url("cards/spots.svg"); }
