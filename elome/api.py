@@ -302,11 +302,12 @@ class _nullcontext:
 
 
 _ECC_MSG = "eccentricity must be in [0, 1); got {}"
-# an oblate or ringed planet's orbit is rebuilt from the impact parameter,
-# whose cos i (anchored.cos_inc_from_b) holds to e = 0.999 (metal._E_MAX)
+# an oblate or ringed planet's orbit, and a spotted star's, is rebuilt from
+# the impact parameter, whose cos i (anchored.cos_inc_from_b) holds to
+# e = 0.999 (metal._E_MAX)
 _ECC_MAX_SHAPED = 0.999
 _ECC_MSG_SHAPED = ("eccentricity must be in [0, 0.999] for an oblate or "
-                   "ringed planet; got {}")
+                   "ringed planet or a spotted star; got {}")
 
 
 def _ecc_ok(ecc, shaped):
@@ -317,7 +318,8 @@ def _check_ecc(ecc, shaped=False):
     """Reject eccentricities the model cannot represent, before they reach
     a graph that would return a plausible flat curve (e >= 1) or an
     all-NaN row (e < 0) with nothing pointing at the parameter -- or, for
-    an oblate or ringed planet (shaped), a wrong orbit (e > 0.999). A
+    an oblate or ringed planet or a spotted star (shaped: the orbit is
+    rebuilt from b), a wrong orbit (e > 0.999). A
     Python number is checked as a scalar; the batched path passes an
     array."""
     msg = _ECC_MSG_SHAPED if shaped else _ECC_MSG
@@ -333,16 +335,20 @@ def _check_ecc(ecc, shaped=False):
 _GEOM_RULES = (("rp", "rp must be >= 0", lambda v: v >= 0.0),
                ("a", "a must be > 1 (stellar radii)", lambda v: v > 1.0),
                ("per", "per must be > 0", lambda v: v > 0.0))
+# a spotted star's, checked with them (_geom_rules)
+_PROT_RULE = ("prot", "prot (the star's rotation period) must be > 0",
+              lambda v: v > 0.0)
 
 
-def _check_geometry(params):
-    """rp >= 0, a > 1, per > 0 (and finite) for the readable fields --
-    Python numbers, numpy values, and mx.arrays outside a trace; returns
+def _check_geometry(params, rules=_GEOM_RULES):
+    """rp >= 0, a > 1, per > 0 (and a spotted star's prot > 0), all finite,
+    for the readable fields -- Python numbers, numpy values, and mx.arrays
+    outside a trace; returns
     the traced mx.array fields, which cannot be read (mx.compile / vmap)
     and are masked to NaN in the graph instead (_geometry_mask). A
     negative rp otherwise returns a finite, deeper, wrong transit."""
     traced = []
-    for name, msg, ok in _GEOM_RULES:
+    for name, msg, ok in rules:
         x = getattr(params, name)
         if isinstance(x, mx.array):
             v = _scalar_value(x)
@@ -358,9 +364,9 @@ def _check_geometry(params):
     return traced
 
 
-def _check_geometry_cols(cols):
+def _check_geometry_cols(cols, rules=_GEOM_RULES):
     """_check_geometry's rules on light_curves' (n_sets,) columns."""
-    for name, msg, ok in _GEOM_RULES:
+    for name, msg, ok in rules:
         vals = cols[name]
         bad = ~(np.isfinite(vals) & ok(vals))
         if bool(np.any(bad)):
@@ -370,7 +376,7 @@ def _check_geometry_cols(cols):
 def _geometry_mask(traced, values, dtype):
     """1.0, or NaN where a traced field breaks its rule (_check_geometry)."""
     ok = None
-    rules = {name: rule for name, _, rule in _GEOM_RULES}
+    rules = {name: rule for name, _, rule in _GEOM_RULES + (_PROT_RULE,)}
     for name in traced:
         v = values[name]
         c = mx.logical_and(rules[name](v), v == v)
@@ -453,6 +459,9 @@ class TransitModel:
         self._ringed = _is_ringed(params)
         self._spotted = _is_spotted(params)
         self._shaped = self._oblate or self._ringed
+        # the orbit rebuilt from b: e capped at 0.999 (_check_ecc)
+        self._from_b = self._shaped or self._spotted
+        self._geom_rules = _GEOM_RULES + ((_PROT_RULE,) if self._spotted else ())
         self._batch_keys = self._BATCH_KEYS + (
             ("f", "theta") + _RING_FIELDS if self._ringed
             else ("f", "theta") if self._oblate
@@ -905,7 +914,7 @@ class TransitModel:
         cast once; mx.array fields stay in the graph. Readable geometry
         is validated (_check_geometry); traced fields get a NaN mask."""
         dt = self.dtype
-        traced = _check_geometry(params)
+        traced = _check_geometry(params, self._geom_rules)
         t0 = params.t0
         if is_arr(t0):
             # the reference-time subtraction in fp64, then the model dtype
@@ -920,8 +929,10 @@ class TransitModel:
             ci_py = math.cos(math.radians(float(inc)))
             ci = cast(ci_py)
         per, a, rp = cast(params.per), cast(params.a), cast(params.rp)
-        gmask = (_geometry_mask(traced, {"rp": rp, "a": a, "per": per}, dt)
-                 if traced else None)
+        vals = {"rp": rp, "a": a, "per": per}
+        if "prot" in traced:
+            vals["prot"] = cast(params.prot)
+        gmask = _geometry_mask(traced, vals, dt) if traced else None
         return t0_off, per, a, rp, ci, ci_py, gmask
 
     def _ecc_route(self, params, cast, rad, is_arr):
@@ -940,13 +951,13 @@ class TransitModel:
             e = cast(ecc)
             ev = _scalar_value(e)
             if ev is not None:
-                _check_ecc(ev, self._shaped)
+                _check_ecc(ev, self._from_b)
                 return "ew", e, rad(w), None
-            ok = _ecc_ok(e, self._shaped)
+            ok = _ecc_ok(e, self._from_b)
             return "ew", e, rad(w), mx.where(ok, 1.0, float("nan")).astype(
                 self.dtype)
         ev = float(ecc)
-        _check_ecc(ev, self._shaped)
+        _check_ecc(ev, self._from_b)
         if ev == 0.0:
             return ("circ",)
         sq = math.sqrt(ev)
@@ -1174,6 +1185,9 @@ class TransitModel:
 
     def _spot_eval(self, params, uv, cast, rad, is_arr):
         """light_curve / light_curve_mx for a spotted star, as _ring_eval."""
+        if len(_spot_shape(params.spots)) != 2:
+            raise ValueError("params.spots must be (K, 4) for one light "
+                             "curve; (n_sets, K, 4) is for light_curves")
         t0_off, per, a, rp, ci, ci_py, gmask = self._prep(params, cast, rad,
                                                           is_arr)
         ep = params.spot_epoch
@@ -1302,8 +1316,8 @@ class TransitModel:
                 _ld_coeffs(p, u=uv)
                 rows.append([float(x) for x in uv])
             u = np.array(rows, dtype=np.float64).reshape(len(seq), -1)
-            _check_ecc(cols["ecc"], self._shaped)
-            _check_geometry_cols(cols)
+            _check_ecc(cols["ecc"], self._from_b)
+            _check_geometry_cols(cols, self._geom_rules)
             return cols, u
         p = params_seq                       # array-valued TransitParams
         self._require(lambda k: getattr(p, k), self._required_fields())
@@ -1349,8 +1363,8 @@ class TransitModel:
             raise ValueError(f"inconsistent parameter-array lengths: u has "
                              f"{u.shape[0]} sets, the other fields {n}")
         u = np.broadcast_to(u, (n, u.shape[1]))
-        _check_ecc(cols["ecc"], self._shaped)
-        _check_geometry_cols(cols)
+        _check_ecc(cols["ecc"], self._from_b)
+        _check_geometry_cols(cols, self._geom_rules)
         return cols, np.ascontiguousarray(u)
 
     def light_curves(self, params_seq) -> np.ndarray:

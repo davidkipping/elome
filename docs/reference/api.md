@@ -492,7 +492,7 @@ PARAM_NAMES_ECC = ['t0_off', 'p_off', 'r', 'b', 'a', 'q1', 'q2', 'secosw', 'sesi
 ### `anvil.make_transit_target`
 
 ```python
-make_transit_target(t, y, yerr, t0_guess, period_guess, eccentric: bool = False, bounds=None, policy=None, core: str = 'metal', strength: float = 1000000.0, limb_dark: str = 'quadratic', n_spots: int = 0, exp_time: float = 0.0, integration: str = 'contact', n_gl: int = 5, spot_epoch=None, relative: bool = True)
+make_transit_target(t, y, yerr, t0_guess, period_guess, eccentric: bool = False, bounds=None, policy=None, core: str = 'metal', strength: float = 1000000.0, limb_dark: str = 'quadratic', n_spots: int = 0, exp_time: float = 0.0, integration: str = 'contact', n_gl: int = 5, spot_epoch=None, relative: bool = True, n_sub: int = 1)
 ```
 
 ```text
@@ -538,8 +538,10 @@ Args:
         relabelled copies; sort the draws afterwards (by longitude, say).
         Run anvil with ``compile_step=target.compile_step`` (False): a
         spotted model is evaluated eagerly.
-    exp_time, integration, n_gl: an exposure time (in t's units) and
-        its rule, for hybrid laws (``make_hybrid_transit_flux``).
+    exp_time, integration, n_gl, n_sub: an exposure time (in t's
+        units) and its rule, for hybrid laws: ``n_gl`` nodes per piece
+        for "contact", ``n_sub`` for "supersample"
+        (``make_hybrid_transit_flux``).
     spot_epoch: when the spots' longitudes are measured (t's system);
         default the predicted mid-transit nearest the data's middle,
         which keeps the star's float32 phase accurate.

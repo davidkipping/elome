@@ -54,6 +54,7 @@ What differs:
 - **The hybrid limb-darkening laws only**, as for oblate and ringed
   planets.
 - **A spherical planet, and primary transits only.**
+- **Eccentricity up to 0.999**, as for oblate and ringed planets.
 - **The number of spots is fixed per model.** Their values can change
   between calls, but a model built for two spots takes two.
 - **The flux is not 1 out of transit.** It is the spots' rotational

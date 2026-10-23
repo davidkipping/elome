@@ -106,8 +106,9 @@ normalisation factor; see {doc}`accuracy-and-fitting`.
 - every value finite.
 
 Outside it a Python number or numpy array raises `ValueError`, and an MLX
-array gives NaN. The number of spots, K, is fixed when the model is
-built. A spot may be anywhere: on the far side, rotating onto or off the
+array gives NaN. `prot` must be positive, and the eccentricity at most
+0.999, as for an oblate planet; outside, either raises. The number of
+spots, K, is fixed when the model is built. A spot may be anywhere: on the far side, rotating onto or off the
 disc, straddling the limb, overlapping others, or covering the planet's
 whole chord.
 

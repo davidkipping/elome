@@ -3,6 +3,31 @@
 All notable changes to Elómë. Versioning: semantic-ish (MAJOR.MINOR.PATCH);
 every release is tagged `vX.Y.Z` in git.
 
+## [Unreleased]
+
+### Fixed
+- **Spotted stars: eccentricity up to 0.999.** Their orbit is rebuilt
+  from the impact parameter, as an oblate or ringed planet's is, so the
+  same limit applies; an eccentricity between 0.999 and 1 now raises
+  instead of returning a slightly wrong orbit.
+- **Spotted stars: `prot` must be positive.** `prot = 0` returned an
+  all-NaN light curve without an error; zero, negative and non-finite
+  values now raise, in `light_curve` and `light_curves`.
+- **`light_curve` refuses a per-set spot table.** A spot table of shape
+  (n_sets, K, 4) is for `light_curves`; `light_curve` returned an
+  (n_sets, m) array instead of raising.
+- **The contact rule on fast eccentric transits.** The event search's
+  step now allows for the planet's speed at conjunction on an eccentric
+  orbit, (1 + e sin w) / sqrt(1 - e²) times the circular speed; at
+  periastron with e = 0.8 a spot crossing was integrated to 6e-6 instead
+  of 1e-8.
+- **anvil: `make_transit_target(..., integration="supersample",
+  n_sub=)`.** `n_sub` is now a parameter; without it every exposure was
+  evaluated at its midpoint only.
+- **anvil: unknown `bounds` keys raise.** A bare family name such as
+  `"q"` or `"df"` was accepted and ignored; only the spot fields
+  (`"lon"`, `"sinlat"`, `"rad"`, `"contrast"`) cover a family.
+
 ## [0.22.0] — 2026-10-22
 
 ### Added

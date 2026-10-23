@@ -446,7 +446,7 @@ def make_transit_target(t, y, yerr, t0_guess, period_guess,
                         limb_dark: str = "quadratic", n_spots: int = 0,
                         exp_time: float = 0.0, integration: str = "contact",
                         n_gl: int = 5, spot_epoch=None,
-                        relative: bool = True):
+                        relative: bool = True, n_sub: int = 1):
     """Build an anvil fitting problem from REAL photometry.
 
     ``core`` is "metal" (default: fused fp32 kernels, falling back to the
@@ -489,8 +489,10 @@ def make_transit_target(t, y, yerr, t0_guess, period_guess,
             relabelled copies; sort the draws afterwards (by longitude, say).
             Run anvil with ``compile_step=target.compile_step`` (False): a
             spotted model is evaluated eagerly.
-        exp_time, integration, n_gl: an exposure time (in t's units) and
-            its rule, for hybrid laws (``make_hybrid_transit_flux``).
+        exp_time, integration, n_gl, n_sub: an exposure time (in t's
+            units) and its rule, for hybrid laws: ``n_gl`` nodes per piece
+            for "contact", ``n_sub`` for "supersample"
+            (``make_hybrid_transit_flux``).
         spot_epoch: when the spots' longitudes are measured (t's system);
             default the predicted mid-transit nearest the data's middle,
             which keeps the star's float32 phase accurate.
@@ -565,7 +567,7 @@ def make_transit_target(t, y, yerr, t0_guess, period_guess,
         model_fn = make_hybrid_transit_flux(
             period_ref, limb_dark, eccentric=eccentric, n_spots=n_spots,
             exp_time=exp_time, integration=integration, n_gl=n_gl,
-            relative=relative)
+            n_sub=n_sub, relative=relative)
     elif eccentric:
         model_fn = make_ecc_transit_flux(period_ref=period_ref, core=core)
     else:
@@ -592,7 +594,7 @@ def _param_bounds(names, bounds) -> dict:
     for every ``"radj"``), then DEFAULT_BOUNDS likewise."""
     bounds = dict(bounds or {})
     family = {n: n.rstrip("0123456789") for n in names}
-    known = set(DEFAULT_BOUNDS) | set(names) | set(family.values())
+    known = set(DEFAULT_BOUNDS) | set(names)
     for k in bounds:
         if k not in known:
             raise ValueError(f"unknown parameter {k!r}; expected "

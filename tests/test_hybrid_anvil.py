@@ -143,6 +143,18 @@ class TestHybridTarget:
         g = np.array(mx.grad(lambda uu: mx.sum(tt.target.log_prob(uu)))(u))
         assert np.isfinite(g).all() and (np.abs(g).max(0) > 0).all()
 
+    def test_supersampling(self):
+        """n_sub reaches the model: the frontend's supersampled curve."""
+        exp = 29.4 / 1440.0
+        t, y, yerr, _ = _photometry("hybrid4", n=100)
+        p = elome.TransitParams()
+        p.t0, p.per, p.rp, p.a, p.inc, p.ecc, p.w = T0, PER, RP, A, INC, 0.0, 90.0
+        p.limb_dark, p.u = "hybrid4", W["hybrid4"]
+        flux = elome.TransitModel(p, t, exp_time=exp, supersample_factor=7).light_curve(p)
+        tt = make_transit_target(t, y, yerr, T0 + 0.003, PER - 0.0005, limb_dark="hybrid4",
+                                 exp_time=exp, integration="supersample", n_sub=7)
+        assert np.max(np.abs(_model64(tt, _truth(tt)) - (flux - 1.0))) < 1e-12
+
     def test_options_refused(self):
         t, y, yerr, _ = _photometry(n=50)
         with pytest.raises(ValueError, match="core selects"):
@@ -150,6 +162,10 @@ class TestHybridTarget:
                                 core="graph")
         with pytest.raises(ValueError, match="exp_time needs a hybrid law"):
             make_transit_target(t, y, yerr, T0, PER, exp_time=0.02)
+        for key in ("q", "df"):           # not a family: would be ignored
+            with pytest.raises(ValueError, match="unknown parameter"):
+                make_transit_target(t, y, yerr, T0, PER, limb_dark="hybrid4",
+                                    bounds={key: (0.0, 0.5)})
 
 
 @pytest.fixture(scope="module")

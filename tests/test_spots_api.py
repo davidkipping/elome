@@ -353,6 +353,37 @@ def test_prot_required():
         el.TransitModel(P(prot=None), T).light_curve(P(prot=None))
 
 
+@pytest.mark.parametrize("prot", [0.0, -5.0, np.inf, mx.array(0.0, dtype=mx.float64)])
+def test_prot_domain(prot):
+    """prot = 0 made every spot vector NaN, with nothing pointing at it."""
+    m = el.TransitModel(P(), T)
+    with pytest.raises(ValueError, match="prot"):
+        m.light_curve(P(prot=prot))
+    if not isinstance(prot, mx.array):
+        with pytest.raises(ValueError, match="prot"):
+            m.light_curves([P(), P(prot=prot)])
+
+
+def test_spot_table_per_set_only_in_light_curves():
+    m = el.TransitModel(P(), T)
+    with pytest.raises(ValueError, match="light_curves"):
+        m.light_curve(P(spots=np.tile(np.array(P().spots)[None], (3, 1, 1))))
+
+
+def test_ecc_above_0999_raises():
+    """The orbit is rebuilt from the impact parameter, whose cos i holds to
+    e = 0.999, as for an oblate or ringed planet."""
+    kw = dict(ecc=0.9995, w=300.0, a=900.0, inc=89.9)
+    m = el.TransitModel(P(**dict(kw, ecc=0.99)), T)
+    with pytest.raises(ValueError, match=r"\[0, 0.999\]"):
+        m.light_curve(P(**kw))
+    with pytest.raises(ValueError, match=r"\[0, 0.999\]"):
+        m.light_curves([P(**dict(kw, ecc=0.5)), P(**kw)])
+    with pytest.raises(ValueError, match=r"\[0, 0.999\]"):
+        m.light_curve(P(**dict(kw, ecc=mx.array(0.9995, dtype=mx.float64))))
+    assert np.isfinite(m.light_curve(P(**dict(kw, ecc=0.999)))).all()
+
+
 # ---------------------------------------------------------------------------
 # the contact rule
 # ---------------------------------------------------------------------------
@@ -509,6 +540,21 @@ def test_sample_count():
     assert sample_count(1e-4, 9.0, 3.0, 0.1) == _S_MIN               # short cadence
     assert sample_count(30 / 1440, 9.0, 3.0, 0.1) == 16
     assert sample_count(30 / 1440, 9.0, 3.0, 1e-4) == _S_MAX
+    # at periastron, e = 0.8: 3x the circular speed; per set, the fastest
+    assert sample_count(30 / 1440, 9.0, 3.0, 0.1, 0.8, 0.8) == 48
+    assert sample_count(30 / 1440, np.array([9.0, 9.0]), 3.0, 0.1,
+                        np.array([0.0, 0.8]), np.array([[0.0], [0.8]])) == 48
+
+
+def test_contact_rule_on_a_fast_eccentric_transit():
+    """e = 0.8 at periastron: the planet crosses a spot smaller than itself
+    three times faster than on the circle. A step sized for the circle
+    missed the tangencies (6e-6); sized for the orbit, the rule converges."""
+    p = P(spots=[[0.0, 0.0, 4.0, 0.2]], prot=3.0, ecc=0.8, w=90.0, inc=90.0)
+    ts = np.linspace(-0.012, 0.012, 25)
+    ref = np.array([exposure_mean(p, ti) for ti in ts])
+    got = el.TransitModel(p, ts, integration="contact", exp_time=EXP, n_gl=9).light_curve(p)
+    assert np.max(np.abs(got - ref)) < 5e-8
 
 
 # ---------------------------------------------------------------------------

@@ -136,12 +136,18 @@ def _corner_count(X, Y, front, rp, n, alpha, dt):
     return sum(v.astype(mx.int32) for v in vis)
 
 
-def sample_count(exp_time, a, per, rp):
+def sample_count(exp_time, a, per, rp, e=0.0, esinw=0.0):
     """Count samples per exposure for the contact rule's event search: a
     step of at most a quarter of the time the planet takes to cross its
-    own radius at transit, within [_S_MIN, _S_MAX]. Host values."""
-    v = _TWO_PI * float(a) / float(per)                       # radii per unit time
-    s = math.ceil(4.0 * float(exp_time) * v / max(float(rp), 1e-6))
+    own radius at transit, within [_S_MIN, _S_MAX]. On an eccentric orbit
+    the planet moves (1 + e sin w) / sqrt(1 - e^2) times faster at
+    conjunction than on the circle. Host values, scalars or per-set
+    arrays ((n,) or (n, 1)): the count of the fastest set."""
+    a, per, rp, e, esinw = np.broadcast_arrays(*(
+        np.asarray(x, dtype=np.float64).reshape(-1) for x in (a, per, rp, e, esinw)))
+    e = np.minimum(e, M._E_MAX)
+    v = _TWO_PI * a / per * (1.0 + esinw) / np.sqrt(1.0 - e * e)   # radii per unit time
+    s = math.ceil(float(np.max(4.0 * float(exp_time) * v / np.maximum(rp, 1e-6))))
     return int(min(max(s, _S_MIN), _S_MAX))
 
 
@@ -703,8 +709,15 @@ def flux_dev_spots_tau(tau, ts, period, a, b, r, prot, istar, lam, spots4, law, 
     if n_sample is None and mode == M._INT_CONTACT:
         try:
             host = [np.asarray(v, dtype=np.float64) for v in (a, period, r)]
-            n_sample = max(sample_count(exp_time, x, P, y)
-                           for x, P, y in np.broadcast(*host))
+            if k is None:
+                ecc = [0.0, 0.0]
+            elif ew:                                   # (e, w [rad])
+                e_, w_ = (np.asarray(v, dtype=np.float64) for v in (k, h))
+                ecc = [e_, e_ * np.sin(w_)]
+            else:                                      # sqrt(e) (cos w, sin w)
+                k_, h_ = (np.asarray(v, dtype=np.float64) for v in (k, h))
+                ecc = [k_ * k_ + h_ * h_, np.sqrt(k_ * k_ + h_ * h_) * h_]
+            n_sample = sample_count(exp_time, *host, *ecc)
         except (TypeError, ValueError, RuntimeError):
             n_sample = 64
     dt = tau.dtype
