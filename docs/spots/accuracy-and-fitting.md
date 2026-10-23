@@ -97,6 +97,41 @@ Among codes that model a planet crossing spots:
 Elómë is exact like KSint, with the hybrid laws, gradients in every
 parameter, and batched float32 kernels on the GPU.
 
+The other two differentiable codes, jaxoplanet's `starry` module and
+spotter, approximate the star's surface: their accuracy is set by a
+resolution (the spherical-harmonic degree `ydeg`, the HEALPix `nside`),
+which also sets their cost. In the benchmark (`benchmarks/spot_compare/`)
+a planet of radius 0.1 crosses one spot, two overlapping spots, and a
+spot near the limb, under the one limb-darkening profile all three codes
+express exactly, $I(\mu) = 1 - 0.4\,(1 - \mu^2)$. The error is the
+largest over the three crossings, in each code's flux relative to its own
+out-of-transit level, against a brute-force integral; the spots' own
+signal peaks at $3.9\times10^{-3}$ to $6.9\times10^{-3}$. The times are
+for one light curve of 1,000 points, with the gradient in the planet's
+radius and every spot's position, radius and contrast, and the first
+call includes compilation:
+
+| | error | value | value + gradient | first call, value + gradient |
+|---|---:|---:|---:|---:|
+| Elómë, float32 (GPU) | $8.8\times10^{-8}$ | 1.2 ms | 2.7 ms | 1.9 s |
+| Elómë, float64 (CPU) | $3.3\times10^{-16}$ | 56 ms | 316 ms | 0.44 s |
+| jaxoplanet, `ydeg` 10 | $4.8\times10^{-3}$ | 7.4 ms | 18 ms | 18 s |
+| jaxoplanet, `ydeg` 20 | $3.2\times10^{-3}$ | 29 ms | 380 ms | 3.4 min |
+| jaxoplanet, `ydeg` 30 | $2.0\times10^{-3}$ | 96 ms | 3.7 s | 35 min |
+| spotter, `nside` 64 (49,152 pixels) | $2.5\times10^{-4}$ | 25 ms | 128 ms | 0.38 s |
+| spotter, `nside` 128 (196,608 pixels) | $2.5\times10^{-5}$ | 118 ms | 499 ms | 0.84 s |
+| spotter, `nside` 256 (786,432 pixels) | $1.4\times10^{-5}$ | 448 ms | 2.0 s | 2.7 s |
+
+jaxoplanet smooths the spot's edge so that its expansion does not ring
+(by about 4° at degree 30), and its error, about a third of the spots'
+signal even at degree 30, sits where the planet crosses that edge; its
+compilation grows steeply with the degree. spotter's error falls as
+pixels are added and is spread over the whole transit, from the
+pixelised edge of the planet. Both are JAX codes, run here on the CPU in
+float64; spotter is built for a GPU, which JAX does not use on this
+machine. Both also model what Elómë does not: surface maps of any shape,
+and in spotter's case spectra.
+
 ## Fitting spots
 
 - **Fit a normalisation.** The model is normalised to the unspotted

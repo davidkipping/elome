@@ -13,9 +13,10 @@ contain it. Run the measurements on an otherwise-idle GPU.
 benchmarks write (tau_kernel.json, hybrid_kernels.json,
 oblate_kernels.json, spot_kernels.json: bench_tau_kernel.py,
 bench_hybrid.py, bench_oblate.py, bench_spots.py), and the cross-code comparison tables (spherical, oblate and
-ringed planets) back to the results files the comparison runs write
-(precision*.json, speed.json, batch_scaling.json,
-oblate_compare/results_oblate.json, ring_compare/results_ring.json). A
+ringed planets, starspots) back to the results files the comparison runs
+write (precision*.json, speed.json, batch_scaling.json,
+oblate_compare/results_oblate.json, ring_compare/results_ring.json,
+spot_compare/results_spot.json). A
 number on a page passes if the measurement rounds to it at the precision
 shown ("0.44 ms" means 0.435-0.445 ms; "about 1,700" means 1,650-1,750),
 and a cell with no measurement must hold no number.
@@ -92,9 +93,9 @@ def check():
 
 # ---- the cross-code comparison tables -------------------------------------
 
-_UNITS = {"ms": 1e-3, "s": 1.0, "KB": 1e-3, "MB": 1.0, "GB": 1e3}
+_UNITS = {"ms": 1e-3, "s": 1.0, "min": 60.0, "KB": 1e-3, "MB": 1.0, "GB": 1e3}
 _NUMBER = re.compile(r"\$(\d+(?:\.\d+)?)\\times10\^\{(-?\d+)\}\$"
-                     r"|(\d[\d,]*(?:\.\d+)?)(?:\s*(ms|s|KB|MB|GB))?(?![\w.])")
+                     r"|(\d[\d,]*(?:\.\d+)?)(?:\s*(ms|min|s|KB|MB|GB))?(?![\w.])")
 
 
 def _shown(cell):
@@ -287,6 +288,7 @@ def check_comparisons():
                if r["code"] == "elome_gpu" and r["npv"] >= 256]
     ob = load("oblate_compare", "results_oblate.json")
     rg = load("ring_compare", "results_ring.json")
+    spc = load("spot_compare", "results_spot.json")
 
     thr = {"batman": 1, "pytransit": 1, "exoplanet": 1}
 
@@ -373,6 +375,26 @@ def check_comparisons():
                ob["mem"]["single"]["elome_fp32"]["10000000"]["peak_mb"],
                rg["mem"]["single"]["elome_fp32"]["10000000"]["peak_mb"]]
 
+    sp_cases = [v for v in spc["precision"].values()]
+    sp_rows = {
+        label: [max(c[key]["max"] for c in sp_cases),
+                spc["speed"][key]["time"]["warm_s"], spc["speed"][key]["time_grad"]["warm_s"],
+                spc["speed"][key]["time_grad"]["first_s"]]
+        for label, key in (
+            ("Elómë, float32 (GPU)", "elome32"), ("Elómë, float64 (CPU)", "elome64"),
+            ("jaxoplanet, `ydeg` 10", "jaxoplanet:10"), ("jaxoplanet, `ydeg` 20", "jaxoplanet:20"),
+            ("jaxoplanet, `ydeg` 30", "jaxoplanet:30"),
+            ("spotter, `nside` 64 (49,152 pixels)", "spotter:64"),
+            ("spotter, `nside` 128 (196,608 pixels)", "spotter:128"),
+            ("spotter, `nside` 256 (786,432 pixels)", "spotter:256"))}
+    sp_signal = [c["spot_signal"] for c in sp_cases]
+
+    def sp_fastest():
+        """Elómë float32 is faster than every resolution of the others."""
+        t = spc["speed"]
+        return all(t["elome32"][m]["warm_s"] < t[k][m]["warm_s"]
+                   for k in t if not k.startswith("elome") for m in ("time", "time_grad"))
+
     def fastest(r):
         """Elómë float32 is the fastest code at every size and in every mode."""
         for mode in ("single", "grad"):
@@ -402,6 +424,10 @@ def check_comparisons():
              (r"it takes (about \S+) times as long", math.prod(n20) ** (1 / len(n20))),
              (r"which caps it near (\S+ GB)",
               max(v["peak_mb"] for v in rg["mem"]["single"]["elome_fp64"].values()))]),
+        "spots/accuracy-and-fitting.md": (
+            {"call includes compilation:": sp_rows},
+            [(r"signal peaks at (\$[^$]+\$)", min(sp_signal)),
+             (r"signal peaks at \$[^$]+\$ to (\$[^$]+\$)", max(sp_signal))]),
         "reference/performance.md": ({}, [
             (r"from (about \S+) times \(spherical, against PyTransit\)",
              batch_ratio({c: sp(c, "batch") for c in sph_batch.values()}, "elome_gpu")),
@@ -417,6 +443,8 @@ def check_comparisons():
          fastest(ob)),
         ("reference/performance.md", "fastest for ringed planets at every size",
          fastest(rg)),
+        ("reference/performance.md", "spots: faster than jaxoplanet and spotter at every resolution",
+         sp_fastest()),
         ("reference/performance.md", "float32, 10^7 points, under 300 MB for each planet type",
          max(fp32_e7) < 300),
     ]

@@ -16,21 +16,26 @@ section:
 - oblate planets, against squishyplanet, JoJo, GreenLantern and
   eclipsoid: {doc}`../oblate/accuracy-and-cost`;
 - ringed planets, against pyPplusS, squishyplanet, JoJo and pryngles:
-  {doc}`../rings/accuracy-and-fitting`.
+  {doc}`../rings/accuracy-and-fitting`;
+- planets crossing starspots, against jaxoplanet and spotter:
+  {doc}`../spots/accuracy-and-fitting`.
 
 In short, Elómë's float32 GPU kernels are the fastest code for oblate
 and ringed planets at every size measured, and for spherical planets
 past about $10^4$ points, below which the GPU's fixed dispatch cost
-dominates and the fastest CPU codes win. For batches of parameter sets
-the margin is from about 20 times (spherical, against PyTransit) to
-about 1,700 times (ringed). A float32 light curve of $10^7$ points holds
+dominates and the fastest CPU codes win. For a planet crossing
+starspots they are faster than jaxoplanet and spotter at every
+resolution measured, and Elómë is the one of the three whose accuracy
+is not set by a resolution. For batches of parameter sets the margin is
+from about 20 times (spherical, against PyTransit) to about 1,700 times
+(ringed). A float32 light curve of $10^7$ points holds
 under 300 MB of memory for each planet type. The float64 path is exact
 to rounding.
 
 ## Gradients
 
-Only Elómë and jaxoplanet are differentiable, and Elómë's gradients are
-analytic, fused into Metal kernels. For the gradient of a chunked
+Of the spherical codes only Elómë and jaxoplanet are differentiable,
+and Elómë's gradients are analytic, fused into Metal kernels. For the gradient of a chunked
 log-likelihood at 1024 chains × 65,536 points, compiled, in float32
 (`benchmarks/bench_vjp.py`, which records them in `benchmarks/vjp.json`):
 
