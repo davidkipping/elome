@@ -3,7 +3,7 @@
 All notable changes to Elómë. Versioning: semantic-ish (MAJOR.MINOR.PATCH);
 every release is tagged `vX.Y.Z` in git.
 
-## [Unreleased]
+## [0.22.1] — 2026-10-23
 
 ### Changed
 - **anvil, spotted stars with exposures: the star-alone term** of the
