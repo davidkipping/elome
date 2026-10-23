@@ -273,11 +273,36 @@ def _live_events(te, ok, tangency, psi_t, which, geom, dt):
     return mx.where(ok, te - mx.where(good, shift, 0.0), mx.inf)
 
 
+def _live_active(frozen, params, spots4, off, k, h, ew, dt):
+    """_live_events at the valid slots only, (n, m, _E_SPOT, K) with +inf
+    elsewhere: nearly every slot is empty (most exposures have no spot
+    event), so the live geometry and its gradient graph are laid out over
+    the events alone, each slot as a set of its own (its set's parameters,
+    its spot, its exposure's clock offset), and scattered back. ``frozen``
+    from host copies, so reading its validity evaluates nothing traced."""
+    te, ok, tangency, psi_t, which = frozen
+    n, m, E, K = te.shape
+    flat = np.flatnonzero(np.asarray(ok).reshape(-1))
+    if flat.size == 0:
+        return mx.full(te.shape, mx.inf, dtype=dt)
+    i_n, i_m, i_k = flat // (m * E * K), (flat // (E * K)) % m, flat % K
+    idx, sel = mx.array(flat), mx.array(i_n)
+    slot = lambda v: mx.take(mx.reshape(v, (-1,)), idx)[:, None, None, None]   # noqa: E731
+    pick = lambda v: None if v is None else mx.take(v, sel)                   # noqa: E731
+    sp = mx.take(mx.reshape(spots4, (-1, 4)), mx.array(i_n * K + i_k), axis=0)[:, None]
+    o = mx.take(mx.reshape(off, (-1,)), mx.array(i_n * m + i_m))[:, None]
+    geom = _event_geom(_make_cols([pick(v) for v in params], pick(k), pick(h), ew), sp, o)
+    ev = _live_events(slot(te), slot(ok), slot(tangency), slot(psi_t), slot(which), geom, dt)
+    acc = mx.zeros((n * m * E * K,), dtype=ev.dtype).at[idx].add(mx.reshape(ev, (-1,)))
+    return mx.where(ok, mx.reshape(acc, te.shape), mx.inf)
+
+
 def _make_cols(params, k, h, ew):
-    """cols(nk): the per-set (period, a, b, r, prot, istar, lam) reshaped
-    for nk trailing axes, and the orbit constants (None if circular)."""
-    def cols(nk):
-        sh = (-1,) + (1,) * nk
+    """cols(nk, lead=0): the per-set (period, a, b, r, prot, istar, lam)
+    reshaped for nk trailing (and ``lead`` leading) axes, and the orbit
+    constants (None if circular)."""
+    def cols(nk, lead=0):
+        sh = (1,) * lead + (-1,) + (1,) * nk
         c = [mx.reshape(v, sh) for v in params]
         eo = None if k is None else _orbit_consts(c[1], c[2], mx.reshape(k, sh),
                                                   mx.reshape(h, sh), ew)
@@ -314,7 +339,11 @@ def _events_fn(dt, n_sample, ecc, ew):
             parts.append((rows, out))
         frozen = _assemble(parts, n, m)
         params, spots4, k, h = split(args)
-        ev = _live_events(*frozen, _event_geom(_make_cols(params, k, h, ew), spots4, off), dt)
+        if host:
+            ev = _live_active(frozen, params, spots4, off, k, h, ew, dt)
+        else:
+            ev = _live_events(*frozen, _event_geom(_make_cols(params, k, h, ew), spots4, off),
+                              dt)
         fz = mx.where(frozen[1], frozen[0], mx.inf) if host else None
         flat = lambda v: mx.reshape(v, v.shape[:-2] + (-1,))     # noqa: E731
         return flat(ev), (None if fz is None else flat(fz))
@@ -390,8 +419,11 @@ def _kernel_events(tt, off, half, period, a, b, r, prot, istar, lam, spots4, law
     te, code, psit = (mx.transpose(v, (0, 1, 3, 2)) for v in (te, code, psit))
     ok = code > 0.0
     te = mx.where(ok, te, ht[..., None, None])        # finite geometry where none
-    geom = _event_geom(_make_cols(params, k, h, ew), spots4, off)
-    ev = _live_events(te, ok, code == 1.0, psit, code == 3.0, geom, dt)
+    frozen = (te, ok, code == 1.0, psit, code == 3.0)
+    if host:
+        ev = _live_active(frozen, params, spots4, off, k, h, ew, dt)
+    else:
+        ev = _live_events(*frozen, _event_geom(_make_cols(params, k, h, ew), spots4, off), dt)
     flat = lambda v: mx.reshape(v, v.shape[:-2] + (-1,))         # noqa: E731
     return flat(ev), (flat(mx.where(ok, te, mx.inf)) if host else None)
 
@@ -493,13 +525,7 @@ def _tau_graph(tt, ts, period, a, b, r, prot, istar, lam, spots4, w2d, law,
     dt = tt.dtype
     params = (period, a, b, r, prot, istar, lam)
     off = ts - tt                                   # the star's clock, ahead
-
-    def cols(nk, lead=0):
-        sh = (1,) * lead + (-1,) + (1,) * nk
-        c = [mx.reshape(p, sh) for p in params]
-        eo = None if k is None else _orbit_consts(c[1], c[2], mx.reshape(k, sh),
-                                                  mx.reshape(h, sh), ew)
-        return c + [eo]
+    cols = _make_cols(params, k, h, ew)
 
     def inst(T, Ts, nk, active=None, lead=0):
         *c, eo = cols(nk, lead)
@@ -591,9 +617,7 @@ def _active_pieces(mid, hw, off, mask, exp_time, n_gl, node_cols, params, spots4
     eo_ = mx.array(order // J)
     W = W / mx.repeat(mx.take_along_axis(norm, eo_, axis=1), n_gl, axis=1)
     Ts = T + mx.repeat(mx.take_along_axis(off, eo_, axis=1), n_gl, axis=1)
-    c = [mx.reshape(p, (-1, 1)) for p in params]
-    eo = None if k is None else _orbit_consts(c[1], c[2], mx.reshape(k, (-1, 1)),
-                                              mx.reshape(h, (-1, 1)), ew)
+    *c, eo = _make_cols(params, k, h, ew)(1)
     B = node_cols(T, Ts, c, eo, spots4[:, None])        # (n, width * n_gl, ncol)
     nc = B.shape[-1]
     BW = mx.sum(mx.reshape(B * W[..., None], (n, width, n_gl, nc)), axis=2)

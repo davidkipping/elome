@@ -131,9 +131,11 @@ limb where $\mu = 0$, also in closed form. The latter is written as a
 product so that a small spot on the limb, whose rim and limb arcs cancel
 to a sliver, keeps its digits. The planet's corners with a rim come from
 the ring code's crossing solver, in a frame centred on the planet and
-scaled by its radius. Two rims meet at the intersection of two circles on
-the sphere, in closed form. Which spots a point belongs to is read at
-each arc's midpoint, from the point on the star's front surface.
+scaled by its radius. Where two rims cross, nothing needs splitting:
+the spots' deficits add, so the jump in the blocked fraction across a
+rim is its own spot's $1 - c_k$, whichever other spots cover it. Which
+spots a point belongs to is read at each arc's midpoint, from the point
+on the star's front surface.
 
 A rim's frame turns with its spot, as $1/|n_{xy}|$ near the disc's
 centre. The gradients therefore take the frame's turn separately, as a

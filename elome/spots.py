@@ -38,12 +38,14 @@ cancel to a sliver of order alpha^3.
 
 By Green's theorem (``rings.py``), every outline -- the planet and each
 rim -- is walked once, split at its limb points and at its corners with
-the other outlines, each sub-arc weighted by the jump in w across it, plus
-the limb's arcs weighted by w just inside. The planet-rim corners come
-from the oblate crossing solver in the frame centred on the planet and
-scaled by its radius (the planet the unit circle, the rim an ellipse);
-rim-rim corners in closed form on the sphere. Membership is read at arc
-midpoints, for a spot from the front surface point.
+the planet, each sub-arc weighted by the jump in w across it, plus the
+limb's arcs weighted by w just inside. The planet-rim corners come from
+the oblate crossing solver in the frame centred on the planet and scaled
+by its radius (the planet the unit circle, the rim an ellipse). Two rims
+crossing need no split: the spots' deficits add, so the jump across rim
+k is 1 - c_k wherever it is outside the planet, whichever other spots
+cover it. Membership is read at arc midpoints, for a spot from the front
+surface point.
 
 Gradients as in ``rings.py``: roots and arc endpoints are frozen; the
 endpoints' motion is restored by a gradient-only corner term
@@ -153,14 +155,6 @@ class _Rim:
         trailing arc axis beyond the rim's shape)."""
         ex = (lambda v: v[..., None]) if x.ndim > self.nx.ndim else (lambda v: v)
         return x * ex(self.nx) + y * ex(self.ny) + z * ex(self.nz) >= ex(self.ca)
-
-    def param(self, x, y, z):
-        """The rim parameter of a 3D rim point."""
-        # P - cos(alpha) n = sin(alpha) (cos psi e1 + sin psi e2); e2 =
-        # n_z v - |n_xy| z_hat, with v the frame's y axis on the sky
-        c = x * self.ux + y * self.uy
-        s = self.nz * (x * self.vx + y * self.vy) - self.nxy * z
-        return mx.arctan2(s, c)
 
 
 def _rim_roots(rim, eps, dt):
@@ -274,25 +268,6 @@ def _g_diff(n_or_p, s_lo, s_hi, ds, even):
 # the columns
 # --------------------------------------------------------------------------
 
-def _rim_rim(ri, rj):
-    """The two points where rims i and j meet on the sphere (frozen), as
-    3D components, and their validity."""
-    nix, niy, niz = (_sg(v) for v in (ri.nx, ri.ny, ri.nz))
-    njx, njy, njz = (_sg(v) for v in (rj.nx, rj.ny, rj.nz))
-    ci, cj = _sg(ri.ca), _sg(rj.ca)
-    d = nix * njx + niy * njy + niz * njz
-    det = (1.0 - d) * (1.0 + d)
-    okd = det > 1e-12
-    dets = mx.where(okd, det, 1.0)
-    a_, b_ = (ci - d * cj) / dets, (cj - d * ci) / dets
-    bx_, by_, bz_ = a_ * nix + b_ * njx, a_ * niy + b_ * njy, a_ * niz + b_ * njz
-    t2 = (1.0 - (bx_ * bx_ + by_ * by_ + bz_ * bz_)) / dets
-    ok = okd & (t2 > 0.0)
-    t = mx.sqrt(mx.where(ok, t2, 0.0))
-    mx_, my_, mz_ = niy * njz - niz * njy, niz * njx - nix * njz, nix * njy - niy * njx
-    return [((bx_ + s * t * mx_, by_ + s * t * my_, bz_ + s * t * mz_), ok) for s in (1.0, -1.0)]
-
-
 def _region_cols(X, Y, rp, spots, c, law, dt):
     """Occulted generator columns (positive): the integral of w I over the
     disc. spots: list of (nx, ny, nz, alpha); c: list of contrasts."""
@@ -326,11 +301,6 @@ def _region_cols(X, Y, rp, spots, c, law, dt):
         flip = g.nz < 0
         pr_psi.append([_mod2pi(mx.where(flip, -ph, ph)) for ph in phis])
         pr_ok.append(valid)
-    # rim-rim on the sphere
-    rr = {}
-    for i in range(K):
-        for j in range(i + 1, K):
-            rr[(i, j)] = _rim_rim(gr[i], gr[j])
     # the planet's limb crossings (a circle)
     pl_phi, pl_ok = _crossings(gX, gY, grp, grp, one, dt)
 
@@ -385,11 +355,6 @@ def _region_cols(X, Y, rp, spots, c, law, dt):
         p1 = g.psi_limb
         bps = [_mod2pi(p1), _mod2pi(_PI - p1)] + list(pr_psi[k])
         bv = [g.limb, g.limb] + list(pr_ok[k])
-        for (i, j), pts in rr.items():
-            if k in (i, j):
-                for P, v in pts:
-                    bps.append(_mod2pi(g.param(*P)))
-                    bv.append(v)
         for sgn in (1.0, -1.0):
             limb_th.append(_mod2pi(g.phi_n + sgn * g.half_limb))
             limb_ok.append(g.limb)

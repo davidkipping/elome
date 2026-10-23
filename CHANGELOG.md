@@ -5,6 +5,22 @@ every release is tagged `vX.Y.Z` in git.
 
 ## [Unreleased]
 
+### Changed
+- **anvil, spotted stars with exposures: the star-alone term** of the
+  relative model (`relative=True`) is averaged over each exposure by
+  three-point Gauss-Legendre, without the contact rule's event search:
+  with the planet behind the star there is nothing to split. The model
+  moves by less than 0.1 ppm, even for a star turning in a day at long
+  cadence, and less than 1e-6 ppm for one turning in five days.
+- **Spotted stars, faster.** A spot's outline is no longer split where
+  another spot's crosses it (the deficits add, so the split changed
+  nothing), and the contact rule's event times take their gradients at
+  the exposures that have an event only. Values and gradients are
+  unchanged beyond rounding. With the star term above, an anvil spotted
+  model with long-cadence exposures (512 chains x 4,000 points, two
+  spots) evaluates its value and gradient 32% faster (3.87 to 2.65 s);
+  `flux_dev_from_tau` under the contact rule, 4-9% faster.
+
 ### Fixed
 - **Spotted stars: eccentricity up to 0.999.** Their orbit is rebuilt
   from the impact parameter, as an oblate or ringed planet's is, so the

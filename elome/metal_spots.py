@@ -13,8 +13,8 @@ includes and does not change.
 Per point and outline:
 
 * **detached** (plain float): the limb points, the planet-rim corners
-  (``rg_limb`` in the planet's unit frame, as ``spots.py``), the rim-rim
-  corners (closed form on the sphere), the sorted sub-arcs and, at each
+  (``rg_limb`` in the planet's unit frame, as ``spots.py``), the sorted
+  sub-arcs and, at each
   midpoint, the membership tests that fix the weight; each rim's pole
   roots in closed form, a circle's (the planet) by ``rg_circle_roots``;
 * **live** (T = float or the dual number ``dv``): the outline's
@@ -59,7 +59,6 @@ _SP_FN = r"""
 // ============================== starspots ==============================
 constant float SP_TINY = 1e-30f;        // |n_xy|^2 below this: a centred spot
 constant float SP_S1C = 1e-8f;          // centred outline (rings._S1_CENTRED)
-constant float SP_RR = 1e-12f;          // rim-rim: nearly concentric caps
 
 inline float sp_sin(float a) { return metal::precise::sin(a); }
 inline float sp_cos(float a) { return metal::precise::cos(a); }
@@ -115,13 +114,6 @@ inline bool sp_own(thread const sp_rim &R, float x, float y, float z) {
     return x * R.nx + y * R.ny + z * R.nz >= R.ca;
 }
 
-// the rim parameter of a 3D rim point (spots._Rim.param)
-inline float sp_param(thread const sp_rim &R, float x, float y, float z) {
-    float c = x * R.ux + y * R.uy;
-    float s = R.nz * (x * R.vx + y * R.vy) - R.nxy * z;
-    return metal::precise::atan2(s, c);
-}
-
 // planet-rim corners on the rim's parameter: rings._crossings in the
 // planet's unit frame, the rim with |b| (a cap facing away mirrored)
 inline int sp_pr(thread const sp_rim &R, float X, float Y, float rp,
@@ -136,23 +128,6 @@ inline int sp_pr(thread const sp_rim &R, float X, float Y, float rp,
     int n = rg_limb(-px / rp, (R.y0 - py) / rp, R.a / rp, ab / rp, circ, ph);
     for (int i = 0; i < n; ++i) psi[i] = ob_mod2pi((R.nz < 0.0f) ? -ph[i] : ph[i]);
     return n;
-}
-
-// rims i and j meet on the sphere (spots._rim_rim): up to two 3D points
-inline int sp_rr(thread const sp_rim &Ri, thread const sp_rim &Rj, thread float3 *P) {
-    float3 ni = float3(Ri.nx, Ri.ny, Ri.nz), nj = float3(Rj.nx, Rj.ny, Rj.nz);
-    float d = dot(ni, nj);
-    float det = (1.0f - d) * (1.0f + d);
-    if (!(det > SP_RR)) return 0;
-    float a_ = (Ri.ca - d * Rj.ca) / det, b_ = (Rj.ca - d * Ri.ca) / det;
-    float3 base = a_ * ni + b_ * nj;
-    float t2 = (1.0f - dot(base, base)) / det;
-    if (!(t2 > 0.0f)) return 0;
-    float t = metal::precise::sqrt(t2);
-    float3 m = cross(ni, nj);
-    P[0] = base + t * m;
-    P[1] = base - t * m;
-    return 2;
 }
 
 // a rim's pole roots in closed form (spots._rim_roots): per sign the
@@ -339,19 +314,15 @@ inline void sp_rim_outline(int k, thread const sp_live<T> &L, thread const sp_ge
                            thread float *gc) {
     thread const sp_rim &R = G.R[k];
     if (!R.vis) return;
-    float bp[6 + 2 * SP_K];
+    // the limb points and the planet's corners; rims crossing need no
+    // split, the jump across rim k being 1 - c_k (deficits add)
+    float bp[6];
     int n = 0;
     if (R.limb) {
         bp[n++] = ob_mod2pi(R.psi_limb);
         bp[n++] = ob_mod2pi(MP_PI - R.psi_limb);
     }
     for (int i = 0; i < G.npr[k]; ++i) bp[n++] = G.pr[k][i];
-    for (int j = 0; j < SP_K; ++j) {
-        if (j == k || !G.R[j].vis) continue;
-        float3 P[2];
-        int m = sp_rr(R, G.R[j], P);
-        for (int q = 0; q < m; ++q) bp[n++] = ob_mod2pi(sp_param(R, P[q].x, P[q].y, P[q].z));
-    }
     rg_sort(bp, n);
     T S0, S2, K0;
     cx<T> S1, K1, c0[2], c1[4], c2[6];

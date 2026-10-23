@@ -78,7 +78,7 @@ def _target(law="hybrid4", spots=False, **kw):
     if spots and kw.get("relative", True):
         # relative to the spotted star's own level: the frontend's flux over
         # its star-alone flux at the same times
-        star = _photometry(law, spots, star_alone=True)[3]
+        star = _photometry(law, spots, exp_time=kw.get("exp_time", 0.0), star_alone=True)[3]
         flux, y = flux / star, y / star
     tt = make_transit_target(t, y, yerr, T0 + 0.003, PER - 0.0005,
                              limb_dark=law, **extra, **kw)
@@ -184,6 +184,12 @@ class TestSpottedTarget:
         assert np.max(np.abs(m - (flux - 1.0))) < 1e-11
         oot = np.abs(tt.x64[0]) > 0.1
         assert np.max(np.abs(m[oot])) < 1e-15
+
+    def test_exposures(self):
+        """Long cadence: the star term by two-point Gauss-Legendre, against
+        the frontend's contact rule for both terms."""
+        tt, flux = _target("hybrid4", spots=True, exp_time=29.4 / 1440.0)
+        assert np.max(np.abs(_model64(tt, _truth(tt)) - (flux - 1.0))) < 1e-10
 
     def test_unspotted_normalisation(self):
         tt, flux = _target("hybrid4", spots=True, relative=False)

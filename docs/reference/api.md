@@ -447,7 +447,12 @@ under ``mx.compile`` (run anvil with ``compile_step=False``).
 ``relative`` (spots only): the flux relative to the spotted star's own
 level at each time, (1 + dF) / (1 + dF_star) - 1, with dF_star the
 same model with the planet half an orbit away -- what a light curve
-normalised to its out-of-transit level measures, at twice the cost.
+normalised to its out-of-transit level measures. With exposures the
+star term is averaged by three-point Gauss-Legendre, not by
+``integration``: with the planet hidden there is nothing to split, and
+the event search and most nodes are saved (the relative model's error
+stays below 0.1 ppm, even for a star turning in a day at long
+cadence, a spot rotating onto the disc mid-exposure).
 False: relative to the unspotted star (``flux_dev_from_tau``'s
 normalisation), which leaves ``df0`` to absorb the spots' visible
 deficit, a ridge HMC samples poorly.

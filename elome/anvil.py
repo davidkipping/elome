@@ -204,6 +204,12 @@ def _w_from_q(limb_dark: str, q: mx.array) -> mx.array:
     return simplex_from_q(q)
 
 
+# the star-alone term's exposure average (make_hybrid_transit_flux): the
+# three-point Gauss-Legendre nodes on [-1, 1] and weights summing to 1
+_STAR_GL_X = (-math.sqrt(0.6), 0.0, math.sqrt(0.6))
+_STAR_GL_W = (5.0 / 18.0, 8.0 / 18.0, 5.0 / 18.0)
+
+
 def make_hybrid_transit_flux(period_ref: float, limb_dark: str = "hybrid4",
                              eccentric: bool = False, n_spots: int = 0,
                              exp_time: float = 0.0,
@@ -226,7 +232,12 @@ def make_hybrid_transit_flux(period_ref: float, limb_dark: str = "hybrid4",
     ``relative`` (spots only): the flux relative to the spotted star's own
     level at each time, (1 + dF) / (1 + dF_star) - 1, with dF_star the
     same model with the planet half an orbit away -- what a light curve
-    normalised to its out-of-transit level measures, at twice the cost.
+    normalised to its out-of-transit level measures. With exposures the
+    star term is averaged by three-point Gauss-Legendre, not by
+    ``integration``: with the planet hidden there is nothing to split, and
+    the event search and most nodes are saved (the relative model's error
+    stays below 0.1 ppm, even for a star turning in a day at long
+    cadence, a spot rotating onto the disc mid-exposure).
     False: relative to the unspotted star (``flux_dev_from_tau``'s
     normalisation), which leaves ``df0`` to absorb the spots' visible
     deficit, a ridge HMC samples poorly.
@@ -264,17 +275,29 @@ def make_hybrid_transit_flux(period_ref: float, limb_dark: str = "hybrid4",
                 istar=mx.arccos(mx.clip(v[:, col["cos_istar"]], -1.0 + 1e-6,
                                         1.0 - 1e-6)),
                 lam=v[:, col["lam"]] * _DEG)
-        def dev(tt):
+        def dev(tt, exp=exp_time, **over):
             return flux_dev_from_tau(
                 tt, period, v[:, 4], v[:, 3], v[:, 2], limb_dark=limb_dark,
-                u=_w_from_q(limb_dark, v[:, iq:iq + n_q]), exp_time=exp_time,
-                integration=integration if exp_time > 0.0 else "none",
-                n_gl=n_gl, n_sub=n_sub, **kw)
+                u=_w_from_q(limb_dark, v[:, iq:iq + n_q]), exp_time=exp,
+                integration=integration if exp > 0.0 else "none",
+                n_gl=n_gl, n_sub=n_sub, **{**kw, **over})
         if K and relative:
             # the star alone: the same times on the star's clock, the planet
             # at the opposite conjunction (behind the star, which hides it)
             half = 0.5 * period[:, None]
-            star = dev(mx.where(tau < 0.0, tau + half, tau - half))
+            behind = mx.where(tau < 0.0, tau + half, tau - half)
+            if exp_time > 0.0 and integration != "none":
+                # nothing to split (the planet makes no events, a spot
+                # turning onto the disc is split by no rule): each exposure
+                # by three-point Gauss-Legendre, with no event search
+                m, st = tau.shape[1], kw["spot_time"]
+                d = [0.5 * exp_time * x for x in _STAR_GL_X]
+                nodes = dev(mx.concatenate([behind + x for x in d], axis=1), 0.0,
+                            spot_time=mx.concatenate([st + x for x in d], axis=1))
+                star = sum(w * nodes[:, i * m:(i + 1) * m]
+                           for i, w in enumerate(_STAR_GL_W))
+            else:
+                star = dev(behind)
             return v[:, -1:] + (dev(tau) - star) / (1.0 + star)
         return v[:, -1:] + dev(tau)
 

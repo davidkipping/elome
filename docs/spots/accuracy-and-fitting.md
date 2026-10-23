@@ -148,7 +148,10 @@ parameter, and batched float32 kernels on the GPU.
   `compile_step=tt.compile_step`. By default (`relative=True`) the model
   is the flux relative to the spotted star's own level at each time, which
   is what a light curve normalised to its out-of-transit level measures;
-  it costs a second evaluation, without the planet. Tutorial 4 fits two
+  it costs a second evaluation, without the planet. With exposures that
+  one is averaged by three-point Gauss–Legendre rather than the contact
+  rule (with the planet hidden there is nothing to split), within 0.1 ppm
+  even for a star turning in a day at long cadence. Tutorial 4 fits two
   crossings in Kepler data this way, from finding the spots to sampling.
 - **Keep the spots' epoch near the data.** The star's phase grows with
   the time since the epoch, and float32 carries it to about
