@@ -196,7 +196,9 @@ Three arguments do the coupling:
 
 `make_target` then adds the GP's own parameters, picks sensible priors and
 float64 references for them, and returns a target anvil can sample.
-`GPPolicy(metal=True)` turns on anvil-gp's fused Metal kernel.
+`GPPolicy(metal=True)` insists on anvil-gp's fused Metal kernel and
+warns if it cannot serve the model. The kernel is anvil-gp's default
+wherever it is eligible, so the line only makes the choice explicit.
 """)
 
 code("""
