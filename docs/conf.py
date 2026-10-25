@@ -36,6 +36,7 @@ html_theme = "sphinx_book_theme"
 html_title = "Elómë"
 html_static_path = ["_static"]
 html_css_files = ["custom.css"]
+html_extra_path = ["_extra"]  # robots.txt at the site root: keep crawlers out
 html_theme_options = {
     "repository_url": "https://github.com/davidkipping/elome",
     "repository_branch": "main",
