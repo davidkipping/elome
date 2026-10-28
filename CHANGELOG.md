@@ -14,6 +14,19 @@ every release is tagged `vX.Y.Z` in git.
   the limb-darkening law (any law is accepted), runs the MLX graph rather
   than a Metal kernel, and takes supersampling only. At `f = 0` it is the
   spherical eclipse to rounding.
+- **Secondary eclipses in the sampler API.** `flux_dev_from_tau(...,
+  transittype="secondary", fp=)` gives the eclipse of a spherical or
+  oblate planet from per-chain parameters and each point's time since
+  mid-transit, so a sampler (anvil's `model_fn`, for one) can fit
+  transits and eclipses together on one `tau`. `1 + dev` is
+  `TransitModel`'s secondary-eclipse flux; `fp` takes per-chain values
+  and a gradient; the limb-darkening arguments are optional and ignored;
+  exposures by supersampling. The MLX graph in either precision, safe
+  under `mx.compile`.
+
+### Fixed
+- Two numbers in the sampler guide's starspot notes rendered with a
+  stray tab in place of `\times`.
 
 ## [0.22.1] — 2026-10-23
 

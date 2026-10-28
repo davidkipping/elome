@@ -1787,7 +1787,8 @@ def flux_dev_from_tau(tau: mx.array, period, a, b, r, u1=None, u2=None, *,
                       u=None, f=None, theta=None, ring_in=None,
                       ring_out=None, ring_f=None, ring_tau=None, spots=None,
                       spot_time=None, prot=None, istar=None,
-                      lam=None) -> mx.array:
+                      lam=None, transittype: str = "primary",
+                      fp=None) -> mx.array:
     """F - 1 from time-since-mid-transit, with the exposure integrated
     *inside* the kernel.
 
@@ -1896,6 +1897,18 @@ def flux_dev_from_tau(tau: mx.array, period, a, b, r, u1=None, u2=None, *,
             parameter at conjunction, a cos i (1 - e^2) / (1 + e sin w), so
             it reduces to the circular b at e = 0; circular and eccentric
             chains can share one batch.
+        transittype, fp: ``"secondary"`` gives the eclipse of the planet
+            by the star (``elome.eclipse``), with the planet a uniform disc
+            of flux ratio ``fp`` (scalar or (n,), required): F - 1 is fp
+            out of eclipse and 0 in totality, so 1 + F - 1 is
+            ``TransitModel(transittype="secondary")``'s flux. ``tau`` is
+            still the time since mid-transit; the orbit places the eclipse.
+            A spherical or oblate planet (``f``, ``theta``); no ring,
+            spots or ``ld_basis``. The limb-darkening arguments are
+            optional and ignored. Exposures: ``"none"`` or
+            ``"supersample"`` (the contact rule is for transits). The MLX
+            graph in either precision, no Metal kernel; gradients in
+            ``tau``, every parameter and ``fp``.
 
     Returns:
         (n, m) -- or (m,) for 1-D ``tau`` and no per-chain parameters -- of
@@ -1940,6 +1953,30 @@ def flux_dev_from_tau(tau: mx.array, period, a, b, r, u1=None, u2=None, *,
                          "ring_in= too")
     if ringed and (ring_out is None or ring_f is None):
         raise ValueError("a ring needs ring_in=, ring_out= and ring_f=")
+    if transittype not in ("primary", "secondary"):
+        raise ValueError("transittype must be 'primary' or 'secondary'")
+    if transittype == "secondary":
+        if fp is None:
+            raise ValueError("a secondary eclipse needs fp=")
+        if ringed or spots is not None:
+            raise ValueError("secondary eclipses are for spherical and "
+                             "oblate planets: no ring or spots")
+        if theta is not None and f is None:
+            raise ValueError("theta= is an oblate planet's; pass f= too")
+        if ld_basis:
+            raise ValueError("ld_basis is for transits: a secondary eclipse "
+                             "has no limb darkening")
+        if mode == _INT_CONTACT:
+            raise ValueError("the contact rule is for transits; a secondary "
+                             "eclipse with exp_time > 0 takes "
+                             "integration='supersample'")
+        from .eclipse import eclipse_dev_from_tau
+        return eclipse_dev_from_tau(tau, period, a, b, r, fp, f, theta,
+                                    secosw, sesinw, float(exp_time), mode,
+                                    int(n_sub))
+    if fp is not None:
+        raise ValueError("fp= is a secondary eclipse's flux ratio; pass "
+                         "transittype='secondary' too")
     if ringed and limb_dark == "quadratic":
         raise ValueError("ringed planets take a hybrid law: "
                          "limb_dark='hybrid2' | 'hybrid4' | 'hybrid5'")

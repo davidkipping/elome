@@ -111,6 +111,8 @@ a spherical planet.
   condition as a barrier.
 - **Finite exposures**: supersampling or the contact rule; secondary
   eclipses take supersampling only. See {doc}`guides/exposures`.
+- **Secondary eclipses**: in `TransitModel` and in
+  {doc}`guides/sampler-api`, with the planet a uniform disc.
 - **Transit timing variations**: through {doc}`guides/sampler-api`,
   which takes each point's time since its own mid-transit, with a
   hybrid law or a polynomial law up to quadratic. `TransitModel` uses

@@ -6,7 +6,8 @@ returns per-chain flux deviations $F - 1$, from one fused GPU kernel per
 call, with analytic gradients in every input. The same call covers
 spherical, oblate and ringed planets and spotted stars, the quadratic
 and hybrid limb-darkening laws, circular and eccentric orbits, and every
-exposure rule.
+exposure rule, and the secondary eclipses of spherical and oblate
+planets.
 
 ```python
 from elome import flux_dev_from_tau
@@ -29,6 +30,7 @@ flux = 1.0 + dev
 | `secosw`, `sesinw` | scalar or `(n,)` | an eccentric orbit, $(\sqrt{e}\cos\omega, \sqrt{e}\sin\omega)$ |
 | `exp_time`, `integration`, `n_gl`, `n_sub` | | the exposure rule; see {doc}`exposures` |
 | `ld_basis` | bool | return the limb-darkening basis instead (below) |
+| `transittype`, `fp` | `"primary"` or `"secondary"`; scalar or `(n,)` | a secondary eclipse and the planet-to-star flux ratio (below) |
 
 float32 `tau` runs on the GPU; float64 runs the exact graph on the CPU
 and computes the *same* function. Even the quadrature's split points are
@@ -185,10 +187,59 @@ dev = flux_dev_from_tau(tau, 3.45, 8.84, 0.3, 0.115, limb_dark="hybrid4",
   its float32 kernels are already fused, so compiling would gain nothing.
   Compile the rest of a likelihood separately if it helps.
 - In float32 the star's phase $2\pi\,$`spot_time`$/$`prot` carries a
-  relative error of about $6	imes10^{-8}$. Over a 1,000-day baseline
-  on a star turning in a day that is about $4	imes10^{-4}$ rad. Keep
+  relative error of about $6\times10^{-8}$. Over a 1,000-day baseline
+  on a star turning in a day that is about $4\times10^{-4}$ rad. Keep
   `|spot_time|` small by putting the spots' epoch within the data, or
   use float64 for long baselines on fast rotators.
+
+## Secondary eclipses: `transittype="secondary"`
+
+`transittype="secondary"` gives the eclipse of the planet by the star,
+for a spherical or an oblate planet (`f`, `theta`), with the planet a
+uniform disc of flux ratio `fp`: the same model as
+`TransitModel(transittype="secondary")`, and `1 + dev` is its flux.
+`dev` is therefore `fp` out of eclipse and 0 in totality.
+
+- `tau` keeps its meaning, the time since each point's own
+  mid-transit, so a transit and an eclipse share one `tau` and one set
+  of timing parameters. The orbit places the eclipse: on a circular orbit
+  it is at $\tau = \pm P/2$, where a wrapped `tau` jumps by a period, and
+  the flux is periodic in `tau`, so the jump changes nothing.
+- `fp` is a scalar or one value per chain, with a gradient like every
+  other parameter.
+- The limb-darkening arguments are optional and ignored, so a transit
+  and an eclipse can be called with the same keywords.
+- Exposures take `integration="supersample"` (with `n_sub`) or none.
+  The contact rule is for transits, and with `exp_time > 0` the default
+  `integration="contact"` raises.
+- The eclipse runs as an MLX graph, in float32 on the GPU and float64 on
+  the CPU, not on the Metal kernels. It may be compiled. Rings, spots and
+  `ld_basis` are for transits.
+
+A joint fit of transits and eclipses, as an
+[anvil](https://github.com/davidkipping/anvil) model function, with
+data normalised to 1 outside each event:
+
+```python
+import mlx.core as mx
+from elome import flux_dev_from_tau
+
+PERIOD = 3.45                                  # fixed in this example
+
+def model_fn(v, x):
+    """v: (n_chains, 7) = (dt0, a, b, r, u1, u2, fp); x: (2, m), each
+    point's time since the reference mid-transit, and 1 for a point in an
+    eclipse window, 0 in a transit window."""
+    tau = x[0][None, :] - v[:, 0:1]            # each chain's own mid-transit
+    a, b, r, u1, u2, fp = (v[:, j] for j in range(1, 7))
+    transit = flux_dev_from_tau(tau, PERIOD, a, b, r, u1, u2)
+    eclipse = flux_dev_from_tau(tau, PERIOD, a, b, r,
+                                transittype="secondary", fp=fp)
+    return mx.where(x[1] > 0, eclipse - fp[:, None], transit)
+```
+
+Both calls run on every point here; with many points, split the data
+by event and evaluate each call on its own points.
 
 ## Separations instead of times: `flux_dev_metal`
 
