@@ -3,6 +3,18 @@
 All notable changes to Elómë. Versioning: semantic-ish (MAJOR.MINOR.PATCH);
 every release is tagged `vX.Y.Z` in git.
 
+## [Unreleased]
+
+### Added
+- **Secondary eclipses of oblate planets.** `TransitModel(...,
+  transittype="secondary")` now takes an oblate planet (`params.f`): the
+  planet is a uniform disc of flux ratio `fp`, eclipsed by the star, on
+  circular and eccentric orbits, with gradients in every parameter and
+  per-set values in `light_curves`. Like the spherical eclipse it ignores
+  the limb-darkening law (any law is accepted), runs the MLX graph rather
+  than a Metal kernel, and takes supersampling only. At `f = 0` it is the
+  spherical eclipse to rounding.
+
 ## [0.22.1] — 2026-10-23
 
 ### Changed

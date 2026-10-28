@@ -34,6 +34,7 @@ The same as for a spherical planet:
   sampler API (`flux_dev_from_tau`);
 - circular and eccentric orbits;
 - exposure integration, including the contact rule;
+- secondary eclipses, with the planet a uniform disc, in `TransitModel`;
 - float64 and float32, with analytic gradients in every parameter,
   `f` and `theta` included.
 
@@ -46,8 +47,6 @@ What differs:
 - **A domain:** $r_p \le (1-f)^{3/2}$, so that the planet crosses the
   stellar limb at most twice. That is 0.59 at $f = 0.3$ and 0.35 at
   $f = 0.5$, which covers planets.
-- **Primary transits only.** Secondary eclipses are for spherical
-  planets.
 - **Eccentricity up to 0.999**, against any $e < 1$ for a spherical
   planet.
 - **Cost.** An evaluation costs tens of times a spherical one. It is still

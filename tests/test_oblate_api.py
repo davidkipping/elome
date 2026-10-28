@@ -166,8 +166,11 @@ def test_errors():
         q = spherical()
         q.theta = 30.0
         el.TransitModel(q, T)
+    with pytest.raises(ValueError, match="needs params.fp"):
+        el.TransitModel(P(), T, transittype="secondary")
     with pytest.raises(ValueError, match="primary-transit only"):
-        el.TransitModel(P(fp=1e-4), T, transittype="secondary")
+        el.TransitModel(P(fp=1e-4), T, transittype="secondary",
+                        integration="contact", exp_time=EXP)
     m = el.TransitModel(P(), T)
     with pytest.raises(ValueError, match="build a new TransitModel"):
         m.light_curve(spherical())
@@ -358,3 +361,201 @@ def test_many_short_rows_are_blocked_by_sets(monkeypatch):
         assert np.array_equal(np.array(el.flux_dev_from_tau(t2, PER, 8.8, 0.3, rpa,
                                                             ld_basis=True, **kw)), basis)
     assert whole.shape == (7, 9) and basis.shape == (7, 9, 6)
+
+
+# ---------------------------------------------------------------------------
+# secondary eclipses: the planet a uniform disc behind the star
+# ---------------------------------------------------------------------------
+
+FP = 2e-3
+
+
+def _eclipse_times(ecc, w, half=0.25, n=241):
+    """Times around the secondary eclipse after T's transit, found from the
+    oracle's orbit: where the planet is behind the star and nearest its
+    centre."""
+    tt = np.linspace(0.0, PER, 20001)
+    X, Y, front = OR.sky_position(tt, PER, 8.8, math.radians(88.0), ecc, math.radians(w))
+    t2 = tt[np.argmin(np.where(front, np.inf, np.hypot(X, Y)))]
+    return T0 + 2 * PER + t2 + np.linspace(-half, half, n)
+
+
+def _eclipse_reference(t, p, ecc, w):
+    """1 + fp times the visible fraction of the planet's disc, from the
+    oracle's orbit and its polar-ray area (columns' mu^0)."""
+    X, Y, front = OR.sky_position(t - T0, PER, 8.8, math.radians(88.0), ecc, math.radians(w))
+    th = math.radians(p.theta)
+    x0, y0 = X * math.cos(th) + Y * math.sin(th), -X * math.sin(th) + Y * math.cos(th)
+    A = p.rp / math.sqrt(1.0 - p.f)
+    vis = np.ones(len(t))
+    near = ~front & (np.hypot(x0, y0) < 1 + A)
+    vis[near] += OR.columns(x0[near], y0[near], A, A * (1.0 - p.f), ())[:, 0] / (math.pi * p.rp ** 2)
+    return 1.0 + p.fp * vis
+
+
+@pytest.mark.parametrize("ecc,w", [(0.0, 90.0), (0.3, 40.0), (0.6, -70.0)])
+def test_secondary_matches_the_reference(ecc, w):
+    """Absolute times, the eclipse placed by the orbit, theta the sky angle
+    at transit: through ingress, totality and egress."""
+    p = P(ecc=ecc, w=w, fp=FP)
+    t = _eclipse_times(ecc, w)
+    got = el.TransitModel(p, t, transittype="secondary").light_curve(p)
+    ref = _eclipse_reference(t, p, ecc, w)
+    assert ref.min() == 1.0 and ref.max() == 1.0 + FP      # totality and out of eclipse
+    assert np.any((ref > 1.0) & (ref < 1.0 + FP))           # and the partial phases
+    assert np.abs(got - ref).max() < 1e-15
+
+
+def test_secondary_grazing_matches_the_reference():
+    p = P(inc=83.6, fp=FP, f=0.4, theta=70.0)       # b ~ 0.98: the star never covers it
+    t = _eclipse_times(0.0, 90.0)
+    got = el.TransitModel(p, t, transittype="secondary").light_curve(p)
+    X, Y, front = OR.sky_position(t - T0, PER, 8.8, math.radians(83.6))
+    th = math.radians(70.0)
+    x0, y0 = X * math.cos(th) + Y * math.sin(th), -X * math.sin(th) + Y * math.cos(th)
+    A = 0.1 / math.sqrt(0.6)
+    ref = np.ones(len(t))
+    near = ~front & (np.hypot(x0, y0) < 1 + A)
+    ref[near] += OR.columns(x0[near], y0[near], A, 0.6 * A, ())[:, 0] / (math.pi * 0.01)
+    ref = 1.0 + FP * ref
+    assert 1.0 < ref.min() < 1.0 + 0.9 * FP
+    assert np.abs(got - ref).max() < 1e-15
+
+
+@pytest.mark.parametrize("kw", [{}, {"supersample_factor": 7, "exp_time": EXP}],
+                         ids=["none", "supersample"])
+@pytest.mark.parametrize("ecc", [0.0, 0.3])
+def test_secondary_f_zero_is_the_spherical_model(kw, ecc):
+    t = _eclipse_times(ecc, 40.0)
+    o, s = P(f=0.0, fp=FP, ecc=ecc, w=40.0), spherical(fp=FP, ecc=ecc, w=40.0)
+    got = el.TransitModel(o, t, transittype="secondary", **kw).light_curve(o)
+    ref = el.TransitModel(s, t, transittype="secondary", **kw).light_curve(s)
+    assert ref.min() < 1.0 + 0.5 * FP
+    assert np.abs(got - ref).max() < 1e-15
+
+
+def test_secondary_is_the_uniform_transit_reflected():
+    """On a circular orbit the planet half a period after transit sits at
+    minus its sky position then, and a centrally symmetric ellipse there
+    overlaps the star exactly as much: the eclipse's visible fraction, times
+    r^2, is the transit of a uniform star (a hybrid law with every weight
+    0). On an fp32 model that transit is the oblate kernel's. (fp = 1, so
+    that reading the fraction back does not magnify the flux's rounding;
+    the two sky positions, half a turn apart, round differently by ~a ulp
+    of a = 8.8. In fp32 the visible fraction is good to ~1e-4 at the
+    contacts, as the spherical eclipse's is: times r^2, 1e-6.)"""
+    tau = np.linspace(-0.15, 0.15, 241)
+    for dt, tol in ((None, 1e-14), (mx.float32, 2e-6)):
+        pu = P(limb_dark="hybrid2", u=[0.0, 0.0])
+        prim = el.TransitModel(pu, T0 + 2 * PER + tau, dtype=dt).light_curve(pu)
+        ps = P(fp=1.0)
+        sec = el.TransitModel(ps, T0 + 2.5 * PER + tau, transittype="secondary",
+                              dtype=dt).light_curve(ps)
+        assert 1.0 - prim.min() > 1e-3
+        assert np.abs((sec - 2.0) * 0.1 ** 2 - (prim - 1.0)).max() < tol
+
+
+def test_secondary_takes_any_law_and_ignores_it():
+    t = _eclipse_times(0.0, 90.0)
+    ref = el.TransitModel(P(fp=FP), t, transittype="secondary").light_curve(P(fp=FP))
+    for law, u in (("quadratic", [0.4, 0.2]), ("uniform", []), ("hybrid2", [0.3, 0.1]),
+                   ("polynomial", [0.3, 0.1, 0.05])):
+        p = P(fp=FP, limb_dark=law, u=u)
+        assert np.array_equal(el.TransitModel(p, t, transittype="secondary").light_curve(p),
+                              ref)
+
+
+@pytest.mark.parametrize("kw", [{}, {"supersample_factor": 7, "exp_time": EXP}],
+                         ids=["none", "supersample"])
+@pytest.mark.parametrize("ecc", [0.0, 0.3])
+def test_secondary_fp32_model_matches_fp64(kw, ecc):
+    p = P(ecc=ecc, w=40.0, fp=FP)
+    t = _eclipse_times(ecc, 40.0)
+    d64 = el.TransitModel(p, t, transittype="secondary", **kw).light_curve(p)
+    d32 = el.TransitModel(p, t, transittype="secondary", dtype=mx.float32,
+                          **kw).light_curve(p)
+    assert np.abs(d32 - d64).max() < 3e-7
+
+
+def test_secondary_light_curves_equal_the_loop():
+    t = _eclipse_times(0.0, 90.0)
+    m = el.TransitModel(P(fp=FP), t, transittype="secondary")
+    sets = [P(fp=FP, f=0.1, theta=0.0), P(fp=1e-3, f=0.4, theta=80.0, ecc=0.2, w=10.0),
+            P(fp=3e-3, rp=0.12, f=0.2, theta=150.0)]
+    loop = np.stack([m.light_curve(q) for q in sets])
+    assert np.abs(m.light_curves(sets) - loop).max() < 1e-15
+    pa = P(fp=np.array([FP, 1e-3, 3e-3]))
+    pa.f, pa.theta = np.array([0.1, 0.4, 0.2]), np.array([0.0, 80.0, 150.0])
+    arr = m.light_curves(pa)
+    ref = np.stack([m.light_curve(P(fp=q, f=f, theta=th))
+                    for q, f, th in zip(pa.fp, pa.f, pa.theta)])
+    assert np.abs(arr - ref).max() < 1e-15
+
+
+def test_secondary_light_curve_mx_differentiates():
+    """Every parameter the eclipse depends on, fp included, against central
+    differences (Richardson), on a grid through ingress and egress. The
+    eclipse is 2.6 periods after t0, so a step in per moves it 2.6 times as
+    far as the same step in t0: per takes a smaller one, so that no point
+    steps across a contact."""
+    t = _eclipse_times(0.2, 30.0, half=0.15, n=121)
+    ct = np.random.default_rng(1).normal(size=t.shape)
+    names = ("f", "theta", "rp", "t0", "inc", "ecc", "w", "fp", "a", "per")
+    x = [0.3, 35.0, 0.1, T0, 88.0, 0.2, 30.0, FP, 8.8, PER]
+    with mx.stream(mx.cpu):
+        m = el.TransitModel(P(ecc=0.2, w=30.0, fp=FP), t, transittype="secondary")
+
+        def loss(*v):
+            q = P()
+            for nm, val in zip(names, v):
+                setattr(q, nm, val)
+            return mx.sum(mx.array(ct) * m.light_curve_mx(q))
+        args = [mx.array(v, dtype=mx.float64) for v in x]
+        g = mx.grad(loss, argnums=tuple(range(len(x))))(*args)
+        for i in range(len(x)):
+            def fd(h):
+                up = [mx.array(a) for a in args]
+                dn = [mx.array(a) for a in args]
+                up[i] = args[i] + h
+                dn[i] = args[i] - h
+                return (float(loss(*up)) - float(loss(*dn))) / (2 * h)
+            h = (1e-6 if names[i] == "per" else 1e-4) * max(abs(float(args[i])), 0.01)
+            ref = (4 * fd(h / 2) - fd(h)) / 3
+            assert abs(float(g[i]) - ref) <= 2e-4 * max(abs(ref), 1e-6), names[i]
+
+
+@pytest.mark.parametrize("dtype", [mx.float64, mx.float32])
+def test_secondary_gradients_finite_through_the_contacts(dtype):
+    """Dense times through every contact, a sphere-like f = 0 among them:
+    no NaN or inf in any gradient."""
+    t = _eclipse_times(0.0, 90.0, half=0.12, n=961)
+    stream = mx.cpu if dtype == mx.float64 else mx.gpu
+    with mx.stream(stream):
+        m = el.TransitModel(P(fp=FP), t, transittype="secondary", dtype=dtype)
+        for f in (0.0, 0.3):
+            def loss(rp, ff, th, fp):
+                q = P(rp=rp, f=ff, theta=th, fp=fp)
+                return mx.sum(m.light_curve_mx(q))
+            args = [mx.array(v, dtype=dtype) for v in (0.1, f, 35.0, FP)]
+            g = mx.grad(loss, argnums=(0, 1, 2, 3))(*args)
+            assert all(np.all(np.isfinite(np.asarray(x))) for x in g)
+
+
+def test_secondary_long_grids_are_evaluated_in_blocks(monkeypatch):
+    from elome import oblate_tau
+    t = _eclipse_times(0.3, 40.0)
+    p = P(fp=FP, ecc=0.3, w=40.0)
+    m = el.TransitModel(p, t, transittype="secondary")
+    sets = [p, P(fp=1e-3, ecc=0.3, w=40.0, f=0.1, theta=80.0, rp=0.08)]
+    whole, whole_sets = m.light_curve(p), m.light_curves(sets)
+    shapes, orig = [], oblate_tau._eclipse_graph
+
+    def spy(tau, *a, **k):
+        shapes.append(tuple(tau.shape))
+        return orig(tau, *a, **k)
+    monkeypatch.setattr(oblate_tau, "_eclipse_graph", spy)
+    monkeypatch.setattr(oblate_tau, "_OBLATE_BLOCK", 50)
+    assert np.abs(m.light_curve(p) - whole).max() < 1e-15
+    assert np.abs(m.light_curves(sets) - whole_sets).max() < 1e-15
+    assert shapes and all(s[0] * s[1] <= 50 for s in shapes)
+

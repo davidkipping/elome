@@ -30,6 +30,28 @@ change between calls.
   {doc}`../guides/gradients-and-precision`.
 - `dtype=mx.float32` runs on the GPU kernels.
 
+## Secondary eclipses
+
+`transittype="secondary"` gives the eclipse of the planet by the star,
+with the planet a uniform disc of flux ratio `fp`, as for a spherical
+planet: the flux is $1 + f_p$ out of eclipse, 1 in totality, and
+$1 + f_p$ times the visible fraction of the planet's outline in between.
+The planet carries no limb darkening of its own, so the model takes any
+law and ignores it. `theta` is the same sky angle as at transit: the
+outline's projection does not change along the orbit.
+
+```python
+p.fp = 1e-3
+t2 = p.t0 + 0.5 * p.per + np.linspace(-0.12, 0.12, 2000)   # circular orbit
+m2 = elome.TransitModel(p, t2, transittype="secondary")
+eclipse = m2.light_curve(p)
+```
+
+The orbit places the eclipse, as for a spherical planet (see
+{doc}`../spherical/light-curves`). Use `supersample_factor` for finite
+exposures; the contact rule is for primary transits. The eclipse runs as
+an MLX graph in float32 as well as float64, not on the GPU kernels.
+
 ## Choosing the limb-darkening law
 
 An oblate planet takes `hybrid2`, `hybrid4` or `hybrid5`, or a custom

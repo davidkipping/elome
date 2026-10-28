@@ -95,7 +95,7 @@ a spherical planet.
 | polynomial laws | ✓ | ✗ | ✗ | ✗ |
 | eccentric orbits | ✓ | ✓ | ✓ | ✓ |
 | finite exposures | ✓ | ✓ | ✓ | ✓ |
-| secondary eclipses | ✓ | ✗ | ✗ | ✗ |
+| secondary eclipses | ✓ | ✓ | ✗ | ✗ |
 | transit timing variations | ✓ | ✓ | ✓ | ✓ |
 | batches of parameter sets | ✓ | ✓ | ✓ | ✓ |
 | gradients in every parameter | ✓ | ✓ | ✓ | ✓ |

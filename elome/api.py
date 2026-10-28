@@ -488,13 +488,13 @@ class TransitModel:
                                  "'hybrid4' | 'hybrid5'")
             if transittype != "primary":
                 raise ValueError("a ringed planet is primary-transit only")
-        elif self._oblate:
+        elif self._oblate and transittype == "primary":
+            # (a secondary eclipse sees the planet as a uniform disc, so it
+            # takes any law and ignores it, as the spherical one does)
             if _hybrid_law(params.limb_dark) is None:
                 raise ValueError("an oblate planet (params.f) takes a hybrid "
                                  "law: limb_dark='hybrid2' | 'hybrid4' | "
                                  "'hybrid5'")
-            if transittype != "primary":
-                raise ValueError("an oblate planet is primary-transit only")
         self.limb_dark = params.limb_dark
         # a hybrid law is resolved ONCE, here: every graph this model traces
         # uses this definition, whatever the registry does afterwards
@@ -1044,6 +1044,38 @@ class TransitModel:
         self._compiled[key] = fn
         return fn
 
+    def _oblate_eclipse_fn(self, orbit: str):
+        """The compiled oblate secondary eclipse, 1 + fp (1 + the visible
+        fraction's deviation): the graph only (oblate_tau's
+        eclipse_dev_from_tau_oblate), on this model's own grid; ``orbit``
+        as _oblate_fn's, the argument after theta fp instead of the
+        weights."""
+        key = ("oblate-eclipse", orbit)
+        fn = self._compiled.get(key)
+        if fn is not None:
+            return fn
+        from . import oblate_tau
+
+        def raw(tt, t0, per, a, b, rp, f, th, fp, k=None, h=None,
+                blocks=False):
+            tau = tt - t0
+            tau = tau - per * mx.round(tau / per)
+            return 1.0 + fp * (1.0 + oblate_tau.eclipse_dev_from_tau_oblate(
+                tau, per, a, b, rp, f, th, k=k, h=h, ew=orbit == "ew",
+                compile_blocks=blocks))
+        whole = mx.compile(raw)
+
+        def fn(tt, t0, *rest):
+            # as _oblate_fn's: a call larger than one block runs uncompiled
+            # around a compiled block
+            n = max([x.shape[0] for x in (tt, t0, *rest[:6])
+                     if x.ndim == 2] or [1])
+            if n * tt.shape[-1] > oblate_tau._OBLATE_BLOCK:
+                return raw(tt, t0, *rest, blocks=True)
+            return whole(tt, t0, *rest)
+        self._compiled[key] = fn
+        return fn
+
     def _oblate_eval(self, params, uv, cast, rad, is_arr):
         """light_curve / light_curve_mx for an oblate model: _model_eval's
         parameter preparation and ecc routing, b the impact parameter at
@@ -1055,21 +1087,25 @@ class TransitModel:
         f = cast(params.f)
         th = rad(0.0 if params.theta is None else params.theta)
         head = (self._t_mx, t0_off, per, a)
+        if self.transittype == "secondary":
+            model, last = self._oblate_eclipse_fn, cast(params.fp)
+        else:
+            model, last = self._oblate_fn, cast(uv)
         route = self._ecc_route(params, cast, rad, is_arr)
         if route[0] == "ew":
             _, e, wr, emask = route
             b = contact_geometry(a, e, e * sincos(wr)[0], ci)[1]
-            out = self._oblate_fn("ew")(*head, b, rp, f, th, cast(uv), e, wr)
+            out = model("ew")(*head, b, rp, f, th, last, e, wr)
         elif route[0] == "circ":
             emask = None
             b = (a * ci if is_arr(params.a) or is_arr(params.inc)
                  else cast(float(params.a) * ci_py))
-            out = self._oblate_fn("circ")(*head, b, rp, f, th, cast(uv))
+            out = model("circ")(*head, b, rp, f, th, last)
         else:
             _, k, h, ev, sq = route
             emask = None
             b = contact_geometry(a, cast(ev), h * sq, ci)[1]   # e sin w = h sqrt(e)
-            out = self._oblate_fn("kh")(*head, b, rp, f, th, cast(uv), k, h)
+            out = model("kh")(*head, b, rp, f, th, last, k, h)
         return self._apply_masks(out, emask, gmask)
 
     # -- ringed planets -------------------------------------------------------
@@ -1447,12 +1483,16 @@ class TransitModel:
                 b_np = contact_geometry(
                     cols["a"], ecc, ecc * np.sin(w), np.cos(inc),
                     sqrt=np.sqrt, maximum=np.maximum)[1]
+                secondary = self.transittype == "secondary"
+                model = (self._oblate_eclipse_fn if secondary
+                         else self._oblate_fn)
                 args = (self._t_mx[None, :], t0, per, a, col(b_np), rp,
-                        col(cols["f"]), col(np.radians(cols["theta"])), uvec)
+                        col(cols["f"]), col(np.radians(cols["theta"])),
+                        fp if secondary else uvec)
                 if bool(np.any(ecc > 0.0)):
-                    out = self._oblate_fn("kh")(*args, k, h)
+                    out = model("kh")(*args, k, h)
                 else:
-                    out = self._oblate_fn("circ")(*args)
+                    out = model("circ")(*args)
             elif self.integration == "contact":
                 b_np = contact_geometry(
                     cols["a"], ecc, ecc * np.sin(w), np.cos(inc),

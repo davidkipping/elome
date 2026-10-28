@@ -50,12 +50,12 @@ import numpy as np
 
 from . import metal as M
 from .dtypes import fp64_on_cpu
-from .hybrid import combine_cols, get_law
+from .hybrid import HybridLaw, combine_cols, get_law
 from .oblate import _check_domain, principal_frame, shape_cols_oblate
 from .trig import sincos
 
 __all__ = ["sky_circular", "sky_anchored", "contact_offsets_oblate",
-           "flux_dev_from_tau_oblate"]
+           "flux_dev_from_tau_oblate", "eclipse_dev_from_tau_oblate"]
 
 _TWO_PI = 2.0 * math.pi
 _N_PSI = 16              # boundary samples per extremum search
@@ -520,4 +520,84 @@ def flux_dev_from_tau_oblate(tau, period, a, b, r, f, theta, law, u,
         out = _in_blocks(run, tau2d, rows,
                          _nodes_per_time(exp_time, mode, n_gl, n_sub),
                          _OBLATE_BLOCK)
+    return out[0] if squeeze and n == 1 else out
+
+
+# --------------------------------------------------------------------------
+# secondary eclipses
+# --------------------------------------------------------------------------
+
+# no shapes and no poles: the shape basis is the uniform column E0 alone
+_AREA = HybridLaw("area", (), ())
+
+
+def _eclipse_graph(tau, period, a, b, r, f, theta, k=None, h=None, ew=False):
+    """The visible fraction of a uniform oblate planet's disc, minus 1, on
+    (n, m) tau and (n,) parameters. The planet is behind the star, so the
+    near side of the orbit takes the far-side stand-in and the far side is
+    live. E0 is minus the area of the planet's outline inside the star's
+    disc, so the fraction is 1 + E0 / (pi r^2) (r is the area-equivalent
+    radius), the spherical path's rule; r = 0 is a point planet, always
+    visible. theta is the sky angle at transit: the outline's projection
+    is the same all along the orbit."""
+    per, av, bv, rv, fv, thv = (mx.reshape(p, (-1, 1))
+                                for p in (period, a, b, r, f, theta))
+    eo = None
+    if k is not None:
+        eo = _orbit_consts(av, bv, mx.reshape(k, (-1, 1)),
+                           mx.reshape(h, (-1, 1)), ew)
+    X, Y, _, _, front = _sky((_TWO_PI / per) * tau, av, bv, eo)
+    X = mx.where(front, _FAR, X)
+    Y = mx.where(front, 0.0, Y)
+    sth, cth = sincos(thv)
+    x0, y0 = X * cth + Y * sth, -X * sth + Y * cth
+    e0 = shape_cols_oblate(x0, y0, rv, fv, _AREA)[..., 0]
+    pos = rv > 0.0
+    return mx.where(pos, e0 / mx.where(pos, math.pi * rv * rv, 1.0), 0.0)
+
+
+_eclipse_block_fns: dict = {}
+
+
+def _eclipse_block_fn(ecc, ew, compiled):
+    """``run(tt, rows)`` for _in_blocks, as _block_fn's."""
+    def raw(tt, *rows):
+        return _eclipse_graph(tt, *rows[:6], *(rows[6:] if ecc else ()),
+                              ew=ew)
+    fn = raw
+    if compiled:
+        key = (bool(ecc), bool(ew))
+        fn = _eclipse_block_fns.get(key)
+        if fn is None:
+            fn = _eclipse_block_fns[key] = mx.compile(raw)
+    return lambda tt, rows: fn(tt, *rows)
+
+
+@fp64_on_cpu
+def eclipse_dev_from_tau_oblate(tau, period, a, b, r, f, theta, k=None,
+                                h=None, ew=False, compile_blocks=False):
+    """A uniform oblate planet's secondary eclipse: the visible fraction of
+    its disc minus 1 (0 out of eclipse, -1 in totality), so that the flux
+    is 1 + fp (1 + this). ``tau`` is (n, m) or (m,), the time since each
+    point's mid-*transit* within half a period of it, as
+    flux_dev_from_tau_oblate's (the orbit places the eclipse: near
+    +-period / 2 on a circular orbit); arguments as there. The graph only,
+    with no kernel and no exposure rule (TransitModel supersamples on its
+    own grid); fp64 on the CPU stream in blocks of at most _OBLATE_BLOCK
+    points, each compiled once with ``compile_blocks``."""
+    if tau.ndim not in (1, 2):
+        raise ValueError(f"tau must be (m,) or (n, m); got {tau.shape}")
+    _check_domain(r, f)
+    squeeze = tau.ndim == 1
+    tau2d = tau[None, :] if squeeze else tau
+    ecc = k is not None
+    params = (period, a, b, r, f, theta) + ((k, h) if ecc else ())
+    n_param = max((p.shape[0] if isinstance(p, mx.array) and p.ndim >= 1
+                   else 1) for p in params)
+    n = max(tau2d.shape[0], n_param)
+    rows = [M._canon_param(p, n, tau2d.dtype) for p in params]
+    if tau2d.shape[0] != n:
+        tau2d = mx.broadcast_to(tau2d, (n, tau2d.shape[1]))
+    out = _in_blocks(_eclipse_block_fn(ecc, ew, compile_blocks), tau2d, rows,
+                     1, _OBLATE_BLOCK)
     return out[0] if squeeze and n == 1 else out
