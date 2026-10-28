@@ -44,6 +44,29 @@ def epoch_center_times(
     return np.stack([dt, k])
 
 
+def occultation_center_times(
+    t_model: np.ndarray, tocc_ref: float, period_ref: float,
+    dev_ref: float = 0.0,
+) -> np.ndarray:
+    """Float64 CPU preprocessing for a model timed by its occultation:
+    times -> (3, m) [dt, orbit number, near_occ].
+
+    Each datum is centred on the nearer of two series: the occultations
+    tocc_ref + k P_ref (near_occ = 1) and the transits half an orbit
+    earlier, tocc_ref - (1/2 + dev_ref) P_ref + k P_ref (near_occ = 0),
+    dev_ref the expected ``eclipse.occultation_offset_dev`` (0 unless the
+    orbit is known). A transit's float32 times are then resolved as well
+    as in a transit-timed model, not at a half-period's ulp.
+    """
+    t_model = np.asarray(t_model, dtype=np.float64)
+    occ = epoch_center_times(t_model, tocc_ref, period_ref)
+    tr = epoch_center_times(t_model, tocc_ref - (0.5 + dev_ref) * period_ref,
+                            period_ref)
+    near = np.abs(occ[0]) <= np.abs(tr[0])
+    out = np.where(near, occ, tr)
+    return np.vstack([out, near[None, :].astype(np.float64)])
+
+
 def tau_from_epochs(dt: mx.array, k: mx.array, t0_off, p_off, period):
     """Time from nearest mid-transit, re-wrapped in case a large offset
     pushed a datum into the neighboring orbit. All O(1) quantities."""

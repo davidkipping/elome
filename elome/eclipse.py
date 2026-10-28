@@ -15,6 +15,10 @@ clear of the star (TransitModel's rule); an oblate planet's is
 ``oblate_tau.eclipse_dev_from_tau_oblate``, imported only for one. The MLX
 graph only, in either precision (no Metal kernel); the exposure rule is
 "none" or "supersample", applied here for both.
+
+Two orbit helpers for timing an eclipse: ``occultation_offset``, the time
+from transit to occultation in orbits, and ``light_travel_delay``, how
+much later the eclipse is seen than the geometry places it.
 """
 
 from __future__ import annotations
@@ -30,9 +34,106 @@ from .ellip import dtype_eps
 from .solution import sn_dev
 from .trig import sincos
 
-__all__ = ["eclipse_dev_from_tau"]
+__all__ = ["eclipse_dev_from_tau", "occultation_offset",
+           "occultation_offset_dev", "light_travel_delay"]
 
 _TWO_PI = 2.0 * math.pi
+#: the IAU nominal solar radius (m), the speed of light (m/s), a day (s)
+_R_SUN, _C_LIGHT, _DAY = 6.957e8, 299_792_458.0, 86_400.0
+#: the floor on 1 - e^2, as the anchored orbit's (e <= 0.999)
+_ONE_MINUS_E2_MIN = 1.0 - 0.999 ** 2
+
+
+def _is_mx(*xs):
+    return any(isinstance(x, mx.array) for x in xs)
+
+
+def _as_mx(*xs):
+    """MLX arrays, a Python number taking the first array's dtype (not
+    float32, which ``mx.array`` would round a float64 orbit to)."""
+    dt = next(x.dtype for x in xs if isinstance(x, mx.array))
+    return tuple(x if isinstance(x, mx.array) else mx.array(x, dtype=dt)
+                 for x in xs)
+
+
+def occultation_offset(secosw=0.0, sesinw=0.0):
+    """The time from mid-transit to mid-occultation in orbits, (0, 1):
+    the mean anomaly between the two conjunctions, in closed form (E from
+    the true anomaly), with (secosw, sesinw) = sqrt(e) (cos w, sin w). 1/2
+    on a circular orbit, where its slope in (secosw, sesinw) is finite.
+    MLX arrays in, MLX out (differentiable, either precision); floats in,
+    a float out (float64). The geometric offset: add
+    ``light_travel_delay / period`` for the observed one."""
+    return 0.5 + occultation_offset_dev(secosw, sesinw)
+
+
+def occultation_offset_dev(secosw=0.0, sesinw=0.0):
+    """``occultation_offset`` - 1/2, in (-1/2, 1/2), without the
+    cancellation of forming it from the offset: accurate relative to
+    itself, so a float32 model can shift times by it times the period.
+
+    With E_tr the eccentric anomaly at transit (true anomaly pi/2 - w)
+    and E_occ = E_tr + pi + dE, tan((E_occ - E_tr) / 2)'s difference
+    formula gives dE = 2 atan2(e cos w, sqrt(1 - e^2)), and
+
+        M_occ - M_tr - pi = dE + 2 e sin(E_tr + dE / 2) cos(dE / 2).
+    """
+    if not _is_mx(secosw, sesinw):
+        k, h = float(secosw), float(sesinw)
+        e = k * k + h * h
+        w = math.atan2(h, k) if e > 0.0 else 0.0
+        th = 0.5 * math.pi - w
+        E_tr = 2.0 * math.atan2(math.sqrt(max(1.0 - e, 0.0)) * math.sin(0.5 * th),
+                                math.sqrt(1.0 + e) * math.cos(0.5 * th))
+        dE = 2.0 * math.atan2(math.sqrt(e) * k, math.sqrt(max(1.0 - e * e, 0.0)))
+        d = (dE + 2.0 * e * math.sin(E_tr + 0.5 * dE) * math.cos(0.5 * dE)) / _TWO_PI
+        return d - round(d)
+    k, h = _as_mx(secosw, sesinw)
+    e = k * k + h * h
+    circ = e == 0.0
+    w = mx.arctan2(mx.where(circ, 0.0, h), mx.where(circ, 1.0, k))
+    s, c = sincos(0.5 * (0.5 * math.pi - w))
+    E_tr = 2.0 * mx.arctan2(mx.sqrt(mx.maximum(1.0 - e, 0.0)) * s,
+                            mx.sqrt(1.0 + e) * c)
+    # e cos w = k sqrt(e), the root floored: its slope is infinite at e = 0
+    dE = 2.0 * mx.arctan2(k * mx.sqrt(mx.maximum(e, 1e-30)),
+                          mx.sqrt(mx.maximum(1.0 - e * e, 0.0)))
+    # sincos, not mx.sin: MLX's float64 sin is good to only ~2e-7
+    sn = sincos(E_tr + 0.5 * dE)[0]
+    cs = sincos(0.5 * dE)[1]
+    d = (dE + 2.0 * e * sn * cs) / _TWO_PI
+    return d - mx.round(d)
+
+
+def light_travel_delay(a, b, rstar, secosw=0.0, sesinw=0.0):
+    """How much later than the orbit's geometry places it a secondary
+    eclipse is seen, in days, relative to the transit: the light-travel
+    time across the orbit between the two conjunctions,
+
+        (r_tr + r_occ) sin i / c = 2 a sin i (1 - e^2) / (1 - e^2 sin^2 w) / c,
+
+    2 a sin i / c on a circular orbit (Kaplan 2010's leading term; the
+    star's reflex motion, of order the mass ratio, is left out). ``a`` in
+    stellar radii and ``b`` the impact parameter at transit (Elómë's), so
+    cos i = b (1 + e sin w) / (a (1 - e^2)); ``rstar`` the star's radius
+    in solar radii. MLX arrays in, MLX out; floats in, a float out."""
+    scale = 2.0 * float(rstar) * _R_SUN / (_C_LIGHT * _DAY)
+    if not _is_mx(a, b, secosw, sesinw):
+        a, b, k, h = float(a), float(b), float(secosw), float(sesinw)
+        e = k * k + h * h
+        esw = h * math.sqrt(e)
+        one_m = max(1.0 - e * e, _ONE_MINUS_E2_MIN)
+        ci = b * (1.0 + esw) / (a * one_m)
+        si = math.sqrt(max(1.0 - ci * ci, 0.0))
+        return scale * a * si * one_m / (1.0 - esw * esw)
+    a, b, k, h = _as_mx(a, b, secosw, sesinw)
+    e = k * k + h * h
+    # floored before the sqrt: its slope is infinite at e = 0
+    esw = h * mx.sqrt(mx.maximum(e, 1e-30))
+    one_m = mx.maximum(1.0 - e * e, _ONE_MINUS_E2_MIN)
+    ci = b * (1.0 + esw) / (a * one_m)
+    si = mx.sqrt(mx.maximum(1.0 - ci * ci, 1e-30))
+    return scale * a * si * one_m / (1.0 - esw * esw)
 
 
 def _vis_dev_spherical(tau, period, a, b, r, k=None, h=None):

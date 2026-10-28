@@ -23,10 +23,36 @@ every release is tagged `vX.Y.Z` in git.
   and a gradient; the limb-darkening arguments are optional and ignored;
   exposures by supersampling. The MLX graph in either precision, safe
   under `mx.compile`.
+- **Transits and eclipses in one model: `elome.anvil.make_eclipse_flux`**,
+  a batched model function any sampler can call (it needs no anvil): a
+  secondary eclipse alone (`transittype="secondary"`) or with the
+  transit (`"both"`), the light normalised to the star and planet
+  together outside any event. The sampled time is the transit's or the
+  occultation's (`timing=`); the orbit circular, sampled
+  (`eccentric=True`) or fixed (`ecc=`, `w=`); `rstar=` adds the
+  light-travel time across the orbit to the occultation. Times for an
+  occultation-timed model are centred on each point's nearer event,
+  `elome.orbit.occultation_center_times`. The sampler guide's
+  hand-written joint example is replaced by it.
+- **Secondary eclipses in `make_transit_target`**, with the same
+  `transittype`, `timing`, `ecc`, `w` and `rstar` options, for a spherical
+  planet on an unspotted star. `fp` and `tocc_off` join
+  `DEFAULT_BOUNDS`; a fixed eccentric orbit gets the periastron and
+  inclination barrier.
+- **Orbit functions for timing eclipses**: `elome.occultation_offset`,
+  the time from transit to occultation in orbits;
+  `elome.eclipse.occultation_offset_dev`, that minus one half without
+  cancellation (float32-accurate relative to itself); and
+  `elome.light_travel_delay`, the delay of the eclipse in days. Floats or
+  MLX arrays, differentiable.
 
 ### Fixed
 - Two numbers in the sampler guide's starspot notes rendered with a
   stray tab in place of `\times`.
+- **anvil, spotted stars on eccentric orbits: the star-alone term's
+  occultation time** was computed with MLX's float64 `sin`, good to only
+  about 2e-7, in the float64 path; it now uses Elómë's full-precision
+  `sincos`.
 
 ## [0.22.1] — 2026-10-23
 

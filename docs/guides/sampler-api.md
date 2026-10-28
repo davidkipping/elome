@@ -216,30 +216,66 @@ uniform disc of flux ratio `fp`: the same model as
   the CPU, not on the Metal kernels. It may be compiled. Rings, spots and
   `ld_basis` are for transits.
 
-A joint fit of transits and eclipses, as an
-[anvil](https://github.com/davidkipping/anvil) model function, with
-data normalised to 1 outside each event:
+## A transit and an eclipse together: `make_eclipse_flux`
+
+`elome.anvil.make_eclipse_flux` builds a joint transit-and-eclipse model,
+or an eclipse alone, as a batched function `model_fn(v, x) -> (n_chains,
+m)`, the form of every model function in `elome.anvil`. These are
+forward models in MLX and numpy: any sampler can call them, and they
+need no anvil (only `make_transit_target` does). The light of the star
+and planet together is normalised to 1 outside any event:
+
+$$
+F - 1 = \frac{\text{transit} + \text{eclipse} - f_p}{1 + f_p},
+$$
+
+with the two deviations `flux_dev_from_tau` gives, the eclipse's being
+$f_p$ times the planet's visible fraction.
 
 ```python
 import mlx.core as mx
-from elome import flux_dev_from_tau
+from elome.anvil import make_eclipse_flux, transit_param_names
+from elome.orbit import epoch_center_times
 
-PERIOD = 3.45                                  # fixed in this example
-
-def model_fn(v, x):
-    """v: (n_chains, 7) = (dt0, a, b, r, u1, u2, fp); x: (2, m), each
-    point's time since the reference mid-transit, and 1 for a point in an
-    eclipse window, 0 in a transit window."""
-    tau = x[0][None, :] - v[:, 0:1]            # each chain's own mid-transit
-    a, b, r, u1, u2, fp = (v[:, j] for j in range(1, 7))
-    transit = flux_dev_from_tau(tau, PERIOD, a, b, r, u1, u2)
-    eclipse = flux_dev_from_tau(tau, PERIOD, a, b, r,
-                                transittype="secondary", fp=fp)
-    return mx.where(x[1] > 0, eclipse - fp[:, None], transit)
+model_fn = make_eclipse_flux(period_ref, "both", eccentric=True, rstar=1.1)
+transit_param_names(transittype="both", eccentric=True)
+# ['t0_off', 'p_off', 'r', 'b', 'a', 'q1', 'q2', 'secosw', 'sesinw', 'fp', 'df0']
+x = mx.array(epoch_center_times(t - t_ref, t0_ref, period_ref), dtype=mx.float32)
+dev = model_fn(v, x)                           # v: (n_chains, 11)
 ```
 
-Both calls run on every point here; with many points, split the data
-by event and evaluate each call on its own points.
+- **Times.** `x` is conditioned in float64 on the host, as for the
+  transit models: each point's time from its own predicted mid-transit,
+  and its orbit number. `t0_off` and `p_off` are offsets from `t0_ref`
+  and `period_ref`.
+- **The timed event.** `timing="occultation"` makes the first parameter
+  the mid-occultation time, `tocc_off`, and places the transit from it.
+  `x` then comes from `elome.orbit.occultation_center_times`, which
+  centres each point on the nearer event, so a transit's times keep their
+  float32 resolution.
+- **The orbit.** Circular by default, sampled with `eccentric=True`
+  (`secosw`, `sesinw`), or fixed with `ecc=` and `w=` (degrees).
+- **Light travel.** `rstar=` (solar radii) adds
+  `elome.light_travel_delay`, the light-travel time across the orbit, to
+  the occultation.
+- **Exposures.** `exp_time=` integrates the transit by `integration` and
+  the eclipse by supersampling with `n_sub` (> 1) nodes.
+
+In float32, an occultation-timed model on a sampled eccentric orbit
+places the transit through `occultation_offset_dev` evaluated in float32,
+good to a few units in the last place of itself. The transit's time then
+carries that error times the period, milliseconds, the same for all of a
+chain's points, and on the steep transit it makes the float32 likelihood
+noisier than a transit-timed model's (whose shallow eclipse is placed by
+the orbit itself). On a circular or fixed orbit the two timings are
+equally precise.
+
+Three orbit functions serve any code that times eclipses itself:
+`elome.occultation_offset(secosw, sesinw)`, the time from transit to
+occultation in orbits; `elome.eclipse.occultation_offset_dev`, the same
+minus one half, free of cancellation; and `elome.light_travel_delay(a, b,
+rstar, secosw, sesinw)`, the delay in days. Each takes floats (and
+returns a float64 float) or MLX arrays (and is differentiable).
 
 ## Separations instead of times: `flux_dev_metal`
 

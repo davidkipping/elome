@@ -33,10 +33,13 @@ from dataclasses import dataclass
 import mlx.core as mx
 import numpy as np
 
+from .eclipse import light_travel_delay, occultation_offset_dev
+from .eclipse import occultation_offset as _occultation_offset
 from .exposure import gauss_legendre
 from .flux import flux_dev
 from .ld import q_to_u, q_to_u_np, u_to_q_np
-from .orbit import epoch_center_times, separation_circular, tau_from_epochs
+from .orbit import (epoch_center_times, occultation_center_times,
+                    separation_circular, tau_from_epochs)
 from .trig import sincos
 
 __all__ = ["make_quad_transit_flux", "make_target", "QuadTransitTarget",
@@ -44,7 +47,8 @@ __all__ = ["make_quad_transit_flux", "make_target", "QuadTransitTarget",
            "EccTransitTarget", "ecc_constraint_penalty",
            "PenalizedLogLike", "PARAM_NAMES", "PARAM_NAMES_ECC",
            "make_transit_target", "TransitTarget", "DEFAULT_BOUNDS",
-           "make_hybrid_transit_flux", "transit_param_names"]
+           "make_hybrid_transit_flux", "transit_param_names",
+           "make_eclipse_flux"]
 
 PARAM_NAMES = ["t0_off", "p_off", "r", "b", "a", "q1", "q2", "df0"]
 
@@ -154,13 +158,20 @@ _DEG = math.pi / 180.0
 
 
 def transit_param_names(limb_dark: str = "quadratic", eccentric: bool = False,
-                        n_spots: int = 0) -> list:
+                        n_spots: int = 0, transittype: str = "primary",
+                        timing: str = "transit") -> list:
     """The model-space parameter vector's names, in order, for
     ``make_transit_target``'s options:
 
         t0_off, p_off, r, b, a, the limb darkening's q1..qn,
         [secosw, sesinw], [per spot j = 1..K: lonj, sinlatj, radj,
-        contrastj, then prot, cos_istar, lam], df0
+        contrastj, then prot, cos_istar, lam], [fp], df0
+
+    With a secondary eclipse (``transittype`` "secondary" or "both";
+    ``make_eclipse_flux``) the planet's flux ratio ``fp`` comes before
+    ``df0``; an eclipse alone has no limb darkening, so no q. With
+    ``timing="occultation"`` the first entry is ``tocc_off``, the
+    mid-occultation time's offset, in place of ``t0_off``.
 
     The quadratic law's are ``PARAM_NAMES`` / ``PARAM_NAMES_ECC``. A
     hybrid law's q are those of its prior (``ld.hybrid2_from_q``,
@@ -170,6 +181,22 @@ def transit_param_names(limb_dark: str = "quadratic", eccentric: bool = False,
     spot's intensity over the photosphere's; the star's rotation period
     ``prot`` in days, its spin axis's inclination as cos(istar) (isotropic)
     and the sky-projected obliquity ``lam`` in degrees."""
+    if transittype not in ("primary", "secondary", "both"):
+        raise ValueError("transittype must be 'primary', 'secondary' or "
+                         f"'both'; got {transittype!r}")
+    if timing not in ("transit", "occultation"):
+        raise ValueError("timing must be 'transit' or 'occultation'; got "
+                         f"{timing!r}")
+    eclipse = transittype != "primary"
+    if timing == "occultation" and not eclipse:
+        raise ValueError("timing='occultation' times a secondary eclipse: "
+                         "pass transittype='secondary' or 'both'")
+    if eclipse and int(n_spots):
+        raise ValueError("a secondary eclipse is for an unspotted star: "
+                         "n_spots=0")
+    if transittype == "secondary" and limb_dark != "quadratic":
+        raise ValueError("an eclipse alone has no limb darkening: limb_dark= "
+                         "applies with transittype='both'")
     if limb_dark == "quadratic":
         n_q = 2
     elif limb_dark in _HYBRID_LAWS:
@@ -184,14 +211,18 @@ def transit_param_names(limb_dark: str = "quadratic", eccentric: bool = False,
     if n_spots and limb_dark == "quadratic":
         raise ValueError("a spotted star needs a hybrid law (limb_dark="
                          "'hybrid2' | 'hybrid4' | 'hybrid5')")
-    names = ["t0_off", "p_off", "r", "b", "a"]
-    names += [f"q{j}" for j in range(1, n_q + 1)]
+    names = ["tocc_off" if timing == "occultation" else "t0_off",
+             "p_off", "r", "b", "a"]
+    if transittype != "secondary":
+        names += [f"q{j}" for j in range(1, n_q + 1)]
     if eccentric:
         names += ["secosw", "sesinw"]
     for j in range(1, n_spots + 1):
         names += [f"{f}{j}" for f in _SPOT_FIELDS]
     if n_spots:
         names += ["prot", "cos_istar", "lam"]
+    if eclipse:
+        names += ["fp"]
     return names + ["df0"]
 
 
@@ -210,25 +241,6 @@ def _w_from_q(limb_dark: str, q: mx.array) -> mx.array:
 # three-point Gauss-Legendre nodes on [-1, 1] and weights summing to 1
 _STAR_GL_X, _STAR_GL_W = (tuple(float(v) for v in a) for a in gauss_legendre(3))
 _STAR_GL_W = tuple(w / 2.0 for w in _STAR_GL_W)
-
-
-def _occultation_offset(k, h):
-    """The time from transit to occultation in orbits, (0, 1), from
-    (k, h) = sqrt(e) (cos w, sin w): the mean anomaly between the two
-    conjunctions, in closed form (E from the true anomaly). 1/2 on a
-    circular orbit, where the slope in (k, h) is finite."""
-    e = k * k + h * h
-    circ = e == 0.0
-    w = mx.arctan2(mx.where(circ, 0.0, h), mx.where(circ, 1.0, k))
-    sq_m, sq_p = mx.sqrt(mx.maximum(1.0 - e, 0.0)), mx.sqrt(1.0 + e)
-
-    def mean_anomaly(theta):
-        s, c = sincos(0.5 * theta)
-        E = 2.0 * mx.arctan2(sq_m * s, sq_p * c)
-        return E - e * mx.sin(E)
-    th = 0.5 * math.pi - w                                   # transit
-    d = (mean_anomaly(th + math.pi) - mean_anomaly(th)) / (2.0 * math.pi)
-    return d - mx.floor(d)
 
 
 def make_hybrid_transit_flux(period_ref: float, limb_dark: str = "hybrid4",
@@ -324,6 +336,147 @@ def make_hybrid_transit_flux(period_ref: float, limb_dark: str = "hybrid4",
                 star = dev(behind)
             return v[:, -1:] + (dev(tau) - star) / (1.0 + star)
         return v[:, -1:] + dev(tau)
+
+    return flux_dev_fn
+
+
+# ---------------------------------------------------------------------------
+# secondary eclipses
+# ---------------------------------------------------------------------------
+
+def _fixed_orbit(ecc, w):
+    """(secosw, sesinw) of a fixed orbit, as Python floats; w in degrees."""
+    if (ecc is None) != (w is None):
+        raise ValueError("a fixed orbit needs both ecc= and w= (degrees)")
+    ecc = float(ecc)
+    if not 0.0 <= ecc < E_MAX_NUMERICAL:
+        raise ValueError(f"ecc must be in [0, {E_MAX_NUMERICAL}); got {ecc}")
+    s = math.sqrt(ecc)
+    return s * math.cos(math.radians(w)), s * math.sin(math.radians(w))
+
+
+def make_eclipse_flux(period_ref: float, transittype: str = "secondary",
+                      limb_dark: str = "quadratic", eccentric: bool = False,
+                      ecc=None, w=None, timing: str = "transit", rstar=None,
+                      exp_time: float = 0.0, integration: str = "contact",
+                      n_gl: int = 5, n_sub: int = 1):
+    """Engine-contract batched model with a secondary eclipse: v =
+    (n_chains, d) with ``transit_param_names(limb_dark, eccentric,
+    transittype=, timing=)`` and x the float64-conditioned times: (2, m)
+    about the transits, ``orbit.epoch_center_times``, or for
+    ``timing="occultation"`` (3, m) about the nearer event,
+    ``orbit.occultation_center_times`` (with ``dev_ref=
+    eclipse.occultation_offset_dev(secosw, sesinw)`` of a fixed orbit, 0
+    otherwise); returning df0 + (F - 1), (n_chains, m). Pure Elómë, as
+    every model function here: any sampler can call it.
+
+    The star and a planet of flux ratio fp (a uniform disc), relative to
+    their combined light out of any event:
+
+        F - 1 = (transit + eclipse - fp) / (1 + fp),
+
+    transit and eclipse the deviations ``metal.flux_dev_from_tau`` gives
+    (the eclipse's is fp times the planet's visible fraction), so data
+    normalised to the out-of-eclipse level are fit as they are.
+    ``transittype``: "secondary" (the eclipse alone; no limb darkening)
+    or "both" (transit and eclipse, sharing the orbit).
+
+    ``timing`` picks the time that is sampled: "transit" (``t0_off``,
+    mid-transit; mid-occultation follows from P, e, w and the light travel
+    time) or "occultation" (``tocc_off``, mid-occultation; mid-transit
+    follows the other way). The two are one model in two coordinates.
+    Mid-occultation is the superior conjunction, plus the delay.
+
+    The orbit: circular (the default); sampled, ``eccentric=True``
+    ((secosw, sesinw) in v, as the transit models); or fixed, ``ecc=``
+    and ``w=`` (degrees, batman's convention). e and w set the eclipse's
+    time and duration either way.
+
+    ``rstar`` (solar radii): add the light-travel time across the orbit,
+    ``eclipse.light_travel_delay`` (about 2 a / c), to the occultation
+    time; None leaves it out (TransitModel's geometry). Times in days.
+
+    Exposures: ``exp_time`` (days) > 0 integrates the transit by
+    ``integration`` (``n_gl``, ``n_sub``) and the eclipse by supersampling
+    with ``n_sub`` nodes, which must then be > 1.
+    """
+    from .metal import flux_dev_from_tau
+    period_ref = float(period_ref)
+    if transittype not in ("secondary", "both"):
+        raise ValueError("make_eclipse_flux models a secondary eclipse: "
+                         "transittype='secondary' or 'both'")
+    names = transit_param_names(limb_dark, eccentric, transittype=transittype,
+                                timing=timing)
+    col = {n: i for i, n in enumerate(names)}
+    fixed = ecc is not None or w is not None
+    if fixed and eccentric:
+        raise ValueError("ecc=, w= fix the orbit and eccentric=True samples "
+                         "it: pass one or the other")
+    # the occultation's offset from half an orbit (``occultation_offset_dev``)
+    # and the host's guess of it, ``dev_ref``: a fixed orbit's, else 0
+    dev_ref = 0.0
+    if fixed:
+        kf, hf = _fixed_orbit(ecc, w)
+        dev_ref = occultation_offset_dev(kf, hf)
+    if rstar is not None and not float(rstar) > 0.0:
+        raise ValueError("rstar (solar radii) must be > 0")
+    exp_time = float(exp_time)
+    if exp_time > 0.0 and int(n_sub) < 2:
+        raise ValueError("an eclipse with exp_time > 0 is supersampled: pass "
+                         "n_sub > 1")
+    both = transittype == "both"
+    if both:
+        iq = col["q1"]
+        n_q = sum(n[0] == "q" and n[1:].isdigit() for n in names)
+    exp_kw = dict(exp_time=exp_time, n_sub=n_sub)
+
+    def flux_dev_fn(v: mx.array, x: mx.array) -> mx.array:
+        period = period_ref + v[:, 1]
+        per = period[:, None]
+        tau = tau_from_epochs(x[0][None, :], x[1][None, :], v[:, 0:1],
+                              v[:, 1:2], per)
+        r, b, a, fp = v[:, 2], v[:, 3], v[:, 4], v[:, col["fp"]]
+        if eccentric:
+            k, h, _, _ = _ecc_orbit_from_v(v, ik=col["secosw"])
+            orb = dict(secosw=k, sesinw=h)
+        elif fixed:
+            k, h, orb = kf, hf, dict(secosw=kf, sesinw=hf)
+        else:
+            k, h, orb = 0.0, 0.0, {}
+        delay = (None if rstar is None
+                 else light_travel_delay(a, b, rstar, k, h)[:, None])
+        if timing == "occultation":
+            # the time since mid-transit, which the photometry takes: the
+            # occultation is (1/2 + d_occ) P + delay after it, and a datum
+            # near a transit was centred (1/2 + dev_ref) P_ref earlier, so
+            # what is added there is small (exactly the delay and
+            # (1/2 + d_occ) p_off on a circular or fixed orbit)
+            d_occ = (occultation_offset_dev(k, h)[:, None] if eccentric
+                     else dev_ref)
+            tau = (tau + (d_occ - dev_ref) * period_ref
+                   + (0.5 + d_occ) * v[:, 1:2]
+                   + x[2][None, :] * ((0.5 + dev_ref) * period_ref))
+            if delay is not None:
+                tau = tau + delay
+            tau = tau - per * mx.round(tau / per)
+        ecl = flux_dev_from_tau(
+            tau if delay is None else tau - delay, period, a, b, r,
+            transittype="secondary", fp=fp,
+            integration="supersample" if exp_time > 0.0 else "none",
+            **exp_kw, **orb)
+        dev = ecl - fp[:, None]
+        if both:
+            q = v[:, iq:iq + n_q]
+            if limb_dark == "quadratic":
+                u1, u2 = q_to_u(q[:, 0], q[:, 1])
+                ld = dict(u1=u1, u2=u2)
+            else:
+                ld = dict(limb_dark=limb_dark, u=_w_from_q(limb_dark, q))
+            dev = dev + flux_dev_from_tau(
+                tau, period, a, b, r, n_gl=n_gl,
+                integration=integration if exp_time > 0.0 else "none",
+                **exp_kw, **ld, **orb)
+        return v[:, -1:] + dev / (1.0 + fp[:, None])
 
     return flux_dev_fn
 
@@ -438,6 +591,9 @@ DEFAULT_BOUNDS = {
     # and the star's (cos_istar, lam); prot has no default box
     "lon": (-180.0, 180.0), "sinlat": (-1.0, 1.0), "rad": (1.0, 30.0),
     "contrast": (0.0, 1.0), "cos_istar": (0.0, 1.0), "lam": (-180.0, 180.0),
+    # a secondary eclipse: the mid-occultation offset and the planet's
+    # flux ratio
+    "tocc_off": (-0.5, 0.5), "fp": (0.0, 0.01),
 }
 
 
@@ -455,7 +611,8 @@ class TransitTarget:
     transform: object             # anvil.Transform
     loglike: object               # ChunkedGaussianLogLike (maybe penalized)
     model_fn: object              # the batched (v, x) -> flux deviation
-    x64: np.ndarray               # (2, n) epoch-centered times
+    x64: np.ndarray               # (2, n) epoch-centered times; (3, n)
+                                  # with spots or timing="occultation"
     y_fit: np.ndarray             # y - 1
     yerr: np.ndarray
     t_ref: float                  # float64 time origin subtracted first
@@ -470,15 +627,22 @@ class TransitTarget:
     #: pass to ``anvil.run(..., compile_step=)``: a spotted model is
     #: evaluated eagerly and raises under ``mx.compile``
     compile_step: bool = True
+    #: "primary", "secondary" or "both"
+    transittype: str = "primary"
+    #: the sampled time: "transit" (t0_off) or "occultation" (tocc_off);
+    #: t0_ref is then that event's reference
+    timing: str = "transit"
 
     def model_params(self, t0, period, **kw):
         """Physical values -> the model-space vector the sampler uses.
 
         Handles the two offset parameters so callers never have to
-        remember which reference is subtracted from what.
+        remember which reference is subtracted from what. ``t0`` is the
+        sampled event's mid-time: mid-occultation for
+        ``timing="occultation"``.
         """
         vals = dict(kw)
-        vals["t0_off"] = float(t0) - self.t_ref - self.t0_ref
+        vals[self.param_names[0]] = float(t0) - self.t_ref - self.t0_ref
         vals["p_off"] = float(period) - self.period_ref
         vals.setdefault("df0", 0.0)
         missing = [n for n in self.param_names if n not in vals]
@@ -493,7 +657,9 @@ def make_transit_target(t, y, yerr, t0_guess, period_guess,
                         limb_dark: str = "quadratic", n_spots: int = 0,
                         exp_time: float = 0.0, integration: str = "contact",
                         n_gl: int = 5, spot_epoch=None,
-                        relative: bool = True, n_sub: int = 1):
+                        relative: bool = True, n_sub: int = 1,
+                        transittype: str = "primary", timing: str = "transit",
+                        ecc=None, w=None, rstar=None):
     """Build an anvil fitting problem from REAL photometry.
 
     ``core`` is "metal" (default: fused fp32 kernels, falling back to the
@@ -522,7 +688,8 @@ def make_transit_target(t, y, yerr, t0_guess, period_guess,
             to ~1 out of transit.
         t0_guess, period_guess: references in the SAME system as ``t``.
             They need only be good to the width of the ``t0_off``/``p_off``
-            boxes (0.5 d and 0.05 d by default).
+            boxes (0.5 d and 0.05 d by default). With
+            ``timing="occultation"`` ``t0_guess`` is a mid-occultation time.
         eccentric: 10-parameter model with (sqrt(e) cos w, sqrt(e) sin w)
             instead of the 8-parameter circular one.
         limb_dark: "quadratic" (Kipping's q1, q2) or a hybrid law,
@@ -555,6 +722,21 @@ def make_transit_target(t, y, yerr, t0_guess, period_guess,
             The model takes any r > 0 (fp32 error grows ~ r^2; see the
             docs on occultors larger than the star).
         strength: barrier weight for the eccentric constraints.
+        transittype: "primary" (a transit), "secondary" (a secondary
+            eclipse alone: no limb darkening) or "both" (a transit and an
+            eclipse sharing the orbit); an eclipse adds the planet's flux
+            ratio ``fp``, and y is normalised to the star and planet
+            together out of any event (``make_eclipse_flux``). Spherical,
+            unspotted planets.
+        timing: with an eclipse, the time that is sampled: "transit"
+            (``t0_off``) or "occultation" (``tocc_off``, about
+            ``t0_guess`` taken as a mid-occultation time).
+        ecc, w: with an eclipse, a fixed orbit (w in degrees) instead of a
+            circular (default) or sampled (``eccentric=True``) one; the
+            eccentric barrier is attached for it too.
+        rstar: with an eclipse, the star's radius in solar radii: adds the
+            light-travel time across the orbit to the occultation time
+            (``eclipse.light_travel_delay``). None leaves it out.
     """
     engine, ChunkedGaussianLogLike = import_engine()
     t = np.asarray(t, dtype=np.float64)
@@ -584,15 +766,26 @@ def make_transit_target(t, y, yerr, t0_guess, period_guess,
     y_fit = y - 1.0
 
     hybrid = limb_dark != "quadratic"
-    names = transit_param_names(limb_dark, eccentric, n_spots)
-    if hybrid and core != "metal":
-        raise ValueError("core selects the quadratic law's implementation; "
-                         "a hybrid law runs flux_dev_from_tau (float32 on the "
-                         "GPU: the Metal kernels; float64: the graph)")
-    if not hybrid and exp_time:
-        raise ValueError("exp_time needs a hybrid law here; the quadratic "
-                         "targets are instantaneous")
+    names = transit_param_names(limb_dark, eccentric, n_spots,
+                                transittype=transittype, timing=timing)
+    eclipse = transittype != "primary"
+    if not eclipse and (ecc is not None or w is not None or rstar is not None):
+        raise ValueError("ecc=, w= and rstar= are for a fit with a secondary "
+                         "eclipse (transittype='secondary' or 'both')")
+    if (hybrid or eclipse) and core != "metal":
+        raise ValueError("core selects the quadratic transit's implementation; "
+                         "a hybrid law or an eclipse runs flux_dev_from_tau "
+                         "(float32 on the GPU: the Metal kernels where there "
+                         "are any; float64: the graph)")
+    if not (hybrid or eclipse) and exp_time:
+        raise ValueError("exp_time needs a hybrid law or an eclipse here; the "
+                         "quadratic transit targets are instantaneous")
     lims = _param_bounds(names, bounds)
+    if timing == "occultation":
+        # each datum about the nearer event: a transit's float32 times as
+        # well resolved as in a transit-timed model (make_eclipse_flux)
+        dev_ref = 0.0 if ecc is None else occultation_offset_dev(*_fixed_orbit(ecc, w))
+        x64 = occultation_center_times(t_model, t0_ref, period_ref, dev_ref)
     if n_spots:
         # the star's clock: each point's time since spot_epoch, reduced in
         # float64 like the planet's
@@ -603,14 +796,19 @@ def make_transit_target(t, y, yerr, t0_guess, period_guess,
             ep = float(spot_epoch) - t_ref
         x64 = np.vstack([x64, (t_model - ep)[None, :]])
         spot_epoch = t_ref + ep
-    report = {"t0_off": t_ref + t0_ref, "p_off": period_ref, "df0": 1.0}
+    report = {names[0]: t_ref + t0_ref, "p_off": period_ref, "df0": 1.0}
     transform = engine.Transform([
         engine.ParamSpec(n, lo=lims[n][0], hi=lims[n][1],
                             **({"report_offset": report[n]}
                                if n in report else {}))
         for n in names])
 
-    if hybrid:
+    if eclipse:
+        model_fn = make_eclipse_flux(
+            period_ref, transittype, limb_dark, eccentric=eccentric, ecc=ecc,
+            w=w, timing=timing, rstar=rstar, exp_time=exp_time,
+            integration=integration, n_gl=n_gl, n_sub=n_sub)
+    elif hybrid:
         model_fn = make_hybrid_transit_flux(
             period_ref, limb_dark, eccentric=eccentric, n_spots=n_spots,
             exp_time=exp_time, integration=integration, n_gl=n_gl,
@@ -625,6 +823,10 @@ def make_transit_target(t, y, yerr, t0_guess, period_guess,
         loglike = PenalizedLogLike(
             loglike, lambda v: ecc_constraint_penalty(v, strength=strength,
                                                       ik=ik))
+    elif ecc is not None:
+        kf, hf = _fixed_orbit(ecc, w)
+        loglike = PenalizedLogLike(
+            loglike, lambda v: _fixed_orbit_penalty(v, kf, hf, strength))
     target = engine.TransformedLogDensity(
         loglike, transform, model_log_prob_hi=loglike.hi)
     return TransitTarget(
@@ -633,7 +835,7 @@ def make_transit_target(t, y, yerr, t0_guess, period_guess,
         t0_ref=t0_ref, period_ref=period_ref, param_names=list(names),
         eccentric=eccentric, limb_dark=limb_dark, n_spots=int(n_spots),
         spot_epoch=spot_epoch if n_spots else None,
-        compile_step=not n_spots)
+        compile_step=not n_spots, transittype=transittype, timing=timing)
 
 
 def _param_bounds(names, bounds) -> dict:
@@ -749,14 +951,30 @@ def ecc_constraint_penalty(v, strength: float = 1e6,
     # sqrt(e_max / max(e_raw, 1e-30)) gave NaN gradients in fp32 at e = 0,
     # the unused branch's backward squaring 1e-30 to 0)
     esw = h * mx.sqrt(mx.maximum(e, 1e-30))
-    # each residual is DIMENSIONLESS and O(1): |cos i| - 1 would instead
-    # explode, because projecting onto the e_max disc drives 1 - e^2 to
-    # 0.002 and cos i with it, contributing ~1e12 with ~1e11 gradients.
-    # Same zero set, same sign, bounded scale.
-    c_peri = ((1.0 + r) - a * (1.0 - e)) / (1.0 + r + a)
-    c_inc = (b * (1.0 + esw) - a * (1.0 - e * e)) / (1.0 + b + a)
+    c_peri, c_inc = _orbit_residuals(r, a, b, e, esw)
     c_disc = (e_raw - e_max) / (1.0 + e_max)
     return -strength * (_huber(c_peri) + _huber(c_inc) + _huber(c_disc))
+
+
+def _orbit_residuals(r, a, b, e, esw):
+    """Periastron clearance and a real inclination as residuals, > 0 when
+    violated. Each is DIMENSIONLESS and O(1): |cos i| - 1 would instead
+    explode, because projecting onto the e_max disc drives 1 - e^2 to
+    0.002 and cos i with it, contributing ~1e12 with ~1e11 gradients.
+    Same zero set, same sign, bounded scale."""
+    c_peri = ((1.0 + r) - a * (1.0 - e)) / (1.0 + r + a)
+    c_inc = (b * (1.0 + esw) - a * (1.0 - e * e)) / (1.0 + b + a)
+    return c_peri, c_inc
+
+
+def _fixed_orbit_penalty(v, k, h, strength):
+    """``ecc_constraint_penalty`` for a fixed orbit, (k, h) = sqrt(e)
+    (cos w, sin w) Python floats: the periastron and inclination terms (the
+    disc's is the caller's check of e)."""
+    e = k * k + h * h
+    c_peri, c_inc = _orbit_residuals(v[:, 2], v[:, 4], v[:, 3], e,
+                                     h * math.sqrt(e))
+    return -strength * (_huber(c_peri) + _huber(c_inc))
 
 
 def make_ecc_transit_flux(period_ref: float, core: str = "metal"):

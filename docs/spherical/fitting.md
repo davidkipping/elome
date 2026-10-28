@@ -97,6 +97,39 @@ res = engine.run(engine.ChEESHMC(tt.target, max_leapfrog=128), tt.target,
                  compile_step=tt.compile_step)
 ```
 
+### Secondary eclipses
+
+`transittype="secondary"` fits a secondary eclipse alone, and
+`transittype="both"` a transit and an eclipse that share one orbit. Either
+adds the planet's flux ratio `fp` (box `(0, 0.01)` by default), and `y` is
+the light of the star and planet together, normalised to 1 outside any
+event. An eclipse alone has no limb darkening, so its vector has no `q`.
+The model is `make_eclipse_flux` (see {doc}`../guides/sampler-api`):
+
+```python
+tt = make_transit_target(t, y, yerr, t0_guess=..., period_guess=...,
+                         transittype="both", eccentric=True, rstar=1.1)
+```
+
+- **The timed event.** `timing="transit"` (the default) samples the
+  mid-transit time, `t0_off`, and places the occultation from the period,
+  $e$ and $\omega$. `timing="occultation"` samples the mid-occultation
+  time, `tocc_off`, with `t0_guess` and `tt.model_params(t0=...)` then a
+  mid-occultation time, and places the transit the other way. They are
+  one model in two coordinates.
+- **The orbit.** Circular by default, sampled with `eccentric=True`, or
+  fixed with `ecc=` and `w=` (degrees). $e$ and $\omega$ set the eclipse's
+  duration as well as its time. The barrier below is attached to a fixed
+  eccentric orbit too.
+- **Light travel.** `rstar=` (the star's radius in solar radii) adds the
+  light-travel time across the orbit to the occultation, about $2a/c$:
+  tens of seconds for a hot Jupiter. Without it the eclipse is at the
+  geometric conjunction, as in `TransitModel`.
+- **Exposures.** `exp_time=` integrates the transit by `integration` and
+  the eclipse by supersampling with `n_sub` (> 1) nodes.
+
+A spherical planet on an unspotted star.
+
 ### The eccentric model needs a barrier
 
 Two physical constraints couple parameters: the orbit must clear the

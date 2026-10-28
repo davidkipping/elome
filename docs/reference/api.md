@@ -155,7 +155,7 @@ Per-chain parameters in, per-chain light curves out, with analytic gradients. Se
 ### `flux_dev_from_tau`
 
 ```python
-flux_dev_from_tau(tau: mx.array, period, a, b, r, u1=None, u2=None, *, exp_time: float = 0.0, integration: str = 'contact', n_gl: int = 5, n_sub: int = 1, ld_basis: bool = False, secosw=None, sesinw=None, limb_dark: str = 'quadratic', u=None, f=None, theta=None, ring_in=None, ring_out=None, ring_f=None, ring_tau=None, spots=None, spot_time=None, prot=None, istar=None, lam=None) -> mx.array
+flux_dev_from_tau(tau: mx.array, period, a, b, r, u1=None, u2=None, *, exp_time: float = 0.0, integration: str = 'contact', n_gl: int = 5, n_sub: int = 1, ld_basis: bool = False, secosw=None, sesinw=None, limb_dark: str = 'quadratic', u=None, f=None, theta=None, ring_in=None, ring_out=None, ring_f=None, ring_tau=None, spots=None, spot_time=None, prot=None, istar=None, lam=None, transittype: str = 'primary', fp=None) -> mx.array
 ```
 
 ```text
@@ -267,6 +267,18 @@ Args:
         parameter at conjunction, a cos i (1 - e^2) / (1 + e sin w), so
         it reduces to the circular b at e = 0; circular and eccentric
         chains can share one batch.
+    transittype, fp: ``"secondary"`` gives the eclipse of the planet
+        by the star (``elome.eclipse``), with the planet a uniform disc
+        of flux ratio ``fp`` (scalar or (n,), required): F - 1 is fp
+        out of eclipse and 0 in totality, so 1 + F - 1 is
+        ``TransitModel(transittype="secondary")``'s flux. ``tau`` is
+        still the time since mid-transit; the orbit places the eclipse.
+        A spherical or oblate planet (``f``, ``theta``); no ring,
+        spots or ``ld_basis``. The limb-darkening arguments are
+        optional and ignored. Exposures: ``"none"`` or
+        ``"supersample"`` (the contact rule is for transits). The MLX
+        graph in either precision, no Metal kernel; gradients in
+        ``tau``, every parameter and ``fp``.
 
 Returns:
     (n, m) -- or (m,) for 1-D ``tau`` and no per-chain parameters -- of
@@ -458,10 +470,58 @@ normalisation), which leaves ``df0`` to absorb the spots' visible
 deficit, a ridge HMC samples poorly.
 ```
 
+### `anvil.make_eclipse_flux`
+
+```python
+make_eclipse_flux(period_ref: float, transittype: str = 'secondary', limb_dark: str = 'quadratic', eccentric: bool = False, ecc=None, w=None, timing: str = 'transit', rstar=None, exp_time: float = 0.0, integration: str = 'contact', n_gl: int = 5, n_sub: int = 1)
+```
+
+```text
+Engine-contract batched model with a secondary eclipse: v =
+(n_chains, d) with ``transit_param_names(limb_dark, eccentric,
+transittype=, timing=)`` and x the float64-conditioned times: (2, m)
+about the transits, ``orbit.epoch_center_times``, or for
+``timing="occultation"`` (3, m) about the nearer event,
+``orbit.occultation_center_times`` (with ``dev_ref=
+eclipse.occultation_offset_dev(secosw, sesinw)`` of a fixed orbit, 0
+otherwise); returning df0 + (F - 1), (n_chains, m). Pure Elómë, as
+every model function here: any sampler can call it.
+
+The star and a planet of flux ratio fp (a uniform disc), relative to
+their combined light out of any event:
+
+    F - 1 = (transit + eclipse - fp) / (1 + fp),
+
+transit and eclipse the deviations ``metal.flux_dev_from_tau`` gives
+(the eclipse's is fp times the planet's visible fraction), so data
+normalised to the out-of-eclipse level are fit as they are.
+``transittype``: "secondary" (the eclipse alone; no limb darkening)
+or "both" (transit and eclipse, sharing the orbit).
+
+``timing`` picks the time that is sampled: "transit" (``t0_off``,
+mid-transit; mid-occultation follows from P, e, w and the light travel
+time) or "occultation" (``tocc_off``, mid-occultation; mid-transit
+follows the other way). The two are one model in two coordinates.
+Mid-occultation is the superior conjunction, plus the delay.
+
+The orbit: circular (the default); sampled, ``eccentric=True``
+((secosw, sesinw) in v, as the transit models); or fixed, ``ecc=``
+and ``w=`` (degrees, batman's convention). e and w set the eclipse's
+time and duration either way.
+
+``rstar`` (solar radii): add the light-travel time across the orbit,
+``eclipse.light_travel_delay`` (about 2 a / c), to the occultation
+time; None leaves it out (TransitModel's geometry). Times in days.
+
+Exposures: ``exp_time`` (days) > 0 integrates the transit by
+``integration`` (``n_gl``, ``n_sub``) and the eclipse by supersampling
+with ``n_sub`` nodes, which must then be > 1.
+```
+
 ### `anvil.transit_param_names`
 
 ```python
-transit_param_names(limb_dark: str = 'quadratic', eccentric: bool = False, n_spots: int = 0) -> list
+transit_param_names(limb_dark: str = 'quadratic', eccentric: bool = False, n_spots: int = 0, transittype: str = 'primary', timing: str = 'transit') -> list
 ```
 
 ```text
@@ -470,7 +530,13 @@ The model-space parameter vector's names, in order, for
 
     t0_off, p_off, r, b, a, the limb darkening's q1..qn,
     [secosw, sesinw], [per spot j = 1..K: lonj, sinlatj, radj,
-    contrastj, then prot, cos_istar, lam], df0
+    contrastj, then prot, cos_istar, lam], [fp], df0
+
+With a secondary eclipse (``transittype`` "secondary" or "both";
+``make_eclipse_flux``) the planet's flux ratio ``fp`` comes before
+``df0``; an eclipse alone has no limb darkening, so no q. With
+``timing="occultation"`` the first entry is ``tocc_off``, the
+mid-occultation time's offset, in place of ``t0_off``.
 
 The quadratic law's are ``PARAM_NAMES`` / ``PARAM_NAMES_ECC``. A
 hybrid law's q are those of its prior (``ld.hybrid2_from_q``,
@@ -497,7 +563,7 @@ PARAM_NAMES_ECC = ['t0_off', 'p_off', 'r', 'b', 'a', 'q1', 'q2', 'secosw', 'sesi
 ### `anvil.make_transit_target`
 
 ```python
-make_transit_target(t, y, yerr, t0_guess, period_guess, eccentric: bool = False, bounds=None, policy=None, core: str = 'metal', strength: float = 1000000.0, limb_dark: str = 'quadratic', n_spots: int = 0, exp_time: float = 0.0, integration: str = 'contact', n_gl: int = 5, spot_epoch=None, relative: bool = True, n_sub: int = 1)
+make_transit_target(t, y, yerr, t0_guess, period_guess, eccentric: bool = False, bounds=None, policy=None, core: str = 'metal', strength: float = 1000000.0, limb_dark: str = 'quadratic', n_spots: int = 0, exp_time: float = 0.0, integration: str = 'contact', n_gl: int = 5, spot_epoch=None, relative: bool = True, n_sub: int = 1, transittype: str = 'primary', timing: str = 'transit', ecc=None, w=None, rstar=None)
 ```
 
 ```text
@@ -529,7 +595,8 @@ Args:
         to ~1 out of transit.
     t0_guess, period_guess: references in the SAME system as ``t``.
         They need only be good to the width of the ``t0_off``/``p_off``
-        boxes (0.5 d and 0.05 d by default).
+        boxes (0.5 d and 0.05 d by default). With
+        ``timing="occultation"`` ``t0_guess`` is a mid-occultation time.
     eccentric: 10-parameter model with (sqrt(e) cos w, sqrt(e) sin w)
         instead of the 8-parameter circular one.
     limb_dark: "quadratic" (Kipping's q1, q2) or a hybrid law,
@@ -562,12 +629,27 @@ Args:
         The model takes any r > 0 (fp32 error grows ~ r^2; see the
         docs on occultors larger than the star).
     strength: barrier weight for the eccentric constraints.
+    transittype: "primary" (a transit), "secondary" (a secondary
+        eclipse alone: no limb darkening) or "both" (a transit and an
+        eclipse sharing the orbit); an eclipse adds the planet's flux
+        ratio ``fp``, and y is normalised to the star and planet
+        together out of any event (``make_eclipse_flux``). Spherical,
+        unspotted planets.
+    timing: with an eclipse, the time that is sampled: "transit"
+        (``t0_off``) or "occultation" (``tocc_off``, about
+        ``t0_guess`` taken as a mid-occultation time).
+    ecc, w: with an eclipse, a fixed orbit (w in degrees) instead of a
+        circular (default) or sampled (``eccentric=True``) one; the
+        eccentric barrier is attached for it too.
+    rstar: with an eclipse, the star's radius in solar radii: adds the
+        light-travel time across the orbit to the occultation time
+        (``eclipse.light_travel_delay``). None leaves it out.
 ```
 
 ### `anvil.TransitTarget`
 
 ```python
-TransitTarget(target: object, transform: object, loglike: object, model_fn: object, x64: np.ndarray, y_fit: np.ndarray, yerr: np.ndarray, t_ref: float, t0_ref: float, period_ref: float, param_names: list, eccentric: bool, limb_dark: str = 'quadratic', n_spots: int = 0, spot_epoch: float | None = None, compile_step: bool = True) -> None
+TransitTarget(target: object, transform: object, loglike: object, model_fn: object, x64: np.ndarray, y_fit: np.ndarray, yerr: np.ndarray, t_ref: float, t0_ref: float, period_ref: float, param_names: list, eccentric: bool, limb_dark: str = 'quadratic', n_spots: int = 0, spot_epoch: float | None = None, compile_step: bool = True, transittype: str = 'primary', timing: str = 'transit') -> None
 ```
 
 ```text
@@ -686,7 +768,7 @@ unrelated package of the same name) re-raises that error.
 ### `anvil.DEFAULT_BOUNDS`
 
 ```python
-DEFAULT_BOUNDS = {'t0_off': (-0.5, 0.5), 'p_off': (-0.05, 0.05), 'r': (0.005, 0.5), 'b': (0.0, 1.2), 'a': (1.5, 200.0), 'q1': (0.0, 1.0), 'q2': (0.0, 1.0), 'df0': (-0.01, 0.01), 'secosw': (-0.95, 0.95), 'sesinw': (-0.95, 0.95), 'q3': (0.0, 1.0), 'q4': (0.0, 1.0), 'q5': (0.0, 1.0), 'lon': (-180.0, 180.0), 'sinlat': (-1.0, 1.0), 'rad': (1.0, 30.0), 'contrast': (0.0, 1.0), 'cos_istar': (0.0, 1.0), 'lam': (-180.0, 180.0)}
+DEFAULT_BOUNDS = {'t0_off': (-0.5, 0.5), 'p_off': (-0.05, 0.05), 'r': (0.005, 0.5), 'b': (0.0, 1.2), 'a': (1.5, 200.0), 'q1': (0.0, 1.0), 'q2': (0.0, 1.0), 'df0': (-0.01, 0.01), 'secosw': (-0.95, 0.95), 'sesinw': (-0.95, 0.95), 'q3': (0.0, 1.0), 'q4': (0.0, 1.0), 'q5': (0.0, 1.0), 'lon': (-180.0, 180.0), 'sinlat': (-1.0, 1.0), 'rad': (1.0, 30.0), 'contrast': (0.0, 1.0), 'cos_istar': (0.0, 1.0), 'lam': (-180.0, 180.0), 'tocc_off': (-0.5, 0.5), 'fp': (0.0, 0.01)}
 ```
 
 ## Limb darkening
@@ -1206,6 +1288,78 @@ dt = t - t0_ref - k * period_ref with k = round((t - t0_ref)/period_ref):
 each datum's time relative to its own transit, plus which orbit it
 belongs to (exact small integers): the (2, m) data contract of the
 anvil model functions.
+```
+
+### `orbit.occultation_center_times`
+
+```python
+occultation_center_times(t_model: np.ndarray, tocc_ref: float, period_ref: float, dev_ref: float = 0.0) -> np.ndarray
+```
+
+```text
+Float64 CPU preprocessing for a model timed by its occultation:
+times -> (3, m) [dt, orbit number, near_occ].
+
+Each datum is centred on the nearer of two series: the occultations
+tocc_ref + k P_ref (near_occ = 1) and the transits half an orbit
+earlier, tocc_ref - (1/2 + dev_ref) P_ref + k P_ref (near_occ = 0),
+dev_ref the expected ``eclipse.occultation_offset_dev`` (0 unless the
+orbit is known). A transit's float32 times are then resolved as well
+as in a transit-timed model, not at a half-period's ulp.
+```
+
+### `occultation_offset`
+
+```python
+occultation_offset(secosw=0.0, sesinw=0.0)
+```
+
+```text
+The time from mid-transit to mid-occultation in orbits, (0, 1):
+the mean anomaly between the two conjunctions, in closed form (E from
+the true anomaly), with (secosw, sesinw) = sqrt(e) (cos w, sin w). 1/2
+on a circular orbit, where its slope in (secosw, sesinw) is finite.
+MLX arrays in, MLX out (differentiable, either precision); floats in,
+a float out (float64). The geometric offset: add
+``light_travel_delay / period`` for the observed one.
+```
+
+### `eclipse.occultation_offset_dev`
+
+```python
+occultation_offset_dev(secosw=0.0, sesinw=0.0)
+```
+
+```text
+``occultation_offset`` - 1/2, in (-1/2, 1/2), without the
+cancellation of forming it from the offset: accurate relative to
+itself, so a float32 model can shift times by it times the period.
+
+With E_tr the eccentric anomaly at transit (true anomaly pi/2 - w)
+and E_occ = E_tr + pi + dE, tan((E_occ - E_tr) / 2)'s difference
+formula gives dE = 2 atan2(e cos w, sqrt(1 - e^2)), and
+
+    M_occ - M_tr - pi = dE + 2 e sin(E_tr + dE / 2) cos(dE / 2).
+```
+
+### `light_travel_delay`
+
+```python
+light_travel_delay(a, b, rstar, secosw=0.0, sesinw=0.0)
+```
+
+```text
+How much later than the orbit's geometry places it a secondary
+eclipse is seen, in days, relative to the transit: the light-travel
+time across the orbit between the two conjunctions,
+
+    (r_tr + r_occ) sin i / c = 2 a sin i (1 - e^2) / (1 - e^2 sin^2 w) / c,
+
+2 a sin i / c on a circular orbit (Kaplan 2010's leading term; the
+star's reflex motion, of order the mass ratio, is left out). ``a`` in
+stellar radii and ``b`` the impact parameter at transit (Elómë's), so
+cos i = b (1 + e sin w) / (a (1 - e^2)); ``rstar`` the star's radius
+in solar radii. MLX arrays in, MLX out; floats in, a float out.
 ```
 
 ### `separation_keplerian`

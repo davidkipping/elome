@@ -106,7 +106,9 @@ eclipse = m2.light_curve(params)
 The eclipse is placed at the orbit's geometric superior conjunction:
 the light-travel time across the orbit, $2a/c$ (about 40 s for
 $a = 8\,R_\odot$, 15 minutes for $a = 200\,R_\odot$), is not included, as
-in batman. Add it to the times if your timing precision needs it.
+in batman. If your timing precision needs it, subtract
+`elome.light_travel_delay(a, b, rstar, secosw, sesinw)` (days, with
+`rstar` in solar radii) from the times of the eclipse model.
 
 `integration="contact"` is for primary transits. Use
 `supersample_factor` for a secondary eclipse.

@@ -112,7 +112,8 @@ a spherical planet.
 - **Finite exposures**: supersampling or the contact rule; secondary
   eclipses take supersampling only. See {doc}`guides/exposures`.
 - **Secondary eclipses**: in `TransitModel` and in
-  {doc}`guides/sampler-api`, with the planet a uniform disc.
+  {doc}`guides/sampler-api`, with the planet a uniform disc; the `anvil`
+  fitting target takes them for a spherical planet.
 - **Transit timing variations**: through {doc}`guides/sampler-api`,
   which takes each point's time since its own mid-transit, with a
   hybrid law or a polynomial law up to quadratic. `TransitModel` uses
@@ -122,7 +123,7 @@ a spherical planet.
 - **Occultor size**: an oblate planet needs $r_p \le (1-f)^{3/2}$, so
   that its outline crosses the stellar limb at most twice.
 - **`anvil` fitting target** (`make_transit_target`): the quadratic or a
-  hybrid law; finite exposures with a hybrid law.
+  hybrid law; finite exposures with a hybrid law or an eclipse.
 
 New to Elómë? Start with {doc}`getting-started/installation` and the
 {doc}`getting-started/quickstart`.
