@@ -125,15 +125,22 @@ _BATCH_DEFAULTS = {"ring_tau": math.inf, "istar": 90.0}
 
 def _is_oblate(params) -> bool:
     """params.f given = an oblate planet. theta alone is an error unless
-    the planet has a ring (theta is the oblate planet's or the ring's sky
-    angle); a TransitParams without the attributes has neither."""
+    the planet has a ring or is tidally locked (theta is the oblate
+    planet's or the ring's sky angle, or the locked planet's twist); a
+    TransitParams without the attributes has neither."""
     obl = getattr(params, "f", None) is not None
     if (not obl and getattr(params, "theta", None) is not None
-            and not _is_ringed(params)):
+            and not _is_ringed(params)
+            and getattr(params, "tidal_q", None) is None):
         raise ValueError("params.theta is an oblate planet's or a ring's; "
                          "set params.f too, or params.ring_in (or leave theta "
                          "None)")
     return obl
+
+
+def _is_tidal(params) -> bool:
+    """params.tidal_q given = a tidally locked planet."""
+    return getattr(params, "tidal_q", None) is not None
 
 
 class TransitParams:
@@ -158,6 +165,17 @@ class TransitParams:
         # direction of motion at transit [degrees]. None = spherical.
         self.f = None
         self.theta = None
+        # a tidally locked triaxial planet (hybrid laws, primary transits),
+        # in place of f: axes r1 = r2 (1 + 3 q) pointing at the star at
+        # every instant, r2 along the orbit, r3 = r2 (1 - q) along its
+        # normal, with rp then the volumetric radius (r1 r2 r3)^(1/3). The
+        # outline changes through the transit; theta turns (r2, r3) about
+        # the nose [degrees]. tidal_q is q at the separation a, following
+        # the separation on an eccentric orbit, and mass_ratio = Mp / M*
+        # adds the ellipsoid's offset towards the star (None: no offset):
+        # ellc's "love" model. -1/3 < q < 1; None = not locked.
+        self.tidal_q = None
+        self.mass_ratio = None
         # a ring in the planet's equatorial plane (hybrid laws only;
         # elome.rings): inner and outer radii in units of rp, the ring's
         # projected flattening 1 - |cos i_ring|, and its normal optical
@@ -455,7 +473,8 @@ class TransitModel:
         self.n_gl = int(n_gl)
         self.transittype = transittype
         # oblate planet: fixed per model, like the law (its own graphs)
-        self._oblate = _is_oblate(params)
+        self._tidal = _is_tidal(params)
+        self._oblate = _is_oblate(params) or self._tidal
         self._ringed = _is_ringed(params)
         self._spotted = _is_spotted(params)
         self._shaped = self._oblate or self._ringed
@@ -464,9 +483,22 @@ class TransitModel:
         self._geom_rules = _GEOM_RULES + ((_PROT_RULE,) if self._spotted else ())
         self._batch_keys = self._BATCH_KEYS + (
             ("f", "theta") + _RING_FIELDS if self._ringed
+            else ("tidal_q", "theta", "mass_ratio") if self._tidal
             else ("f", "theta") if self._oblate
             else _SPOT_FIELDS if self._spotted else ())
         self._n_spots = 0
+        if self._tidal:
+            if _is_oblate(params) or self._ringed or self._spotted:
+                raise ValueError("params.tidal_q is the planet's shape: leave "
+                                 "params.f, params.ring_in and params.spots "
+                                 "None")
+            if transittype != "primary":
+                raise ValueError("a tidally locked planet (params.tidal_q) "
+                                 "is primary-transit only")
+            if _hybrid_law(params.limb_dark) is None:
+                raise ValueError("a tidally locked planet (params.tidal_q) "
+                                 "takes a hybrid law: limb_dark='hybrid2' | "
+                                 "'hybrid4' | 'hybrid5'")
         if self._spotted:
             if self._shaped:
                 raise ValueError("spots are for a spherical planet: leave "
@@ -561,7 +593,7 @@ class TransitModel:
         if self.transittype == "secondary":
             names.append("fp")
         if self._oblate:
-            names.append("f")
+            names.append("tidal_q" if self._tidal else "f")
         if self._ringed:
             names += ["ring_in", "ring_out", "ring_f"]
         if self._spotted:
@@ -1003,21 +1035,24 @@ class TransitModel:
         mode = _INT_CONTACT if contact else _INT_NONE
         exp_time = self.exp_time if contact else 0.0
         law, n_gl, use_metal = self._hlaw, self.n_gl, self.use_metal
+        tidal = self._tidal
 
-        def flux(tt, t0, per, a, b, rp, f, th, uv, k=None, h=None,
+        def flux(tt, t0, per, a, b, rp, f, th, uv, k=None, h=None, mu=None,
                  blocks=False):
             tau = tt - t0
             tau = tau - per * mx.round(tau / per)
             return 1.0 + flux_dev_from_tau_oblate(
                 tau, per, a, b, rp, f, th, law, uv, exp_time, mode, n_gl, 1,
                 k=k, h=h, ew=orbit == "ew", use_metal=use_metal,
-                compile_blocks=blocks)
+                compile_blocks=blocks, tidal=tidal, mass_ratio=mu)
+        # a locked planet's mass ratio comes last, in *mu
         if orbit == "circ":
-            def raw(tt, t0, per, a, b, rp, f, th, uv, blocks=False):
-                return flux(tt, t0, per, a, b, rp, f, th, uv, blocks=blocks)
+            def raw(tt, t0, per, a, b, rp, f, th, uv, *mu, blocks=False):
+                return flux(tt, t0, per, a, b, rp, f, th, uv, None, None, *mu,
+                            blocks=blocks)
         else:
-            def raw(tt, t0, per, a, b, rp, f, th, uv, k, h, blocks=False):
-                return flux(tt, t0, per, a, b, rp, f, th, uv, k, h,
+            def raw(tt, t0, per, a, b, rp, f, th, uv, k, h, *mu, blocks=False):
+                return flux(tt, t0, per, a, b, rp, f, th, uv, k, h, *mu,
                             blocks=blocks)
         # An fp32 model with use_metal=False runs the oblate *graph* on the
         # GPU, and that graph is too large for one fused Metal primitive:
@@ -1081,12 +1116,19 @@ class TransitModel:
         parameter preparation and ecc routing, b the impact parameter at
         conjunction from exposure.contact_geometry."""
         from .oblate import _check_domain
-        _check_domain(params.rp, params.f)
+        from .oblate_tau import _check_tidal_domain
+        if self._tidal:
+            _check_tidal_domain(params.rp, params.tidal_q)
+        else:
+            _check_domain(params.rp, params.f)
         t0_off, per, a, rp, ci, ci_py, gmask = self._prep(params, cast, rad,
                                                           is_arr)
-        f = cast(params.f)
+        f = cast(params.tidal_q if self._tidal else params.f)
         th = rad(0.0 if params.theta is None else params.theta)
         head = (self._t_mx, t0_off, per, a)
+        mu = ()
+        if self._tidal:
+            mu = (cast(0.0 if params.mass_ratio is None else params.mass_ratio),)
         if self.transittype == "secondary":
             model, last = self._oblate_eclipse_fn, cast(params.fp)
         else:
@@ -1095,17 +1137,17 @@ class TransitModel:
         if route[0] == "ew":
             _, e, wr, emask = route
             b = contact_geometry(a, e, e * sincos(wr)[0], ci)[1]
-            out = model("ew")(*head, b, rp, f, th, last, e, wr)
+            out = model("ew")(*head, b, rp, f, th, last, e, wr, *mu)
         elif route[0] == "circ":
             emask = None
             b = (a * ci if is_arr(params.a) or is_arr(params.inc)
                  else cast(float(params.a) * ci_py))
-            out = model("circ")(*head, b, rp, f, th, last)
+            out = model("circ")(*head, b, rp, f, th, last, *mu)
         else:
             _, k, h, ev, sq = route
             emask = None
             b = contact_geometry(a, cast(ev), h * sq, ci)[1]   # e sin w = h sqrt(e)
-            out = model("kh")(*head, b, rp, f, th, last, k, h)
+            out = model("kh")(*head, b, rp, f, th, last, k, h, *mu)
         return self._apply_masks(out, emask, gmask)
 
     # -- ringed planets -------------------------------------------------------
@@ -1258,7 +1300,11 @@ class TransitModel:
     def _check_shape_kind(self, params):
         """Oblate or spherical, ringed or not, is fixed per model (separate
         graphs)."""
-        if _is_oblate(params) != self._oblate:
+        if _is_tidal(params) != self._tidal:
+            raise ValueError("params.tidal_q changed between None and a value "
+                             "since model construction; build a new "
+                             "TransitModel")
+        if _is_oblate(params) != (self._oblate and not self._tidal):
             raise ValueError("params.f changed between None and a value since "
                              "model construction; build a new TransitModel")
         if _is_ringed(params) != self._ringed:
@@ -1479,7 +1525,11 @@ class TransitModel:
                     out = self._ring_fn("circ")(*args)
             elif self._oblate:
                 from .oblate import _check_domain
-                _check_domain(cols["rp"], cols["f"])
+                from .oblate_tau import _check_tidal_domain
+                if self._tidal:
+                    _check_tidal_domain(cols["rp"], cols["tidal_q"])
+                else:
+                    _check_domain(cols["rp"], cols["f"])
                 b_np = contact_geometry(
                     cols["a"], ecc, ecc * np.sin(w), np.cos(inc),
                     sqrt=np.sqrt, maximum=np.maximum)[1]
@@ -1487,12 +1537,14 @@ class TransitModel:
                 model = (self._oblate_eclipse_fn if secondary
                          else self._oblate_fn)
                 args = (self._t_mx[None, :], t0, per, a, col(b_np), rp,
-                        col(cols["f"]), col(np.radians(cols["theta"])),
+                        col(cols["tidal_q" if self._tidal else "f"]),
+                        col(np.radians(cols["theta"])),
                         fp if secondary else uvec)
+                mu = (col(cols["mass_ratio"]),) if self._tidal else ()
                 if bool(np.any(ecc > 0.0)):
-                    out = model("kh")(*args, k, h)
+                    out = model("kh")(*args, k, h, *mu)
                 else:
-                    out = model("circ")(*args)
+                    out = model("circ")(*args, *mu)
             elif self.integration == "contact":
                 b_np = contact_geometry(
                     cols["a"], ecc, ecc * np.sin(w), np.cos(inc),

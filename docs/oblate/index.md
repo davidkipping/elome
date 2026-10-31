@@ -60,7 +60,10 @@ What differs:
 3. {doc}`accuracy-and-cost`: what to expect in each precision, and how
    long it takes.
 4. {doc}`fitting`: what is different about sampling an oblate planet.
-5. The shared guides: {doc}`../guides/exposures`,
+5. {doc}`tidal`: a tidally locked triaxial planet, whose nose follows the
+   star, so that its outline changes through the transit, with one shape
+   parameter in place of `f`.
+6. The shared guides: {doc}`../guides/exposures`,
    {doc}`../guides/batching`, {doc}`../guides/gradients-and-precision`,
    {doc}`../guides/sampler-api`.
 

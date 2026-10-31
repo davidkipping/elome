@@ -32,7 +32,8 @@ from .hybrid import (HYBRID2, HYBRID2_EPS, HYBRID4, HYBRID4_BASIS,
                      hybrid4_basis,
                      flux_dev_hybrid, hybrid_norms, shape_cols)
 from .oblate import flux_dev_oblate, shape_cols_oblate
-from .oblate_tau import contact_offsets_oblate
+from .oblate_tau import (contact_offsets_oblate, contact_offsets_tidal,
+                         tidal_hf_from_q, tidal_q_from_hf)
 from .ld import (hybrid2_from_q, hybrid2_from_q_np, hybrid2_to_q_np,
                  hybrid4_from_q, hybrid4_from_q_np, hybrid4_to_q_np,
                  q_from_simplex_np, q_to_u, q_to_u_np, simplex_from_q,
@@ -78,6 +79,9 @@ __all__ = [
     "flux_dev_oblate",
     "shape_cols_oblate",
     "contact_offsets_oblate",
+    "contact_offsets_tidal",
+    "tidal_q_from_hf",
+    "tidal_hf_from_q",
     "flux_dev_ring",
     "shape_cols_ring",
     "ring_kinks",

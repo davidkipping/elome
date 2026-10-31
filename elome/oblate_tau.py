@@ -39,6 +39,51 @@ continuous integrand, detached as the spherical ones are -- so a solve
 that has not converged (a near-tangent graze, whose dip is tiny) costs
 quadrature accuracy there, never a wrong model. A contact that does not
 exist collapses onto a point inside the transit.
+
+**A tidally locked planet** (``tidal_q=``). A triaxial ellipsoid whose
+long axis r1 points at the star at every instant, on any orbit, with one
+shape parameter q: r1 = r2 (1 + 3 q), r3 = r2 (1 - q) (Correia 2014), and
+the radius argument the volumetric (r1 r2 r3)^(1/3). This is ellc's "love"
+model (Maxted 2016), term for term:
+
+* q is the shape at the separation a. The volume is fixed and the bulge
+  follows the separation r, so q(r) solves
+
+      q (1 + 3 q)(1 - q) = Q (a / r)^3,   Q = h_f R_V^3 / (2 mu a^3)
+
+  with mu = Mp / M*: ellc's q = h_f r2^3 / (2 mu r^3), with r2 from the
+  volume. Q is the q of h_f's first-order relation, and only Q reaches the
+  shape, so the mass ratio is needed for h_f alone (``tidal_q_from_hf``).
+* With ``mass_ratio=``, the ellipsoid's centre moves towards the star by
+  ellc's D = r2^5 / (mu a^4) (Chandrasekhar 1933's third-order tide, with
+  Delta_3 = 1 and no dependence on the separation), applied to the planet's
+  barycentric position, so that the sky position is scaled by
+  1 - D / ((1 + mu) r). On a circular orbit that is the same model with
+  a -> a - D / (1 + mu) at the same inclination (``_tidal_offset``).
+
+Any ellipsoid projects to an ellipse, so each instant is the oblate problem
+with its own (r, f, theta), the outline's shape matrix being
+
+    S = r1^2 e1 e1^T + r2^2 e2' e2'^T + r3^2 e3' e3'^T
+
+with, in the sky frame above and nu the angle along the orbit from
+conjunction (phi on a circular orbit; s, c = sin, cos nu; ci, si = cos,
+sin i),
+
+    e1 = (-s, ci c), e2 = (c, ci s), e3 = (0, si),
+    e2' = e2 cos tw + e3 sin tw, e3' = -e2 sin tw + e3 cos tw.
+
+So nu carries the nose to the star, and the twist tw (``theta=``, 0 in
+ellc) turns the other two axes about the nose, in a frame that goes round
+with the orbit: r2 along the orbit and r3 along its normal at tw = 0; at
+conjunction on an edge-on orbit, tw is the outline's sky angle, as the
+oblate theta. Written S / r2^2 = 1 + q T, the factor q comes out of the
+whole anisotropy, so f and theta stay well defined through the sphere: the
+outline's angle jumps by 90 degrees there as f passes through 0, which the
+ellipse does not notice (``tidal_outline``). The contacts solve the same
+functions with the shape at the current phase; their Newton slope leaves
+out the outline's own motion, so a step contracts at about r q / a rather
+than quadratically, and the root is still the true contact.
 """
 
 from __future__ import annotations
@@ -54,7 +99,9 @@ from .hybrid import HybridLaw, combine_cols, get_law
 from .oblate import _check_domain, principal_frame, shape_cols_oblate
 from .trig import sincos
 
-__all__ = ["sky_circular", "sky_anchored", "contact_offsets_oblate",
+__all__ = ["sky_circular", "sky_anchored", "tidal_outline",
+           "tidal_q_from_hf", "tidal_hf_from_q",
+           "contact_offsets_oblate", "contact_offsets_tidal",
            "flux_dev_from_tau_oblate", "eclipse_dev_from_tau_oblate"]
 
 _TWO_PI = 2.0 * math.pi
@@ -62,6 +109,8 @@ _N_PSI = 16              # boundary samples per extremum search
 _N_PSI_NEWTON = 3        # Newton steps polishing the sampled extremum
 _N_CONTACT = {mx.float64: 14, mx.float32: 10}     # Newton steps in phase
 _FAR = 4.0               # far-side stand-in, |(X, Y)| > 1 + A for A < 1
+_T2_MIN = 1e-30          # the floor on a locked outline's squared anisotropy
+_TIDAL_G_RANGE = (-0.09, 0.6)   # q (1 + 3 q)(1 - q) on its monotonic branch
 
 
 # --------------------------------------------------------------------------
@@ -100,6 +149,132 @@ def _sky(phi, a, b, ecc):
 
 
 # --------------------------------------------------------------------------
+# a tidally locked planet's outline
+# --------------------------------------------------------------------------
+
+def tidal_outline(s, c, ci, rv, q, tw):
+    """(r, f, theta) of a locked planet's outline, for
+    ``shape_cols_oblate`` and ``principal_frame``: the area-equivalent
+    radius, the flattening and the long axis's sky angle [rad]. (s, c): sin,
+    cos of the angle along the orbit from conjunction; ci = cos i; rv the
+    volumetric radius; q in (-1/3, 1); tw the twist about the nose [rad].
+    MLX arrays. Differentiable in all of them through q = 0, where f = 0:
+    an f and theta taken from S itself are not."""
+    s2, c2, ci2 = s * s, c * c, ci * ci
+    si = mx.sqrt(mx.maximum(1.0 - ci2, 1e-12))
+    stw, ctw = sincos(tw)
+    sig, chi, kap = stw * stw, ctw * ctw, stw * ctw
+    # (1 + 3 q)^2 = 1 + q al, (1 - q)^2 = 1 - q be
+    al, be = 6.0 + 9.0 * q, 2.0 - q
+    Txx = al * s2 - be * sig * c2
+    Txy = be * kap * si * c - (al + be * sig) * ci * s * c
+    Tyy = (al * ci2 * c2 - be * sig * ci2 * s2 - be * chi * si * si
+           + 2.0 * be * kap * ci * si * s)
+    m, t1, t2 = 0.5 * (Txx + Tyy), 0.5 * (Txx - Tyy), Txy
+    # q has a sign and f has not: at q < 0 the long axis is 90 degrees away
+    sgn = mx.where(q >= 0.0, 1.0, -1.0)
+    T2 = t1 * t1 + t2 * t2
+    round_ = T2 < _T2_MIN                  # a circular outline at any q
+    T = mx.sqrt(mx.where(round_, _T2_MIN, T2))
+    D = sgn * q * T
+    hs = 1.0 + q * m
+    Ah, Bh = mx.sqrt(hs + D), mx.sqrt(hs - D)
+    f = 2.0 * D / (Ah * (Ah + Bh))
+    r = _tidal_r2(rv, q) * mx.sqrt(Ah * Bh)
+    th = 0.5 * mx.arctan2(mx.where(round_, 0.0, sgn * t2),
+                          mx.where(round_, 1.0, sgn * t1))
+    return r, f, th
+
+
+def _tidal_r2(rv, q):
+    """r2, the axis along the orbit, from the volumetric radius."""
+    return rv * mx.power((1.0 + 3.0 * q) * (1.0 - q), -1.0 / 3.0)
+
+
+def _tidal_g(q):
+    """q (1 + 3 q)(1 - q): q's volume-corrected form, the quantity that goes
+    as the inverse cube of the separation."""
+    return q * (1.0 + 3.0 * q) * (1.0 - q)
+
+
+def _tidal_q_solve(g):
+    """q with ``_tidal_g(q)`` = g, on the branch through 0, by Newton under
+    stop_gradient and one live step, which gives the exact d/dg."""
+    g0 = mx.stop_gradient(g)
+    q = g0 / (1.0 + 2.0 * g0)
+    for _ in range(5):
+        q = q - (_tidal_g(q) - g0) / (1.0 + q * (4.0 - 9.0 * q))
+    q = mx.stop_gradient(q)
+    return q - (_tidal_g(q) - g) / (1.0 + q * (4.0 - 9.0 * q))
+
+
+def tidal_q_from_hf(hf, mass_ratio, a, rv):
+    """``tidal_q`` from the fluid Love number, by ellc's relation: q =
+    h_f r2^3 / (2 mu a^3) with r2 the axis along the orbit, whose form in
+    the volumetric radius is the cubic q (1 + 3 q)(1 - q) = h_f R_V^3 /
+    (2 mu a^3). mass_ratio = mu = Mp / M*; a and rv in the same unit.
+    MLX arrays in, MLX out, differentiable; numbers in, numbers out."""
+    Q = 0.5 * hf / mass_ratio * (rv / a) ** 3
+    if isinstance(Q, mx.array):
+        return _tidal_q_solve(Q)
+    Q = np.asarray(Q, dtype=np.float64)
+    q = Q / (1.0 + 2.0 * Q)
+    for _ in range(40):
+        q = q - (_tidal_g(q) - Q) / (1.0 + q * (4.0 - 9.0 * q))
+    return float(q) if q.ndim == 0 else q
+
+
+def tidal_hf_from_q(q, mass_ratio, a, rv):
+    """The inverse of ``tidal_q_from_hf``: 2 mu (a / r2)^3 q."""
+    return 2.0 * mass_ratio * (a / rv) ** 3 * _tidal_g(q)
+
+
+def _tidal_cm(mass_ratio):
+    """1 / (mu (1 + mu)), the offset's coefficient, 0 without a mass ratio."""
+    pos = mass_ratio > 0.0
+    mu = mx.where(pos, mass_ratio, 1.0)
+    return mx.where(pos, 1.0 / (mu * (1.0 + mu)), 0.0)
+
+
+def _tidal_offset(a, b, rv, q, cm):
+    """(a, b) with the offset applied: on a circular orbit it is a constant
+    scale of the sky position, so the same model at a smaller a and the
+    same inclination."""
+    r2 = _tidal_r2(rv, q)
+    a1 = a - cm * (r2 / a) ** 4 * r2
+    return a1, b * a1 / a
+
+
+def _tidal_instant(phi, a, b, ecc, rv, q, tw, cm):
+    """(X, Y, dX/dphi, dY/dphi, front, r, f, theta): ``_sky`` and the
+    outline. On a circular orbit (a, b) already hold the offset. On an
+    eccentric one the shape and the offset follow the separation, nu comes
+    from the position at cos i = 1, where (X, Y) lies in the orbit's plane;
+    the derivatives, for the contacts' slope, leave out the small offset."""
+    if ecc is None:
+        X, Y, dX, dY, front = sky_circular(phi, a, b)
+        s, c = sincos(phi)
+        return (X, Y, dX, dY, front, *tidal_outline(s, c, b / a, rv, q, tw))
+    ci, consts = ecc
+    X, Y, dX, dY, front = sky_anchored(phi, a, 1.0, consts)
+    rr = mx.sqrt(X * X + Y * Y)
+    qn = _tidal_q_solve(_tidal_g(q) * (a / rr) ** 3)
+    r2 = _tidal_r2(rv, qn)
+    sc = 1.0 - cm * (r2 / a) ** 4 * r2 / rr
+    return (X * sc, Y * ci * sc, dX, dY * ci, front,
+            *tidal_outline(X / rr, -Y / rr, ci, rv, qn, tw))
+
+
+def _tidal_bound(rv, q, e=None):
+    """A circle containing every outline at any phase, the offset included
+    (it is small next to the 1% added): the ellipsoid's longest axis, at
+    periastron on an eccentric orbit."""
+    if e is not None:
+        q = _tidal_q_solve(_tidal_g(q) / (1.0 - e) ** 3)
+    return 1.01 * _tidal_r2(rv, q) * mx.maximum(1.0 + 3.0 * q, 1.0 - q)
+
+
+# --------------------------------------------------------------------------
 # contacts
 # --------------------------------------------------------------------------
 
@@ -126,11 +301,19 @@ def _boundary_ext(x0, y0, A, B, kind):
     return (x0 + A * cp) ** 2 + (y0 + B * sp) ** 2, psi
 
 
-def _q_and_slope(phi, a, b, ecc, A, B, cth, sth, kind):
+def _q_and_slope(phi, a, b, ecc, A, B, cth, sth, kind, tidal=None):
     """q (kind = -1: squared distance to the disc, 0 inside it) or M
     (kind = +1: squared largest boundary distance) at phase phi, and its
-    phase derivative."""
-    X, Y, dX, dY, _ = _sky(phi, a, b, ecc)
+    phase derivative; ``tidal`` = (rv, q, tw, cm) replaces the fixed
+    outline by the locked planet's at phi, the slope leaving out its
+    motion."""
+    if tidal is None:
+        X, Y, dX, dY, _ = _sky(phi, a, b, ecc)
+    else:
+        X, Y, dX, dY, _, r, f, th = _tidal_instant(phi, a, b, ecc, *tidal)
+        A = r / mx.sqrt(1.0 - f)
+        B = A * (1.0 - f)
+        sth, cth = sincos(th)
     x0, y0 = X * cth + Y * sth, -X * sth + Y * cth
     dx0, dy0 = dX * cth + dY * sth, -dX * sth + dY * cth
     s, psi = _boundary_ext(x0, y0, A, B, kind)
@@ -143,20 +326,22 @@ def _q_and_slope(phi, a, b, ecc, A, B, cth, sth, kind):
     return s, slope
 
 
-def _newton_contact(phi, a, b, ecc, A, B, cth, sth, kind, side, lim, n):
+def _newton_contact(phi, a, b, ecc, A, B, cth, sth, kind, side, lim, n,
+                    tidal=None):
     """Newton on g(phi) - 1 = 0 from phi, on the outside of the root
     (side -1: ingress, the root lies at larger phi; +1: egress)."""
     for _ in range(n):
-        g, dg = _q_and_slope(phi, a, b, ecc, A, B, cth, sth, kind)
+        g, dg = _q_and_slope(phi, a, b, ecc, A, B, cth, sth, kind, tidal)
         # outside the root the slope points away from it: dg * side > 0
         ok = (dg * side) > 0.0
         step = mx.where(ok, (g - 1.0) / mx.where(ok, dg, 1.0), 0.0)
         phi = phi - mx.clip(step, -lim, lim)
-    g, _ = _q_and_slope(phi, a, b, ecc, A, B, cth, sth, kind)
+    g, _ = _q_and_slope(phi, a, b, ecc, A, B, cth, sth, kind, tidal)
     return phi, g
 
 
-def contact_offsets_oblate(a, b, r, f, theta, k=None, h=None, ci=None):
+def contact_offsets_oblate(a, b, r, f, theta, k=None, h=None, ci=None,
+                           tidal=False, mass_ratio=None):
     """The four contact phases (ingress outer, ingress inner, egress inner,
     egress outer) of an oblate planet, as offsets from mid-transit in
     orbital phase (phi = 2 pi (t - t0) / P); ordered, detached.
@@ -169,12 +354,14 @@ def contact_offsets_oblate(a, b, r, f, theta, k=None, h=None, ci=None):
     has their broadcast shape. Computed in float64 (on the CPU stream)
     unless every array argument is float32. A missing contact collapses
     onto a point inside the transit (the inner pair of a graze), or all
-    four onto one point (no transit).
+    four onto one point (no transit). ``tidal``: (r, f, theta) hold
+    (rv, q, tw) (``contact_offsets_tidal``), with its ``mass_ratio``.
     """
     if (k is None) != (h is None):
         raise ValueError("pass both k and h (secosw, sesinw), or neither")
     vals = [a, b, r, f, theta] + ([k, h] if k is not None else []) \
-        + ([ci] if ci is not None else [])
+        + ([ci] if ci is not None else []) \
+        + ([mass_ratio] if mass_ratio is not None else [])
     arrays = [v for v in vals if isinstance(v, mx.array)]
     dt = (mx.float32 if arrays and all(v.dtype == mx.float32 for v in arrays)
           else mx.float64)
@@ -194,7 +381,13 @@ def contact_offsets_oblate(a, b, r, f, theta, k=None, h=None, ci=None):
         if k is not None:
             k, h = norm(k), norm(h)
             ci = M._ecc_shape(a, b, k, h)[2] if ci is None else norm(ci)
-        out = _contact_offsets_oblate(a, b, r, f, theta, k, h, ci)
+        cm = None
+        if tidal:
+            cm = _tidal_cm(norm(0.0 if mass_ratio is None else mass_ratio))
+            if k is None:
+                a, b = _tidal_offset(a, b, r, f, cm)
+        out = _contact_offsets_oblate(a, b, r, f, theta, k, h, ci, tidal=tidal,
+                                      cm=cm)
         return tuple(mx.reshape(c, shape) for c in out)
 
 
@@ -206,16 +399,32 @@ class _nullctx:
         return False
 
 
+def contact_offsets_tidal(a, b, rv, q, theta=0.0, k=None, h=None, ci=None,
+                          mass_ratio=None):
+    """``contact_offsets_oblate`` for a tidally locked planet of volumetric
+    radius rv, shape q and twist theta about its nose [rad]: its four
+    contact phases, ordered and detached. Inputs as there; ``mass_ratio``
+    as ``flux_dev_from_tau``'s."""
+    return contact_offsets_oblate(a, b, rv, q, theta, k, h, ci, tidal=True,
+                                  mass_ratio=mass_ratio)
+
+
 def _contact_offsets_oblate(a, b, r, f, theta, k=None, h=None, ci=None,
-                            consts=None):
+                            consts=None, tidal=False, cm=None):
     """contact_offsets_oblate's work, on canonical inputs: (n,) mx arrays
     of one dtype on the active stream (the graph, oblate kernels and tests
     call it directly). ``consts``, if given, replaces anchor_constants(k, h)
-    -- the (e, w) route."""
+    -- the (e, w) route. ``tidal``: (r, f, theta) hold (rv, q, tw), with the
+    offset's coefficient cm, and (a, b) hold the circular offset already;
+    the starts come from ``_tidal_bound``."""
     from .exposure import contact_offsets, contact_offsets_anchored
     a, b, r, f, theta = (mx.stop_gradient(v) for v in (a, b, r, f, theta))
     dt = a.dtype
-    A = r / mx.sqrt(1.0 - f)
+    if tidal:
+        A = _tidal_bound(r, f, None if k is None else
+                         mx.stop_gradient(k * k + h * h))
+    else:
+        A = r / mx.sqrt(1.0 - f)
     B = A * (1.0 - f)
     if k is None:
         ecc = None
@@ -227,6 +436,7 @@ def _contact_offsets_oblate(a, b, r, f, theta, k=None, h=None, ci=None,
                        (anchor_constants(k, h) if consts is None else consts))
         ecc = (ci, consts)
         cA = contact_offsets_anchored(A, a, b, k, h, ci, consts=consts)
+    tid = (r, f, theta, mx.stop_gradient(cm)) if tidal else None
     sth, cth = sincos(theta)
     lo, hi = cA[0], cA[3]
     lim = mx.maximum(hi - lo, 1e-12)
@@ -246,13 +456,14 @@ def _contact_offsets_oblate(a, b, r, f, theta, k=None, h=None, ci=None,
                                for v in vs], axis=0)
 
     a2, b2, A2, B2, cth2, sth2 = (t2(v, v) for v in (a, b, A, B, cth, sth))
+    tid2 = None if tid is None else tuple(t2(v, v) for v in tid)
     ecc2 = None if ecc is None else (t2(ecc[0], ecc[0]),
                                      tuple(t2(c, c) for c in ecc[1]))
     side = t2(mx.array(-1.0, dtype=dt), mx.array(1.0, dtype=dt))
 
     def pair(start, end, kind, lim):
         c, g = _newton_contact(t2(start, end), a2, b2, ecc2, A2, B2, cth2,
-                               sth2, kind, side, t2(lim, lim), n)
+                               sth2, kind, side, t2(lim, lim), n, tid2)
         return c[:m], c[m:], g[:m], g[m:]
 
     c1, c4, g1, g4 = pair(lo, hi, -1, lim)
@@ -267,6 +478,42 @@ def _contact_offsets_oblate(a, b, r, f, theta, k=None, h=None, ci=None,
     mid = 0.5 * (c1 + c4)
     c2, c3 = mx.where(inner, c2, mid), mx.where(inner, c3, mid)
     return tuple(mx.stop_gradient(c) for c in (c1, c2, c3, c4))
+
+
+def _check_tidal_domain(rv, q):
+    """q in (-1/3, 1) and the ellipsoid's long axis squared within its short
+    axis, which is the oblate domain A^2 / B <= 1 at every phase, for host
+    values, raising; array arguments are checked in the graph
+    (_in_tidal_domain: NaN outside), as _check_domain's."""
+    if isinstance(rv, mx.array) or isinstance(q, mx.array):
+        return
+    rv = np.asarray(rv, dtype=np.float64)
+    q = np.asarray(q, dtype=np.float64)
+    if np.any(q <= -1.0 / 3.0) or np.any(q >= 1.0):
+        raise ValueError(f"tidal_q must be in (-1/3, 1); got {q}")
+    u, v = 1.0 + 3.0 * q, 1.0 - q
+    r2 = rv * (u * v) ** (-1.0 / 3.0)
+    if np.any(r2 * np.maximum(u, v) ** 2 > np.minimum(u, v) * (1.0 + 1e-12)):
+        raise ValueError(
+            "the ellipsoid's long axis squared exceeds its short axis: the "
+            "planet could cross the stellar limb more than twice, outside "
+            "the oblate path's domain")
+
+
+def _in_tidal_domain(rv, q, e=None):
+    """The domain as a mask, for array arguments (see _check_tidal_domain);
+    with an eccentricity, at periastron, and with the separation's cubic on
+    its monotonic branch."""
+    qs = mx.clip(q, -0.3, 0.99)            # finite outside; ok masks those
+    ok = (q > -1.0 / 3.0) & (q < 1.0)
+    if e is not None:
+        lo, hi = _TIDAL_G_RANGE
+        gp = _tidal_g(qs) / (1.0 - mx.minimum(e, 0.999)) ** 3
+        ok = ok & (gp > lo) & (gp < hi)
+        qs = _tidal_q_solve(mx.clip(gp, lo, hi))
+    u, v = 1.0 + 3.0 * qs, 1.0 - qs
+    return ok & (_tidal_r2(rv, qs) * mx.maximum(u, v) ** 2
+                 <= mx.minimum(u, v) * (1.0 + 1e-12))
 
 
 # --------------------------------------------------------------------------
@@ -300,15 +547,18 @@ def _contact_kh(k, h, ew):
 
 def _tau_graph(tau, period, a, b, r, f, theta, w2d, exp_time, mode, n_gl,
                n_sub, law, basis=False, k=None, h=None, ew=False,
-               contacts=None):
+               contacts=None, tidal=False, cm=None):
     """The oblate counterpart of ``metal_hybrid._tau_graph``: the same
     exposure rules, contacts detached and the period detached in the node
     map exactly as there. ``contacts``: the contact rule's (n, 4)
-    (_graph_contacts), computed here if not given."""
+    (_graph_contacts), computed here if not given. ``tidal``: (r, f, theta)
+    hold (rv, q, tw), each node having its own outline; cm is the offset's
+    coefficient, read on an eccentric orbit ((a, b) hold a circular one's)."""
     from .exposure import exposure_nodes
     law = get_law(law)
     ecc = k is not None
     pars = (period, a, b, r, f, theta) + ((k, h) if ecc else ())
+    cm_col = None if cm is None else (lambda nk: mx.reshape(cm, (-1,) + (1,) * nk))
 
     def col(nk):
         return [mx.reshape(p, (-1,) + (1,) * nk) for p in pars]
@@ -324,7 +574,12 @@ def _tau_graph(tau, period, a, b, r, f, theta, w2d, exp_time, mode, n_gl,
         cols = col(nk)
         per, av, bv, eo = orbit(cols)
         rv, fv, thv = cols[3:6]
-        X, Y, _, _, front = _sky((_TWO_PI / per) * tt, av, bv, eo)
+        phi = (_TWO_PI / per) * tt
+        if tidal:
+            X, Y, _, _, front, rv, fv, thv = _tidal_instant(
+                phi, av, bv, eo, rv, fv, thv, cm_col(nk))
+        else:
+            X, Y, _, _, front = _sky(phi, av, bv, eo)
         X = mx.where(front, X, _FAR)
         Y = mx.where(front, Y, 0.0)
         sth, cth = sincos(thv)
@@ -342,7 +597,7 @@ def _tau_graph(tau, period, a, b, r, f, theta, w2d, exp_time, mode, n_gl,
     else:
         per1 = col(1)[0]
         if contacts is None:
-            contacts = _graph_contacts(a, b, r, f, theta, k, h, ew)
+            contacts = _graph_contacts(a, b, r, f, theta, k, h, ew, tidal, cm)
         cs = tuple(contacts[:, j:j + 1] for j in range(4))
         T, W = exposure_nodes(tau, tau * 0.0, mx.stop_gradient(per1),
                               exp_time, cs, int(n_gl), dtype=tau.dtype)
@@ -352,16 +607,17 @@ def _tau_graph(tau, period, a, b, r, f, theta, w2d, exp_time, mode, n_gl,
     return combine_cols(Bc, w2d, law)
 
 
-def _graph_contacts(a, b, r, f, theta, k=None, h=None, ew=False):
+def _graph_contacts(a, b, r, f, theta, k=None, h=None, ew=False,
+                    tidal=False, cm=None):
     """The contact rule's (n, 4) contact phases for _tau_graph's canonical
     (n,) inputs, detached."""
     if k is None:
-        cs = _contact_offsets_oblate(a, b, r, f, theta)
+        cs = _contact_offsets_oblate(a, b, r, f, theta, tidal=tidal, cm=cm)
     else:
         ci, consts = _orbit_consts(a, b, k, h, ew)
         kc, hc = _contact_kh(k, h, ew)
         cs = _contact_offsets_oblate(a, b, r, f, theta, kc, hc, ci,
-                                     consts=consts)
+                                     consts=consts, tidal=tidal, cm=cm)
     return mx.stack([mx.reshape(c, (-1,)) for c in cs], axis=1)
 
 
@@ -384,7 +640,7 @@ _block_fns: dict = {}
 
 
 def _block_fn(exp_time, mode, n_gl, n_sub, law, basis, ew, present,
-              compiled):
+              compiled, tidal=False):
     """``run(tt, rows)`` for _in_blocks: _tau_graph on one block's rows
     (``present``: which of them are arrays). ``compiled``: under
     mx.compile, cached per configuration -- every block has one shape, so
@@ -392,13 +648,14 @@ def _block_fn(exp_time, mode, n_gl, n_sub, law, basis, ew, present,
     every block (minutes at 30 blocks)."""
     def raw(tt, *arrs):
         it = iter(arrs)
-        *p6, w, kk, hh, c = [next(it) if p else None for p in present]
+        *p6, w, kk, hh, c, cm = [next(it) if p else None for p in present]
         return _tau_graph(tt, *p6, w, exp_time, mode, n_gl, n_sub, law,
-                          basis=basis, k=kk, h=hh, ew=ew, contacts=c)
+                          basis=basis, k=kk, h=hh, ew=ew, contacts=c,
+                          tidal=tidal, cm=cm)
     fn = raw
     if compiled:
         key = (float(exp_time), int(mode), int(n_gl), int(n_sub), law,
-               bool(basis), bool(ew), present)
+               bool(basis), bool(ew), present, bool(tidal))
         fn = _block_fns.get(key)
         if fn is None:
             fn = _block_fns[key] = mx.compile(raw)
@@ -470,7 +727,8 @@ def _in_blocks(run, tau2d, rows, nodes, block, per_time=None):
 def flux_dev_from_tau_oblate(tau, period, a, b, r, f, theta, law, u,
                              exp_time, mode, n_gl, n_sub, basis=False,
                              k=None, h=None, ew=False, use_metal=True,
-                             compile_blocks=False):
+                             compile_blocks=False, tidal=False,
+                             mass_ratio=None):
     """``metal.flux_dev_from_tau`` with ``f=`` (that function validates the
     keywords and delegates here). fp32 data on the GPU stream takes the
     oblate Metal kernels (``metal_oblate``) unless ``use_metal`` is False;
@@ -478,12 +736,14 @@ def flux_dev_from_tau_oblate(tau, period, a, b, r, f, theta, law, u,
     most _OBLATE_BLOCK points (_in_blocks) -- each block compiled once for
     all (they share one shape) with ``compile_blocks``, TransitModel's
     route for a call too large to compile whole. ``ew``: (k, h) hold (e, w
-    [rad]) -- TransitModel's array-ecc route (_orbit_consts)."""
+    [rad]) -- TransitModel's array-ecc route (_orbit_consts). ``tidal``:
+    (r, f, theta) hold (rv, q, tw), a tidally locked planet, with its
+    ``mass_ratio`` (None: no offset)."""
     from .metal_hybrid import _canon_w
     law = get_law(law)
     if tau.ndim not in (1, 2):
         raise ValueError(f"tau must be (m,) or (n, m); got {tau.shape}")
-    _check_domain(r, f)
+    (_check_tidal_domain if tidal else _check_domain)(r, f)
     squeeze = tau.ndim == 1
     tau2d = tau[None, :] if squeeze else tau
     ecc = k is not None
@@ -492,11 +752,21 @@ def flux_dev_from_tau_oblate(tau, period, a, b, r, f, theta, law, u,
                    else 1) for p in params)
     if not basis and isinstance(u, mx.array) and u.ndim == 2:
         n_param = max(n_param, u.shape[0])
+    if isinstance(mass_ratio, mx.array) and mass_ratio.ndim >= 1:
+        n_param = max(n_param, mass_ratio.shape[0])
     n = max(tau2d.shape[0], n_param)
     pc = [M._canon_param(p, n, tau2d.dtype) for p in params]
     if tau2d.shape[0] != n:
         tau2d = mx.broadcast_to(tau2d, (n, tau2d.shape[1]))
     kh = pc[-2:] if ecc else [None, None]
+    cm = dom = None
+    if tidal:
+        cm = _tidal_cm(M._canon_param(0.0 if mass_ratio is None else mass_ratio,
+                                      n, tau2d.dtype))
+        dom = _in_tidal_domain(pc[3], pc[4], None if not ecc else
+                               kh[0] if ew else kh[0] * kh[0] + kh[1] * kh[1])
+        if not ecc:
+            pc[1], pc[2] = _tidal_offset(pc[1], pc[2], pc[3], pc[4], cm)
     w2d = (None if basis else
            _canon_w(u, n, law.n_w, tau2d.dtype, law.name))
     if (use_metal and tau2d.dtype == mx.float32 and M._gpu_stream_active()
@@ -505,21 +775,26 @@ def flux_dev_from_tau_oblate(tau, period, a, b, r, f, theta, law, u,
         from .oblate import _in_domain
         out = flux_dev_from_tau_oblate_kernel(
             tau2d, *pc[:6], w2d, exp_time, mode, n_gl, n_sub, law,
-            basis=basis, k=kh[0], h=kh[1], ew=ew)
-        ok = _in_domain(pc[3], pc[4])[:, None]
+            basis=basis, k=kh[0], h=kh[1], ew=ew, tidal=tidal, cm=cm)
+        ok = (dom if tidal else _in_domain(pc[3], pc[4]))[:, None]
         out = mx.where(ok[..., None] if basis else ok, out, mx.nan)
     else:
         # the contact rule's contacts depend on the parameters alone: once
         # per set, not per block
         contact = mode not in (M._INT_NONE, M._INT_SUPER) and exp_time != 0.0
-        cs = _graph_contacts(*pc[1:6], kh[0], kh[1], ew) if contact else None
+        cs = (_graph_contacts(*pc[1:6], kh[0], kh[1], ew, tidal, cm) if contact
+              else None)
 
-        rows = [*pc[:6], w2d, *kh, cs]
+        rows = [*pc[:6], w2d, *kh, cs, cm]
         run = _block_fn(exp_time, mode, n_gl, n_sub, law, basis, ew,
-                        tuple(x is not None for x in rows), compile_blocks)
+                        tuple(x is not None for x in rows), compile_blocks,
+                        tidal)
         out = _in_blocks(run, tau2d, rows,
                          _nodes_per_time(exp_time, mode, n_gl, n_sub),
                          _OBLATE_BLOCK)
+        if tidal:
+            ok = dom[:, None]
+            out = mx.where(ok[..., None] if basis else ok, out, mx.nan)
     return out[0] if squeeze and n == 1 else out
 
 

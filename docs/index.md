@@ -165,6 +165,7 @@ oblate/geometry
 oblate/light-curves
 oblate/accuracy-and-cost
 oblate/fitting
+oblate/tidal
 ```
 
 ```{toctree}

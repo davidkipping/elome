@@ -1788,7 +1788,7 @@ def flux_dev_from_tau(tau: mx.array, period, a, b, r, u1=None, u2=None, *,
                       ring_out=None, ring_f=None, ring_tau=None, spots=None,
                       spot_time=None, prot=None, istar=None,
                       lam=None, transittype: str = "primary",
-                      fp=None) -> mx.array:
+                      fp=None, tidal_q=None, mass_ratio=None) -> mx.array:
     """F - 1 from time-since-mid-transit, with the exposure integrated
     *inside* the kernel.
 
@@ -1857,6 +1857,21 @@ def flux_dev_from_tau(tau: mx.array, period, a, b, r, u1=None, u2=None, *,
             fp32, below f = 1e-5 a chain's value is the spherical forms'
             (the flattening's effect is under 4e-8), with d/df taken from
             the ellipse at f = 1e-5, so a fit can start at f = 0.
+        tidal_q, mass_ratio: a tidally locked triaxial planet, ellc's "love"
+            model (``oblate_tau``), in place of f: axes r1 = r2 (1 + 3 q)
+            pointing at the star at every instant, r2 along the orbit and
+            r3 = r2 (1 - q) along its normal, so its outline changes through
+            the transit. ``tidal_q`` is q at the separation a, scalar or
+            (n,); on an eccentric orbit q follows the separation at fixed
+            volume. ``mass_ratio`` = Mp / M*, scalar or (n,), adds ellc's
+            offset of the ellipsoid towards the star; None leaves it out.
+            ``theta`` turns (r2, r3) about the nose [rad], default 0, as
+            ellc has it. ``r`` is the volumetric radius (r1 r2 r3)^(1/3), not
+            the oblate mode's area-equivalent one. -1/3 < q < 1, the sign
+            free, so that a sphere (q = 0, with a usable d/dq) is not an
+            edge; the longest axis squared must not exceed the shortest. An
+            h_f goes through ``tidal_q_from_hf``. Primary transits, hybrid
+            laws. The same kernels and graph as f=, at about the same cost.
         ring_in, ring_out, ring_f, ring_tau: a ring in the planet's
             equatorial plane (``elome.rings``): inner and outer radii in
             units of ``r``, projected flattening ring_f = 1 - |cos i| of the
@@ -1955,6 +1970,20 @@ def flux_dev_from_tau(tau: mx.array, period, a, b, r, u1=None, u2=None, *,
         raise ValueError("a ring needs ring_in=, ring_out= and ring_f=")
     if transittype not in ("primary", "secondary"):
         raise ValueError("transittype must be 'primary' or 'secondary'")
+    if mass_ratio is not None and tidal_q is None:
+        raise ValueError("mass_ratio= is a tidally locked planet's; pass "
+                         "tidal_q= too")
+    if tidal_q is not None:
+        if f is not None or ringed or spots is not None:
+            raise ValueError("tidal_q= is the planet's shape: no f=, ring "
+                             "or spots")
+        if transittype != "primary":
+            raise ValueError("a tidally locked planet (tidal_q=) is "
+                             "primary-transit only")
+        if limb_dark == "quadratic":
+            raise ValueError("a tidally locked planet (tidal_q=) takes a "
+                             "hybrid law: limb_dark='hybrid2' | 'hybrid4' "
+                             "| 'hybrid5'")
     if transittype == "secondary":
         if fp is None:
             raise ValueError("a secondary eclipse needs fp=")
@@ -1992,7 +2021,7 @@ def flux_dev_from_tau(tau: mx.array, period, a, b, r, u1=None, u2=None, *,
                              "limb_dark='hybrid2' | 'hybrid4' | 'hybrid5'")
         if f is not None or theta is not None or ringed:
             raise ValueError("spots are for a spherical planet: no f=, theta= or ring")
-    if theta is not None and f is None and not ringed:
+    if theta is not None and f is None and not ringed and tidal_q is None:
         raise ValueError("theta= is an oblate planet's; pass f= too")
     if f is not None and limb_dark == "quadratic":
         raise ValueError("oblate planets (f=) take a hybrid law: "
@@ -2021,12 +2050,14 @@ def flux_dev_from_tau(tau: mx.array, period, a, b, r, u1=None, u2=None, *,
                 math.inf if ring_tau is None else ring_tau, limb_dark, u,
                 float(exp_time), mode, int(n_gl), int(n_sub), bool(ld_basis),
                 secosw, sesinw)
-        if f is not None:
+        if f is not None or tidal_q is not None:
             from .oblate_tau import flux_dev_from_tau_oblate
             return flux_dev_from_tau_oblate(
-                tau, period, a, b, r, f, 0.0 if theta is None else theta,
+                tau, period, a, b, r, tidal_q if f is None else f,
+                0.0 if theta is None else theta,
                 limb_dark, u, float(exp_time), mode, int(n_gl), int(n_sub),
-                bool(ld_basis), secosw, sesinw)
+                bool(ld_basis), secosw, sesinw, tidal=f is None,
+                mass_ratio=mass_ratio)
         from .metal_hybrid import flux_dev_from_tau_hybrid
         return flux_dev_from_tau_hybrid(
             tau, period, a, b, r, limb_dark, u, float(exp_time), mode,

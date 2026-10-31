@@ -26,6 +26,7 @@ flux = 1.0 + dev
 | `u1`, `u2` | scalar or `(n,)` | quadratic limb darkening |
 | `limb_dark`, `u` | name; `(n_w,)` or `(n, n_w)` | a hybrid law and its weights, instead of `u1`, `u2` |
 | `f`, `theta` | scalar or `(n,)` | an oblate planet; `theta` in radians |
+| `tidal_q`, `mass_ratio` | scalar or `(n,)` | a tidally locked planet in place of `f` ({doc}`../oblate/tidal`); `mass_ratio` optional |
 | `spots`, `spot_time`, `prot`, `istar`, `lam` | `(K, 4)` or `(n, K, 4)`; like `tau`; scalar or `(n,)` | a spotted star (below); angles in radians |
 | `secosw`, `sesinw` | scalar or `(n,)` | an eccentric orbit, $(\sqrt{e}\cos\omega, \sqrt{e}\sin\omega)$ |
 | `exp_time`, `integration`, `n_gl`, `n_sub` | | the exposure rule; see {doc}`exposures` |

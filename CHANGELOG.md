@@ -6,6 +6,19 @@ every release is tagged `vX.Y.Z` in git.
 ## [Unreleased]
 
 ### Added
+- **Tidally locked planets.** `flux_dev_from_tau(..., tidal_q=)` and
+  `TransitParams.tidal_q` model a triaxial ellipsoid whose nose points at
+  the star at every instant (r1 = r2 (1 + 3 q), r3 = r2 (1 - q)), so its
+  outline changes through the transit, in place of the oblate mode's fixed
+  `f`. This is `ellc`'s `love` model: the shape follows the separation at
+  fixed volume, and an optional `mass_ratio` adds its offset of the
+  ellipsoid towards the star. `tidal_q_from_hf` and `tidal_hf_from_q` use its
+  relation. `theta` turns the other two axes about the nose. The radius is
+  the volumetric one. `q` may be negative, and the light curve and its
+  gradients are smooth through the sphere at `q = 0`. Hybrid laws and
+  primary transits, circular and eccentric orbits, every exposure rule; the
+  fp32 Metal kernels and the fp64 graph, at the oblate mode's cost.
+  `contact_offsets_tidal` gives the contacts.
 - **Secondary eclipses of oblate planets.** `TransitModel(...,
   transittype="secondary")` now takes an oblate planet (`params.f`): the
   planet is a uniform disc of flux ratio `fp`, eclipsed by the star, on

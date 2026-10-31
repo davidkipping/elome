@@ -23,7 +23,10 @@ SECTIONS = [
      "Per-chain parameters in, per-chain light curves out, with analytic "
      "gradients. See {doc}`../guides/sampler-api`.",
      ["elome.flux_dev_from_tau", "elome.flux_dev_metal",
-      "elome.contact_offsets_oblate", "elome.ring_kinks", "elome.metal_available"]),
+      "elome.contact_offsets_oblate", "elome.contact_offsets_tidal",
+      "elome.tidal_q_from_hf", "elome.tidal_hf_from_q",
+      "elome.oblate_tau.tidal_outline", "elome.ring_kinks",
+      "elome.metal_available"]),
     ("Models and targets for anvil",
      "Ready-made models and fitting problems for the anvil engine. See "
      "{doc}`../spherical/fitting`.",

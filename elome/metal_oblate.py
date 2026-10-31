@@ -35,6 +35,12 @@ graph's switch in fp32): the flattening's own effect, ~4e-3 f of a column,
 is under 4e-8 below the switch -- fp32 noise. Its slope is not, so the VJP
 takes d/df there from the ellipse at f = f_sw (an O(f_sw) bias, as the
 graph): a fit can start at f = 0.
+
+A tidally locked planet (``oblate_tau.tidal_outline``) is a set of orbit
+plug-ins, "tri", "triecc" and "trieccew": each node sets its own (r, f,
+theta) before the same ``ob_cols``, and the VJP chains the point's gradient
+in them into r2, q, the twist, and the angle along the orbit and cos i
+(``ob_tri_chain``). The other plug-ins' sources do not change.
 """
 
 from __future__ import annotations
@@ -1069,6 +1075,180 @@ inline void ob_xy_ecc(float tau, float per, float av, thread const float *o,
 }
 """
 
+_OB_TRI_FN = r"""
+// a tidally locked planet's outline at (s, c), the sin and cos of the angle
+// along the orbit from conjunction, as oblate_tau.tidal_outline, with
+// S / r2^2 = 1 + q T. The sky angle comes as its half-angle cos and sin, up
+// to a common sign (the ellipse does not mind). ob_tri keeps what the chain
+// below needs; ob_tw is the twist's sin^2, cos^2 and sin cos.
+struct ob_tri { float m, t1, t2, T, sgn, hs, D, rho; };
+struct ob_tw { float sig, chi, kap; };
+inline ob_tw ob_twist(float tw) {
+    float st = metal::precise::sin(tw), ct = metal::precise::cos(tw);
+    ob_tw o;
+    o.sig = st * st; o.chi = ct * ct; o.kap = st * ct;
+    return o;
+}
+inline float ob_si(float ci) {
+    return metal::precise::sqrt(max(1.0f - ci * ci, 1e-12f));
+}
+inline void ob_tri_frame(float s, float c, float ci, float si, float q,
+                         float r2, ob_tw tw, thread ob_tri &t, thread float *r,
+                         thread float *fl, thread float *cth, thread float *sth,
+                         thread float *sqf) {
+    float al = 6.0f + 9.0f * q, be = 2.0f - q, ci2 = ci * ci;
+    float bs = be * tw.sig, bk = be * tw.kap;
+    float Txx = al * s * s - bs * c * c;
+    float Tyy = al * ci2 * c * c - bs * ci2 * s * s - be * tw.chi * si * si
+                + 2.0f * bk * ci * si * s;
+    t.m = 0.5f * (Txx + Tyy);
+    t.t1 = 0.5f * (Txx - Tyy);
+    t.t2 = bk * si * c - (al + bs) * ci * s * c;
+    t.sgn = (q >= 0.0f) ? 1.0f : -1.0f;
+    float T2 = t.t1 * t.t1 + t.t2 * t.t2;
+    bool rnd = T2 < 1e-30f;              // a circular outline at any q
+    t.T = metal::precise::sqrt(rnd ? 1e-30f : T2);
+    t.D = t.sgn * q * t.T;
+    t.hs = 1.0f + q * t.m;
+    float Ah = metal::precise::sqrt(t.hs + t.D);
+    float Bh = metal::precise::sqrt(t.hs - t.D);
+    *fl = 2.0f * t.D / (Ah * (Ah + Bh));
+    *sqf = metal::precise::sqrt(Bh / Ah);
+    t.rho = metal::precise::sqrt(Ah * Bh);
+    *r = r2 * t.rho;
+    float c2 = rnd ? 1.0f : t.sgn * t.t1 / t.T;
+    float s2 = rnd ? 0.0f : t.sgn * t.t2 / t.T;
+    if (c2 >= 0.0f) {
+        *cth = metal::precise::sqrt(0.5f * (1.0f + c2));
+        *sth = 0.5f * s2 / *cth;
+    } else {
+        *sth = metal::precise::sqrt(0.5f * (1.0f - c2));
+        *cth = 0.5f * s2 / *sth;
+    }
+}
+// sky position and (s, c) on the circular orbit
+inline void ob_xy_tri(float tau, float per, float av, float bv, thread float *X,
+                      thread float *Y, thread bool *front, thread float *s,
+                      thread float *c) {
+    float phi = MP_TWO_PI * tau / per;
+    *s = metal::precise::sin(phi);
+    *c = metal::precise::cos(phi);
+    *X = av * *s;
+    *Y = -(bv * *c);
+    *front = *c > 0.0f;
+}
+// the eccentric orbit evaluated at cos i = 1, where (X, Y) lies in the
+// orbit's plane: (s, c), and the derivatives of nu and of ln rr
+inline void ob_tri_geo(float X, float Y1, float dXp, float dYp,
+                       thread const float *dXt, thread const float *dYt,
+                       thread float *rr, thread float *s, thread float *c,
+                       thread float *dnp, thread float *dnu, thread float *dlp,
+                       thread float *dlr) {
+    float rr2 = X * X + Y1 * Y1;
+    *rr = metal::precise::sqrt(rr2);
+    *s = X / *rr;
+    *c = -Y1 / *rr;
+    *dnp = (X * dYp - Y1 * dXp) / rr2;
+    *dlp = (X * dXp + Y1 * dYp) / rr2;
+    for (int k = 0; k < 9; ++k) {
+        dnu[k] = (X * dYt[k] - Y1 * dXt[k]) / rr2;
+        dlr[k] = (X * dXt[k] + Y1 * dYt[k]) / rr2;
+    }
+    dnu[0] = 0.0f;                        // a scales the orbit
+    dnu[1] = 0.0f; dlr[1] = 0.0f;         // nor does the inclination enter
+}
+// the shape and the offset at separation rr (oblate_tau._tidal_instant):
+// q (1 + 3 q)(1 - q) = Qr = tQ (a / rr)^3; gp is that cubic's slope; cm the
+// offset's coefficient with a^-4 folded in
+inline void ob_tri_sep(float rr, float av, float tQ, float rv, float cm,
+                       thread float *q, thread float *r2, thread float *sc,
+                       thread float *gp, thread float *Qr) {
+    float x = av / rr;
+    *Qr = tQ * x * x * x;
+    float qq = *Qr / (1.0f + 2.0f * *Qr);
+    for (int k = 0; k < 4; ++k)
+        qq -= (qq * (1.0f + 3.0f * qq) * (1.0f - qq) - *Qr)
+              / (1.0f + qq * (4.0f - 9.0f * qq));
+    *q = qq;
+    *gp = 1.0f + qq * (4.0f - 9.0f * qq);
+    *r2 = rv * metal::precise::powr((1.0f + 3.0f * qq) * (1.0f - qq), -1.0f / 3.0f);
+    float r22 = *r2 * *r2;
+    *sc = 1.0f - cm * r22 * r22 * *r2 / rr;
+}
+// the scale and cos i onto (X, Y) and its tangents; (X1, Y1) keep the
+// position the scale acts on
+inline void ob_tri_scale(float ci, float sc, thread float *X, thread float *Y,
+                         thread float *dXp, thread float *dYp, thread float *dXt,
+                         thread float *dYt, thread float *X1, thread float *Y1) {
+    *X1 = *X;
+    *Y1 = *Y * ci;
+    *X *= sc;
+    *Y = *Y1 * sc;
+    *dXp *= sc;
+    *dYp *= ci * sc;
+    for (int k = 0; k < 9; ++k) {
+        dXt[k] *= sc;
+        dYt[k] *= (k == 1) ? sc : ci * sc;
+    }
+    dXt[9] = 0.0f; dYt[9] = 0.0f;
+}
+// after ob_tri_chain: g[2] = d/dr2 and g[3] = d/dq at the node, into d/drv
+// and d/dtQ, with d/d(ln rr), the explicit d/d(ln a), and d/dcm
+inline void ob_tri_sep_chain(float q, float r2, float sc, float gp, float Qr,
+                             float rv, float av, float rr, float cm_r2,
+                             float X1, float Y1, thread float *g,
+                             thread float *glr, thread float *gla,
+                             thread float *gcm) {
+    float P = g[0] * X1 + g[1] * Y1;      // d/d(the scale)
+    float Dr = 1.0f - sc;
+    float dlq = 1.0f / (3.0f * (1.0f - q)) - 1.0f / (1.0f + 3.0f * q);
+    float Hq = g[3] + (g[2] * r2 - 5.0f * P * Dr) * dlq;
+    float x = av / rr;
+    *glr = -3.0f * Qr * Hq / gp + P * Dr;
+    *gla = 3.0f * Qr * Hq / gp;
+    *gcm = -P * cm_r2 / rr;
+    g[3] = Hq * x * x * x / gp;
+    g[2] = (g[2] * r2 - 5.0f * P * Dr) / rv;
+}
+// g = d/d(X, Y, r, f, theta) in, d/d(X, Y, r2, q, twist) out, with d/dnu and
+// d/dci: through (hs, e1, e2) = (1 + q m, q t1, q t2) and T. The sky angle's
+// term carries 1 / T, not 1 / D, and has no explicit d/dq: (e1, e2) turns
+// with (t1, t2), so nothing diverges at the sphere.
+inline void ob_tri_chain(thread const ob_tri &t, float s, float c, float ci,
+                         float si, float q, ob_tw tw, float r, float fl,
+                         thread float *g, thread float *gnu, thread float *gci) {
+    float al = 6.0f + 9.0f * q, be = 2.0f - q, ci2 = ci * ci;
+    float gr = g[2] * r;
+    float E = t.hs * t.hs - t.D * t.D;
+    float Qd = (t.hs + t.D) * (t.hs + t.D) * (1.0f - fl);
+    float Gs = 0.5f * gr * t.hs / E - g[3] * t.D / Qd;
+    float GD = -0.5f * gr * t.D / E + g[3] * t.hs / Qd;
+    float c2 = t.sgn * t.t1 / t.T, s2 = t.sgn * t.t2 / t.T;
+    float gT = 0.5f * t.sgn * g[4] / t.T;
+    float qG1 = q * GD * c2 - gT * s2, gxy = q * GD * s2 + gT * c2;
+    float qGs = q * Gs;
+    float gxx = 0.5f * (qGs + qG1), gyy = 0.5f * (qGs - qG1);
+    float sc = s * c, cc = c * c, ss = s * s;
+    float sig = tw.sig, chi = tw.chi, kap = tw.kap;
+    float ab = al + be * sig, bk = be * kap, dk = chi - sig;
+    *gnu = 2.0f * gxx * ab * sc - gxy * (ab * ci * (cc - ss) + bk * si * s)
+           + 2.0f * gyy * ci * (bk * si * c - ci * ab * sc);
+    *gci = -gxy * (ab * sc + bk * c * ci / si)
+           + 2.0f * gyy * (ci * (al * cc - be * sig * ss + be * chi)
+                           + bk * s * (si - ci2 / si));
+    float gtw = -2.0f * gxx * bk * cc
+                + gxy * (be * dk * si * c - 2.0f * bk * ci * sc)
+                + 2.0f * gyy * (bk * (si * si - ci2 * ss) + be * dk * ci * si * s);
+    g[3] = Gs * t.m + GD * t.sgn * t.T
+           + gxx * (9.0f * ss + sig * cc)
+           - gxy * ((9.0f - sig) * ci * sc + kap * si * c)
+           + gyy * (9.0f * ci2 * cc + sig * ci2 * ss + chi * si * si
+                    - 2.0f * kap * ci * si * s);
+    g[2] *= t.rho;
+    g[4] = gtw;
+}
+"""
+
 _OB_PHOT_FN = r"""
 // F - 1 = (E0 - sum w_j T_j) * inv_norm
 inline float ob_phot(float X, float Y, float r, float fl, float cth, float sth,
@@ -1117,6 +1297,68 @@ _OB_ORBITS["eccew"] = dict(
     _OB_ORBITS["ecc"],
     xyd="ob_xy_ecc_d(TT, per, av, o, &X, &Y, &front, &dXp, &dYp, dXt, dYt, true);",
     live="9")
+# a tidally locked planet: r, f and theta hold (r2, q, the twist), and each
+# node writes its own outline over the head's r, fl, cth, sth, sqf
+_TRI_SET = ("ob_tri_frame(ts, tc, ci, si, tq, r2, tw, tf, &r, &fl, &cth, &sth, "
+            "&sqf);")
+_TRI_LOAD = ("    float r2 = rin[y], tq = fin[y];\n"
+             "    float si = ob_si(ci);\n"
+             "    ob_tw tw = ob_twist(thin[y]);\n"
+             "    ob_tri tf;\n"
+             "    float ts, tc;\n")
+_OB_ORBITS["tri"] = dict(
+    inputs=["bin"],
+    load="    float bv  = bin[y];\n    float ci  = bv / av;\n" + _TRI_LOAD,
+    xy="ob_xy_tri(TT, per, av, bv, &X, &Y, &front, &ts, &tc); " + _TRI_SET,
+    xyd="ob_xy_circ_d(TT, per, av, bv, &X, &Y, &front, &dXp, &dYp, dXt, dYt); "
+        "ts = dXt[0]; tc = -dYt[1]; " + _TRI_SET,
+    nth=2, live="2", tidal=True,
+    dphi="g_nu",
+    th="            a_th[0] -= w * g_ci * ci / av;\n"
+       "            a_th[1] += w * g_ci / av;\n")
+# an eccentric chain's r, f and theta hold (rv, the cubic's Q, the twist), its
+# packed orbit one more column, the offset's coefficient over a^4, and each
+# node solves q and r2 at its own separation (ob_tri_sep)
+_TRI_STRIDE = f"{M.NORB + 1}u"
+_TRI_ECC_LOAD = ("    float o[NORB_I];\n"
+                 f"    for (int c = 0; c < NORB_I; ++c) o[c] = orb[y * {_TRI_STRIDE} + (uint)c];\n"
+                 f"    float cm = orb[y * {_TRI_STRIDE} + NORB_C];\n"
+                 "    float ci = o[10];\n"
+                 "    o[10] = 1.0f;\n"
+                 "    float rv = rin[y], tQ = fin[y];\n"
+                 "    float si = ob_si(ci);\n"
+                 "    ob_tw tw = ob_twist(thin[y]);\n"
+                 "    ob_tri tf;\n"
+                 "    float ts, tc, tq, r2, sc, gp, Qr, rr, X1, Y1;\n"
+                 "    float dnp, dlp, dnu[9], dlr[9];\n")
+_TRI_ECC_XY = ("ob_xy_ecc(TT, per, av, o, &X, &Y, &front); "
+               "rr = metal::precise::sqrt(X * X + Y * Y); ts = X / rr; tc = -Y / rr; "
+               "ob_tri_sep(rr, av, tQ, rv, cm, &tq, &r2, &sc, &gp, &Qr); "
+               "X *= sc; Y *= ci * sc; " + _TRI_SET)
+
+
+def _tri_ecc(all_slots):
+    return dict(
+        inputs=["orb"], load=_TRI_ECC_LOAD, xy=_TRI_ECC_XY,
+        xyd=f"ob_xy_ecc_d(TT, per, av, o, &X, &Y, &front, &dXp, &dYp, dXt, dYt, "
+            f"{all_slots}); ob_tri_geo(X, Y, dXp, dYp, dXt, dYt, &rr, &ts, &tc, "
+            "&dnp, dnu, &dlp, dlr); "
+            "ob_tri_sep(rr, av, tQ, rv, cm, &tq, &r2, &sc, &gp, &Qr); "
+            "ob_tri_scale(ci, sc, &X, &Y, &dXp, &dYp, dXt, dYt, &X1, &Y1); "
+            + _TRI_SET,
+        nth=10, tidal=True, live="10", dphi="g_nu * dnp + g_lr * dlp",
+        post="            float g_lr, g_la, g_cm;\n"
+             "            { float r22 = r2 * r2;\n"
+             "              ob_tri_sep_chain(tq, r2, sc, gp, Qr, rv, av, rr, r22 * r22 * r2,\n"
+             "                               X1, Y1, g, &g_lr, &g_la, &g_cm); }\n",
+        th="            for (int k = 0; k < 9; ++k) a_th[k] += w * (g_nu * dnu[k] + g_lr * dlr[k]);\n"
+           "            a_th[0] += w * g_la / av;\n"
+           "            a_th[1] += w * g_ci;\n"
+           "            a_th[9] += w * g_cm;\n")
+
+
+_OB_ORBITS["triecc"] = _tri_ecc("false")
+_OB_ORBITS["trieccew"] = _tri_ecc("true")
 
 _OB_HEAD = """
     uint x = thread_position_in_grid.x;
@@ -1294,6 +1536,22 @@ _CT_BASIS = ("    float wct[HYB_NCOL];\n"
              "    float ctv = 1.0f;\n")
 
 
+# the VJP body's two chain points, for the tidal plug-ins only
+_TRI_PHI = "            float dFdphi = g[0] * dXp + g[1] * dYp;\n"
+_TRI_TH = ("            for (int k = 0; k < NTH; ++k) a_th[k] += w * "
+           "(g[0] * dXt[k] + g[1] * dYt[k]);\n")
+
+
+def _tri_vjp(body, plug):
+    assert body.count(_TRI_PHI) == 1 and body.count(_TRI_TH) == 1
+    chain = ("            float g_nu, g_ci;\n"
+             "            ob_tri_chain(tf, ts, tc, ci, si, tq, tw, r, fl, g, "
+             "&g_nu, &g_ci);\n" + plug.get("post", ""))
+    return (body.replace(_TRI_PHI, chain + _TRI_PHI.replace(
+                ";\n", f" + {plug['dphi']};\n"))
+                .replace(_TRI_TH, _TRI_TH + plug["th"]))
+
+
 def _nslot(law, orbit, basis):
     """gpar slots: per, theta..., r, f, theta_sky, then n_w weights."""
     return 4 + _OB_ORBITS[orbit]["nth"] + (0 if basis else get_law(law).n_w)
@@ -1304,6 +1562,8 @@ def _src(body: str, orbit: str, law, basis: bool, vjp: bool) -> str:
     plug = _OB_ORBITS[orbit]
     nth = plug["nth"]
     nw = 0 if basis else get_law(law).n_w
+    if plug.get("tidal") and vjp:
+        body = _tri_vjp(body, plug)
     s = (body.replace("ORB_LOAD\n", plug["load"])
              .replace("W_LOADS", "" if basis else _W_LOADS)
              .replace("CT_LOAD", _CT_BASIS if basis else _CT_SCALAR))
@@ -1334,10 +1594,12 @@ def _src(body: str, orbit: str, law, basis: bool, vjp: bool) -> str:
 
 def _header(law, orbit):
     hdr = M._HEADER + M._phot_header()
-    if orbit in ("ecc", "eccew"):
+    if orbit in ("ecc", "eccew", "triecc", "trieccew"):
         hdr += M._ecc_header()
         hdr += M._subst(_OB_ECC_FN.replace("SOLVE", M._SOLVE))
     hdr += M._subst(_OB_ORBIT_FN)
+    if orbit.startswith("tri"):
+        hdr += M._subst(_OB_TRI_FN)
     return hdr + _ob_header(law) + M._subst(_OB_PHOT_FN)
 
 
@@ -1405,11 +1667,13 @@ def _make_core(law, exp_time, mode, n_gl, n_sub, orbit, basis):
             grid=(m, n, 1), threadgroup=(256, 1, 1))
         g = mx.sum(gpar, axis=2)
         g_per, g_a = g[:, 0], g[:, 1]
-        if orbit == "circ":
+        if orbit in ("circ", "tri"):
             g_shape = g[:, 2]
         else:
-            g_shape = mx.zeros((n, M.NORB), dtype=g.dtype)
-            g_shape[:, mx.array(M._ECC_TH_COLS)] = g[:, 2:1 + nth]
+            tri = orbit.startswith("tri")
+            g_shape = mx.zeros((n, M.NORB + int(tri)), dtype=g.dtype)
+            cols = M._ECC_TH_COLS + ([M.NORB] if tri else [])
+            g_shape[:, mx.array(cols)] = g[:, 2:1 + nth]
         g_r, g_f, g_th = g[:, 1 + nth], g[:, 2 + nth], g[:, 3 + nth]
         ws = () if basis else (g[:, 4 + nth:4 + nth + law.n_w],)
         return (gtau, g_per, g_a, g_shape, g_r, g_f, g_th, *ws,
@@ -1430,33 +1694,46 @@ def _make_core(law, exp_time, mode, n_gl, n_sub, orbit, basis):
 
 def flux_dev_from_tau_oblate_kernel(tau2d, per_c, a_c, b_c, r_c, f_c, th_c,
                                     w2d, exp_time, mode, n_gl, n_sub, law,
-                                    basis=False, k=None, h=None, ew=False):
+                                    basis=False, k=None, h=None, ew=False,
+                                    tidal=False, cm=None):
     """The fp32 kernel route of ``oblate_tau.flux_dev_from_tau_oblate``:
     canonical (n,) parameters in, (n, m) or (n, m, ncol) out. Contacts are
     the oblate per-side ones (detached), as tau offsets, solved only for
     the contact rule (the other rules never read them). ``ew``: (k, h)
-    hold (e, w) (oblate_tau._orbit_consts)."""
-    from .oblate_tau import _contact_kh, _orbit_consts
+    hold (e, w) (oblate_tau._orbit_consts). ``tidal``: (r_c, f_c, th_c)
+    hold (rv, q, tw), cm the offset's coefficient; a circular chain's
+    (a_c, b_c) hold the offset already."""
+    from .oblate_tau import _contact_kh, _orbit_consts, _tidal_g, _tidal_r2
     n = tau2d.shape[0]
     ecc = k is not None
     contact = mode == M._INT_CONTACT and exp_time > 0.0
+    if tidal and not ecc:
+        # the slot takes r2: the map from rv is ordinary autodiff
+        r_c = _tidal_r2(r_c, f_c)
+    q_c = f_c
     if ecc:
         from .anchored import pack_orbit_constants
         ci, consts = _orbit_consts(a_c, b_c, k, h, ew)
         shape = pack_orbit_constants(None, None, ci, consts=consts)
+        if tidal:
+            shape = mx.concatenate([shape, (cm / a_c ** 4)[:, None]], axis=1)
+            f_c = _tidal_g(q_c)
         if contact:
             kc, hc = _contact_kh(k, h, ew)
-            cs = contact_offsets_oblate_kernel(a_c, b_c, r_c, f_c, th_c, kc, hc,
-                                               ci, consts=consts)
+            cs = contact_offsets_oblate_kernel(a_c, b_c, r_c, q_c, th_c, kc, hc,
+                                               ci, consts=consts, tidal=tidal,
+                                               cm=cm)
     else:
         shape = b_c
         if contact:
-            cs = contact_offsets_oblate_kernel(a_c, b_c, r_c, f_c, th_c)
+            cs = contact_offsets_oblate_kernel(a_c, b_c, r_c, f_c, th_c,
+                                               tidal=tidal)
     if contact:
         cs = mx.stop_gradient(cs * (per_c / (2.0 * math.pi))[:, None])
     else:
         cs = mx.zeros((n, 4), dtype=tau2d.dtype)
     orbit = "circ" if not ecc else ("eccew" if ew else "ecc")
+    orbit = {"circ": "tri", "ecc": "triecc", "eccew": "trieccew"}[orbit] if tidal else orbit
     core = _make_core(law, exp_time, mode, n_gl, n_sub, orbit, basis)
     ws = () if basis else (w2d,)
     return core(tau2d, per_c, a_c, shape, r_c, f_c, th_c, *ws, cs)
@@ -1534,6 +1811,7 @@ inline void ob_q_slope(float phi, ORB_ARGS, float A, float B, float cth,
     float X, Y, dXp, dYp, dXt[NTH], dYt[NTH];
     bool front;
     ORB_XYD
+    ORB_SHAPE
     float x0 = X * cth + Y * sth, y0 = -X * sth + Y * cth;
     float dx0 = dXp * cth + dYp * sth, dy0 = -dXp * sth + dYp * cth;
     float best = (kind > 0) ? -INFINITY : INFINITY, psi = 0.0f;
@@ -1609,7 +1887,43 @@ _OB_CONTACT_ORBITS = {
                 load="    float o[NORB_I];\n"
                      "    for (int c = 0; c < NORB_I; ++c) o[c] = orb[y * NORB_C + (uint)c];\n",
                 inputs=["orb"], nth=9),
+    # the outline at the current phase; the slope leaves out its motion,
+    # so a step contracts at about r q / a (oblate_tau's docstring). r2, q
+    # and the twist come in the r, f and theta slots
+    "tri": dict(args="float av, float bv, float si, float r2, float tq, ob_tw tw",
+                pass_="av, bv, si, r2, tq, tw",
+                xyd="ob_xy_circ_d(phi, MP_TWO_PI, av, bv, &X, &Y, &front, &dXp, &dYp, dXt, dYt);",
+                shape="    float ts_ = dXt[0], tc_ = -dYt[1], ci = bv / av;\n",
+                load="    float bv = bin[y];\n"
+                     "    float si = ob_si(bv / av), r2 = rin[y], tq = fin[y];\n"
+                     "    ob_tw tw = ob_twist(thin[y]);\n",
+                inputs=["bin"], nth=2),
+    "triecc": dict(args="float av, thread const float *o, float ci, float si, "
+                        "float rv, float tQ, float cm, ob_tw tw",
+                   pass_="av, o, ci, si, rv, tQ, cm, tw",
+                   xyd="ob_xy_ecc_d(phi, MP_TWO_PI, av, o, &X, &Y, &front, &dXp, &dYp, dXt, dYt, false);",
+                   shape="    float rr_ = metal::precise::sqrt(X * X + Y * Y);\n"
+                         "    float ts_ = X / rr_, tc_ = -Y / rr_;\n"
+                         "    float tq, r2, sc_, gp_, Qr_;\n"
+                         "    ob_tri_sep(rr_, av, tQ, rv, cm, &tq, &r2, &sc_, &gp_, &Qr_);\n"
+                         "    X *= sc_; Y *= ci * sc_; dYp *= ci;\n",
+                   load="    float o[NORB_I];\n"
+                        f"    for (int c = 0; c < NORB_I; ++c) o[c] = orb[y * {_TRI_STRIDE} + (uint)c];\n"
+                        f"    float cm = orb[y * {_TRI_STRIDE} + NORB_C];\n"
+                        "    float ci = o[10];\n"
+                        "    o[10] = 1.0f;\n"
+                        "    float si = ob_si(ci), rv = rin[y], tQ = fin[y];\n"
+                        "    ob_tw tw = ob_twist(thin[y]);\n",
+                   inputs=["orb"], nth=10),
 }
+
+
+_TRI_CONTACT_SHAPE = """    ob_tri tf;
+    float r_, fl_, sq_;
+    ob_tri_frame(ts_, tc_, ci, si, tq, r2, tw, tf, &r_, &fl_, &cth, &sth, &sq_);
+    A = r_ / sq_;
+    B = r_ * sq_;
+"""
 
 
 def _contact_kernel(orbit):
@@ -1618,7 +1932,10 @@ def _contact_kernel(orbit):
         plug = _OB_CONTACT_ORBITS[orbit]
 
         def fill(src):
-            src = (src.replace("ORB_ARGS", plug["args"])
+            shape = plug.get("shape", "")
+            src = (src.replace("    ORB_SHAPE\n",
+                               shape + (_TRI_CONTACT_SHAPE if shape else ""))
+                      .replace("ORB_ARGS", plug["args"])
                       .replace("ORB_PASS", plug["pass_"])
                       .replace("ORB_XYD", plug["xyd"])
                       .replace("ORB_LOAD\n", plug["load"])
@@ -1630,9 +1947,12 @@ def _contact_kernel(orbit):
                 assert marker not in src, f"unexpanded {marker} in contact kernel"
             return src
         hdr = M._HEADER + M._phot_header()
-        if orbit == "ecc":
+        if orbit in ("ecc", "triecc"):
             hdr += M._ecc_header() + M._subst(_OB_ECC_FN.replace("SOLVE", M._SOLVE))
-        hdr += M._subst(_OB_ORBIT_FN) + fill(_OB_CONTACT_FN)
+        hdr += M._subst(_OB_ORBIT_FN)
+        if orbit.startswith("tri"):
+            hdr += M._subst(_OB_TRI_FN)
+        hdr += fill(_OB_CONTACT_FN)
         M._kernels[key] = mx.fast.metal_kernel(
             name=f"mp_ocontacts_{orbit}",
             input_names=["ain"] + plug["inputs"] + ["rin", "fin", "thin", "st", "nchain"],
@@ -1641,22 +1961,35 @@ def _contact_kernel(orbit):
 
 
 def contact_offsets_oblate_kernel(a, b, r, f, theta, k=None, h=None, ci=None,
-                                  consts=None):
+                                  consts=None, tidal=False, cm=None):
     """``oblate_tau.contact_offsets_oblate`` in one fp32 kernel launch:
-    (n, 4) contact phases, detached. Same arguments."""
+    (n, 4) contact phases, detached. Same arguments; with ``tidal``, (r, f,
+    theta) hold (r2, q, tw) on a circular orbit, the tau kernels' slots, and
+    (rv, q, tw) on an eccentric one, with the offset's coefficient cm."""
     from .exposure import contact_offsets
+    from .oblate_tau import _tidal_bound, _tidal_g
     a, b, r, f, theta = (mx.stop_gradient(v) for v in (a, b, r, f, theta))
-    A = r / mx.sqrt(1.0 - f)
+    if not tidal:
+        A = r / mx.sqrt(1.0 - f)
+    elif k is None:
+        A = 1.01 * r * mx.maximum(1.0 + 3.0 * f, 1.0 - f)
+    else:
+        A = _tidal_bound(r, f, mx.stop_gradient(k * k + h * h))
     n = a.shape[0]
     if k is None:
-        orbit, shape = "circ", b
+        orbit, shape = ("tri" if tidal else "circ"), b
         cA = contact_offsets(A, a, b)
     else:
         from .anchored import anchor_constants, pack_orbit_constants
         k, h, ci = (mx.stop_gradient(v) for v in (k, h, ci))
         consts = tuple(mx.stop_gradient(c) for c in
                        (anchor_constants(k, h) if consts is None else consts))
-        orbit, shape = "ecc", pack_orbit_constants(k, h, ci, consts=consts)
+        orbit = "triecc" if tidal else "ecc"
+        shape = pack_orbit_constants(k, h, ci, consts=consts)
+        if tidal:
+            shape = mx.concatenate([shape, (mx.stop_gradient(cm) / a ** 4)[:, None]],
+                                   axis=1)
+            f = _tidal_g(f)
         cA = M.contact_offsets_anchored_kernel(A, a, b, k, h, ci, consts=consts)
         cA = [cA[:, j] for j in range(4)]
     st = mx.stack([mx.broadcast_to(c, (n,)) for c in cA], axis=1)

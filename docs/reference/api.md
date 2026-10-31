@@ -155,7 +155,7 @@ Per-chain parameters in, per-chain light curves out, with analytic gradients. Se
 ### `flux_dev_from_tau`
 
 ```python
-flux_dev_from_tau(tau: mx.array, period, a, b, r, u1=None, u2=None, *, exp_time: float = 0.0, integration: str = 'contact', n_gl: int = 5, n_sub: int = 1, ld_basis: bool = False, secosw=None, sesinw=None, limb_dark: str = 'quadratic', u=None, f=None, theta=None, ring_in=None, ring_out=None, ring_f=None, ring_tau=None, spots=None, spot_time=None, prot=None, istar=None, lam=None, transittype: str = 'primary', fp=None) -> mx.array
+flux_dev_from_tau(tau: mx.array, period, a, b, r, u1=None, u2=None, *, exp_time: float = 0.0, integration: str = 'contact', n_gl: int = 5, n_sub: int = 1, ld_basis: bool = False, secosw=None, sesinw=None, limb_dark: str = 'quadratic', u=None, f=None, theta=None, ring_in=None, ring_out=None, ring_f=None, ring_tau=None, spots=None, spot_time=None, prot=None, istar=None, lam=None, transittype: str = 'primary', fp=None, tidal_q=None, mass_ratio=None) -> mx.array
 ```
 
 ```text
@@ -227,6 +227,21 @@ Args:
         fp32, below f = 1e-5 a chain's value is the spherical forms'
         (the flattening's effect is under 4e-8), with d/df taken from
         the ellipse at f = 1e-5, so a fit can start at f = 0.
+    tidal_q, mass_ratio: a tidally locked triaxial planet, ellc's "love"
+        model (``oblate_tau``), in place of f: axes r1 = r2 (1 + 3 q)
+        pointing at the star at every instant, r2 along the orbit and
+        r3 = r2 (1 - q) along its normal, so its outline changes through
+        the transit. ``tidal_q`` is q at the separation a, scalar or
+        (n,); on an eccentric orbit q follows the separation at fixed
+        volume. ``mass_ratio`` = Mp / M*, scalar or (n,), adds ellc's
+        offset of the ellipsoid towards the star; None leaves it out.
+        ``theta`` turns (r2, r3) about the nose [rad], default 0, as
+        ellc has it. ``r`` is the volumetric radius (r1 r2 r3)^(1/3), not
+        the oblate mode's area-equivalent one. -1/3 < q < 1, the sign
+        free, so that a sphere (q = 0, with a usable d/dq) is not an
+        edge; the longest axis squared must not exceed the shortest. An
+        h_f goes through ``tidal_q_from_hf``. Primary transits, hybrid
+        laws. The same kernels and graph as f=, at about the same cost.
     ring_in, ring_out, ring_f, ring_tau: a ring in the planet's
         equatorial plane (``elome.rings``): inner and outer radii in
         units of ``r``, projected flattening ring_f = 1 - |cos i| of the
@@ -339,7 +354,7 @@ weights selects a hybrid law, as in ``flux_dev_from_tau``.
 ### `contact_offsets_oblate`
 
 ```python
-contact_offsets_oblate(a, b, r, f, theta, k=None, h=None, ci=None)
+contact_offsets_oblate(a, b, r, f, theta, k=None, h=None, ci=None, tidal=False, mass_ratio=None)
 ```
 
 ```text
@@ -355,7 +370,61 @@ number, a numpy array or an mx.array, broadcast together; the result
 has their broadcast shape. Computed in float64 (on the CPU stream)
 unless every array argument is float32. A missing contact collapses
 onto a point inside the transit (the inner pair of a graze), or all
-four onto one point (no transit).
+four onto one point (no transit). ``tidal``: (r, f, theta) hold
+(rv, q, tw) (``contact_offsets_tidal``), with its ``mass_ratio``.
+```
+
+### `contact_offsets_tidal`
+
+```python
+contact_offsets_tidal(a, b, rv, q, theta=0.0, k=None, h=None, ci=None, mass_ratio=None)
+```
+
+```text
+``contact_offsets_oblate`` for a tidally locked planet of volumetric
+radius rv, shape q and twist theta about its nose [rad]: its four
+contact phases, ordered and detached. Inputs as there; ``mass_ratio``
+as ``flux_dev_from_tau``'s.
+```
+
+### `tidal_q_from_hf`
+
+```python
+tidal_q_from_hf(hf, mass_ratio, a, rv)
+```
+
+```text
+``tidal_q`` from the fluid Love number, by ellc's relation: q =
+h_f r2^3 / (2 mu a^3) with r2 the axis along the orbit, whose form in
+the volumetric radius is the cubic q (1 + 3 q)(1 - q) = h_f R_V^3 /
+(2 mu a^3). mass_ratio = mu = Mp / M*; a and rv in the same unit.
+MLX arrays in, MLX out, differentiable; numbers in, numbers out.
+```
+
+### `tidal_hf_from_q`
+
+```python
+tidal_hf_from_q(q, mass_ratio, a, rv)
+```
+
+```text
+The inverse of ``tidal_q_from_hf``: 2 mu (a / r2)^3 q.
+```
+
+### `oblate_tau.tidal_outline`
+
+```python
+tidal_outline(s, c, ci, rv, q, tw)
+```
+
+```text
+(r, f, theta) of a locked planet's outline, for
+``shape_cols_oblate`` and ``principal_frame``: the area-equivalent
+radius, the flattening and the long axis's sky angle [rad]. (s, c): sin,
+cos of the angle along the orbit from conjunction; ci = cos i; rv the
+volumetric radius; q in (-1/3, 1); tw the twist about the nose [rad].
+MLX arrays. Differentiable in all of them through q = 0, where f = 0:
+an f and theta taken from S itself are not.
 ```
 
 ### `ring_kinks`
