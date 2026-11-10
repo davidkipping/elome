@@ -1087,8 +1087,9 @@ class TransitModel:
 
     def _oblate_eclipse_fn(self, orbit: str):
         """The compiled oblate secondary eclipse, 1 + fp (1 + the visible
-        fraction's deviation): the graph only (oblate_tau's
-        eclipse_dev_from_tau_oblate), on this model's own grid; ``orbit``
+        fraction's deviation): oblate_tau's eclipse_dev_from_tau_oblate
+        (the Metal kernel on an fp32 GPU model with use_metal, the graph
+        otherwise), on this model's own grid; ``orbit``
         as _oblate_fn's, the argument after theta fp instead of the
         weights."""
         key = ("oblate-eclipse", orbit)
@@ -1096,6 +1097,7 @@ class TransitModel:
         if fn is not None:
             return fn
         from . import oblate_tau
+        use_metal = self.use_metal
 
         def raw(tt, t0, per, a, b, rp, f, th, fp, k=None, h=None,
                 blocks=False):
@@ -1103,7 +1105,7 @@ class TransitModel:
             tau = tau - per * mx.round(tau / per)
             return 1.0 + fp * (1.0 + oblate_tau.eclipse_dev_from_tau_oblate(
                 tau, per, a, b, rp, f, th, k=k, h=h, ew=orbit == "ew",
-                compile_blocks=blocks))
+                compile_blocks=blocks, use_metal=use_metal))
         whole = mx.compile(raw)
 
         def fn(tt, t0, *rest):

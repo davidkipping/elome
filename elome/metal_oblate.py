@@ -1798,6 +1798,324 @@ def flux_dev_from_tau_oblate_kernel(tau2d, per_c, a_c, b_c, r_c, f_c, th_c,
 
 
 # ---------------------------------------------------------------------------
+# secondary eclipses: a uniform oblate planet behind the star
+# ---------------------------------------------------------------------------
+#
+# The visible fraction minus 1 is minus the area of the outline inside the
+# star's disc over pi r^2 (oblate_tau._eclipse_graph). That area is the
+# uniform generator of ob_eval, occ[0], and needs only the limb crossings:
+# no pole levels, so one quartic per point where a transit solves one per
+# pole as well. The solve is the transit's (ob_crossings, ob_arcs, built
+# with the same fast transcendentals); the live part below is ob_eval's
+# n = 0 term written out, templated the same way for its tangents. Below
+# f_sw the value is the sphere's (metal_eclipse.mp_ecl_vis) and d/df comes
+# from the ellipse at f = f_sw, as ob_cols_bd's. The orbit plug-ins are
+# _OB_ORBITS' circular and eccentric ones; exposure is none or
+# supersampling (an eclipse has no contact rule).
+
+_ECL_OB_FN = r"""
+struct ob_ecl_fz { int regime; float lo, hi, dth; };   // ob_frozen's first part
+
+// ob_solve without the pole levels
+inline void ob_ecl_solve(float x0, float y0, float A, float B,
+                         thread ob_ecl_fz &fz) {
+    fz.regime = 0;
+    fz.lo = 0.0f; fz.hi = 0.0f; fz.dth = 0.0f;
+    float d = metal::precise::sqrt(x0 * x0 + y0 * y0);
+    if (d - A >= 1.0f) return;
+    if (d + A < 1.0f) { fz.regime = 1; return; }
+    float2 S1 = float2(A * x0, -(B * y0));
+    float S2 = 0.25f * (A * A - B * B);
+    float pa, pb;
+    float2 z[4];
+    int cnt = ob_crossings(x0, y0, A, B, ob_use_ferrari(S1, S2), &pa, &pb, z);
+    if (cnt == 2) {
+        fz.regime = 2;
+        ob_arcs(x0, y0, A, B, pa, pb, &fz.lo, &fz.hi, &fz.dth);
+    } else if (d < 1.0f) {
+        fz.regime = 1;
+    }
+}
+
+// the area of the ellipse inside the disc: ob_eval's occ[0]
+template <typename T>
+inline T ob_ecl_area(T x0, T y0, T A, T B, thread const ob_ecl_fz &fz,
+                     float x0f, float y0f, float Af, float Bf) {
+    if (fz.regime == 0) return T(0.0f);
+    T K0 = A * B;
+    if (fz.regime == 1) return MP_PI * K0;
+    float lo = fz.lo, hi = fz.hi;
+    float mid = 0.5f * (lo + hi), hlf = 0.5f * (hi - lo);
+    float cl = metal::precise::cos(lo), sl = metal::precise::sin(lo);
+    float ch = metal::precise::cos(hi), sh = metal::precise::sin(hi);
+    T vlo = (x0f + Af * cl) * (y0 + B * sl) - (y0f + Bf * sl) * (x0 + A * cl);
+    T vhi = (x0f + Af * ch) * (y0 + B * sh) - (y0f + Bf * sh) * (x0 + A * ch);
+    T v = vlo - vhi;
+    T star = fz.dth + (v - t_nograd(v));
+    float cm_ = metal::precise::cos(mid), sm_ = metal::precise::sin(mid);
+    float sn = metal::precise::sin(hlf);
+    // c_1 = K1 = (B x0 / 2, -A y0 / 2): 4 sin(half) Re(c_1 e^{i mid})
+    T E = K0 * (hi - lo) + (2.0f * sn) * (B * x0 * cm_ + A * y0 * sm_);
+    return 0.5f * (E + star);
+}
+
+// the visible fraction - 1 at sky (X, Y)
+inline float ob_ecl_vis(float X, float Y, float r, float fl, float cth,
+                        float sth, float sqf) {
+    if (!(r > 0.0f)) return 0.0f;
+    if (fl < OB_FSW) {
+        float z = metal::precise::sqrt(max(X * X + Y * Y, KITE_FLOOR));
+        float dz, dr;
+        return mp_ecl_vis(z, r, &dz, &dr);
+    }
+    float x0 = X * cth + Y * sth, y0 = -X * sth + Y * cth;
+    float A = r / sqf, B = r * sqf;
+    ob_ecl_fz fz;
+    ob_ecl_solve(x0, y0, A, B, fz);
+    return -ob_ecl_area<float>(x0, y0, A, B, fz, x0, y0, A, B) / (MP_PI * r * r);
+}
+
+// ... and its gradient g = d/d(X, Y, r, f, theta)
+inline float ob_ecl_vis_d(float X, float Y, float r, float fl, float cth,
+                          float sth, float sqf, thread float *g) {
+    for (int c = 0; c < 5; ++c) g[c] = 0.0f;
+    if (!(r > 0.0f)) return 0.0f;
+    bool sph = fl < OB_FSW;
+    float val = 0.0f;
+    if (sph) {
+        float z2 = X * X + Y * Y;
+        float z = metal::precise::sqrt(max(z2, KITE_FLOOR));
+        float dz, dr;
+        val = mp_ecl_vis(z, r, &dz, &dr);
+        if (z2 > KITE_FLOOR) { g[0] = dz * X / z; g[1] = dz * Y / z; }
+        g[2] = dr;
+    }
+    float sq = sph ? metal::precise::sqrt(1.0f - OB_FSW) : sqf;
+    float x0 = X * cth + Y * sth, y0 = -X * sth + Y * cth;
+    float A = r / sq, B = r * sq;
+    ob_ecl_fz fz;
+    ob_ecl_solve(x0, y0, A, B, fz);
+    dv ar = ob_ecl_area<dv>(dv(x0, float4(1.0f, 0.0f, 0.0f, 0.0f)),
+                            dv(y0, float4(0.0f, 1.0f, 0.0f, 0.0f)),
+                            dv(A, float4(0.0f, 0.0f, 1.0f, 0.0f)),
+                            dv(B, float4(0.0f, 0.0f, 0.0f, 1.0f)),
+                            fz, x0, y0, A, B);
+    float s = -1.0f / (MP_PI * r * r);
+    float4 t = s * ar.d;
+    g[3] = (t.z * A - t.w * B) / (2.0f * sq * sq);
+    if (sph) return val;
+    val = s * ar.v;
+    g[0] = t.x * cth - t.y * sth;
+    g[1] = t.x * sth + t.y * cth;
+    g[2] = t.z / sq + t.w * sq - 2.0f * val / r;
+    g[4] = t.x * y0 - t.y * x0;
+    return val;
+}
+"""
+
+_ECL_OB_HEAD = """
+    uint x = thread_position_in_grid.x;
+    uint y = thread_position_in_grid.y;
+    if (x >= (uint)npts) return;
+    uint i = y * (uint)npts + x;
+
+    float tau0 = taui[i];
+    float per = perin[y];
+    float av  = ain[y];
+ORB_LOAD
+    float r   = rin[y];
+    float fl  = fin[y];
+    float th  = thin[y];
+    float cth = metal::precise::cos(th), sth = metal::precise::sin(th);
+    float sqf = metal::precise::sqrt(1.0f - fl);
+    float hw_exp = 0.5f * expt;
+    int n_node = (mode == MODE_SUPER) ? max(nsub, 1) : 1;
+    // a node whose centre is further from the star's than 1 + the long
+    // semi-axis adds exactly nothing (with rounding room; NaN skips it)
+    float lim2 = 1.0f + 1.001f * fabs(r) / sqf;
+    lim2 *= lim2;
+"""
+
+_ECL_OB_FWD = _ECL_OB_HEAD + """
+    float X, Y;
+    bool front;
+    float acc = 0.0f;
+    for (int j = 0; j < n_node; ++j) {
+ECL_NODE        ORB_XY(tt)
+        if (!front && X * X + Y * Y < lim2)
+            acc += ob_ecl_vis(X, Y, r, fl, cth, sth, sqf);
+    }
+    out[i] = acc / (float)n_node;
+"""
+
+# per-point gradient in tau; per-chain slots (per, theta..., r, f, theta_sky)
+_ECL_OB_VJP = _ECL_OB_HEAD + """
+    float ctv = ct[i];
+    float X, Y, dXp, dYp;
+    float dXt[NTH], dYt[NTH];
+    bool front;
+    float g[5];
+    float p_per = 0.0f, p_r = 0.0f, p_f = 0.0f, p_ts = 0.0f;
+    float p_th[NTH];
+    for (int k = 0; k < NTH; ++k) p_th[k] = 0.0f;
+    float g_tau = 0.0f;
+    float cw = ctv / (float)n_node;
+    for (int j = 0; j < n_node; ++j) {
+ECL_NODE        ORB_XYD(tt)
+        if (front || !(X * X + Y * Y < lim2)) continue;
+        ob_ecl_vis_d(X, Y, r, fl, cth, sth, sqf, g);
+        float dfdtt = (g[0] * dXp + g[1] * dYp) * (MP_TWO_PI / per);
+        g_tau += cw * dfdtt;
+        p_per += cw * (-dfdtt * tt / per);
+        for (int k = 0; k < NTH; ++k) p_th[k] += cw * (g[0] * dXt[k] + g[1] * dYt[k]);
+        p_r  += cw * g[2];
+        p_f  += cw * g[3];
+        p_ts += cw * g[4];
+    }
+    gtau[i] = g_tau;
+    int n_live = TH_LIVE;                     // uniform over the simdgroup
+    p_per = metal::simd_sum(p_per);
+    for (int k = 0; k < NTH; ++k)
+        if (k < n_live) p_th[k] = metal::simd_sum(p_th[k]);
+    p_r  = metal::simd_sum(p_r);
+    p_f  = metal::simd_sum(p_f);
+    p_ts = metal::simd_sum(p_ts);
+    if (metal::simd_is_first()) {
+        uint ngrp = ((uint)npts + 31u) / 32u;
+        uint ob = y * NSLOT_C * ngrp + x / 32u;
+        gpar[ob] = p_per;
+        for (int k = 0; k < NTH; ++k)
+            if (k < n_live) gpar[ob + (1u + (uint)k) * ngrp] = p_th[k];
+        gpar[ob + (1u + NTH_U) * ngrp] = p_r;
+        gpar[ob + (2u + NTH_U) * ngrp] = p_f;
+        gpar[ob + (3u + NTH_U) * ngrp] = p_ts;
+    }
+"""
+
+
+def _ecl_ob_header(orbit):
+    from .metal_eclipse import _ecl_header
+    hdr = M._HEADER + M._phot_header() + _ecl_header()
+    if orbit in ("ecc", "eccew"):
+        hdr += M._ecc_header()
+        hdr += M._subst(_OB_ECC_FN.replace("SOLVE", M._SOLVE))
+    hdr += M._subst(_OB_ORBIT_FN)
+    # the transit's solve section up to its frozen struct, which (with
+    # everything after it) is per-law: the crossings need no law
+    head = _OB_FN.split(_LIVE_SPLIT)[0]
+    head = head[:head.index("// the frozen part of one point")]
+    src = head.replace("metal::precise::", "metal::fast::") + _ECL_OB_FN
+    for k, v in _OB_CONST.items():
+        src = src.replace(k, v)
+    assert "HYB_" not in src and "OB_" not in src.replace("ob_", ""), \
+        "unexpanded constant in the oblate eclipse header"
+    return hdr + M._subst(src)
+
+
+def _ecl_ob_src(body: str, orbit: str) -> str:
+    import re
+    from .metal_eclipse import _ECL_NODE
+    plug = _OB_ORBITS[orbit]
+    nth = plug["nth"]
+    s = body.replace("ORB_LOAD\n", plug["load"]).replace("ECL_NODE", _ECL_NODE)
+    s = re.sub(r"ORB_XYD\((\w+)\)", lambda m: plug["xyd"].replace("TT", m.group(1)), s)
+    s = re.sub(r"ORB_XY\((\w+)\)", lambda m: plug["xy"].replace("TT", m.group(1)), s)
+    s = (s.replace("TH_LIVE", plug["live"])
+          .replace("NSLOT_C", f"{nth + 4}u")
+          .replace("NTH_U", f"{nth}u")
+          .replace("NTH", str(nth))
+          .replace("NORB_I", str(M.NORB))
+          .replace("NORB_C", f"{M.NORB}u"))
+    for marker in ("ORB_", "TH_LIVE", "NTH", "NSLOT", "ECL_"):
+        assert marker not in s, f"unexpanded {marker} in oblate eclipse kernel"
+    return M._tau_src(s)
+
+
+def _get_ecl_kernels(orbit: str):
+    key = ("obl-ecl", orbit)
+    if key not in M._kernels:
+        hdr = _ecl_ob_header(orbit)
+        ins = (["taui", "perin", "ain"] + _OB_ORBITS[orbit]["inputs"]
+               + ["rin", "fin", "thin", "expt", "mode", "nsub", "npts"])
+        M._kernels[key] = (
+            mx.fast.metal_kernel(
+                name=f"mp_oecl_fwd_{orbit}", input_names=ins,
+                output_names=["out"], header=hdr,
+                source=_ecl_ob_src(_ECL_OB_FWD, orbit)),
+            mx.fast.metal_kernel(
+                name=f"mp_oecl_vjp_{orbit}", input_names=ins[:-1] + ["ct", "npts"],
+                output_names=["gtau", "gpar"], header=hdr,
+                source=_ecl_ob_src(_ECL_OB_VJP, orbit)))
+    return M._kernels[key]
+
+
+def _make_ecl_core(exp_time, mode, n_sub, orbit):
+    """custom_function over the oblate eclipse kernels. Primals: (tau2d,
+    period, a, shape, r, f, theta), as _make_core's without weights and
+    contacts."""
+    key = ("obl-ecl", orbit, float(exp_time), int(mode), int(n_sub))
+    if key in M._tau_cores:
+        return M._tau_cores[key]
+    nth = _OB_ORBITS[orbit]["nth"]
+    nslot = nth + 4
+
+    @mx.custom_function
+    def core(tau2d, period, a, shape, r, f, theta):
+        n, m = tau2d.shape
+        k = _get_ecl_kernels(orbit)[0]
+        return k(inputs=[tau2d, period, a, shape, r, f, theta, exp_time, mode,
+                         n_sub, int(m)],
+                 output_shapes=[(n, m)], output_dtypes=[mx.float32],
+                 grid=(m, n, 1), threadgroup=(256, 1, 1))[0]
+
+    @core.vjp
+    def _vjp(primals, cotangent, output):
+        ct = cotangent if isinstance(cotangent, mx.array) else cotangent[0]
+        tau2d = primals[0]
+        n, m = tau2d.shape
+        cols = (m + 31) // 32
+        k = _get_ecl_kernels(orbit)[1]
+        gtau, gpar = k(
+            inputs=[*primals, exp_time, mode, n_sub, ct, int(m)],
+            output_shapes=[(n, m), (n, nslot, cols)],
+            output_dtypes=[mx.float32] * 2, init_value=0.0,
+            grid=(m, n, 1), threadgroup=(256, 1, 1))
+        g = mx.sum(gpar, axis=2)
+        if orbit == "circ":
+            g_shape = g[:, 2]
+        else:
+            g_shape = mx.zeros((n, M.NORB), dtype=g.dtype)
+            g_shape[:, mx.array(M._ECC_TH_COLS)] = g[:, 2:1 + nth]
+        return (gtau, g[:, 0], g[:, 1], g_shape, g[:, 1 + nth], g[:, 2 + nth],
+                g[:, 3 + nth])
+
+    M._tau_cores[key] = core
+    return core
+
+
+def eclipse_vis_oblate_kernel(tau2d, per_c, a_c, b_c, r_c, f_c, th_c, k=None,
+                              h=None, ew=False, exp_time=0.0,
+                              mode=M._INT_NONE, n_sub=1):
+    """The fp32 kernel route of ``oblate_tau._eclipse_graph`` with an
+    exposure rule (none, or ``n_sub`` uniform nodes over ``exp_time`` for
+    mode metal._INT_SUPER): canonical (n,) parameters in, (n, m) out,
+    outside the domain not masked (the caller's). ``ew``: (k, h) hold
+    (e, w) (oblate_tau._orbit_consts)."""
+    if not (mode == M._INT_SUPER and exp_time != 0.0 and n_sub > 1):
+        mode, exp_time, n_sub = M._INT_NONE, 0.0, 1
+    if k is None:
+        orbit, shape = "circ", b_c
+    else:
+        from .anchored import pack_orbit_constants
+        from .oblate_tau import _orbit_consts
+        ci, consts = _orbit_consts(a_c, b_c, k, h, ew)
+        shape = pack_orbit_constants(None, None, ci, consts=consts)
+        orbit = "eccew" if ew else "ecc"
+    core = _make_ecl_core(exp_time, mode, n_sub, orbit)
+    return core(tau2d, per_c, a_c, shape, r_c, f_c, th_c)
+
+
+# ---------------------------------------------------------------------------
 # per-point access to the device functions (tests and diagnostics)
 # ---------------------------------------------------------------------------
 

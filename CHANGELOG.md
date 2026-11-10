@@ -27,9 +27,9 @@ every release is tagged `vX.Y.Z` in git.
   planet is a uniform disc of flux ratio `fp`, eclipsed by the star, on
   circular and eccentric orbits, with gradients in every parameter and
   per-set values in `light_curves`. Like the spherical eclipse it ignores
-  the limb-darkening law (any law is accepted), runs the MLX graph rather
-  than a Metal kernel, and takes supersampling only. At `f = 0` it is the
-  spherical eclipse to rounding.
+  the limb-darkening law (any law is accepted) and takes supersampling
+  only. A float32 model on the GPU runs it on a fused Metal kernel, the
+  MLX graph otherwise. At `f = 0` it is the spherical eclipse to rounding.
 - **Secondary eclipses in the sampler API.** `flux_dev_from_tau(...,
   transittype="secondary", fp=)` gives the eclipse of a spherical or
   oblate planet from per-chain parameters and each point's time since
@@ -37,8 +37,11 @@ every release is tagged `vX.Y.Z` in git.
   transits and eclipses together on one `tau`. `1 + dev` is
   `TransitModel`'s secondary-eclipse flux; `fp` takes per-chain values
   and a gradient; the limb-darkening arguments are optional and ignored;
-  exposures by supersampling. The MLX graph in either precision, safe
-  under `mx.compile`.
+  exposures by supersampling. In float32 on the GPU, spherical and oblate
+  eclipses run on fused Metal kernels with the supersampling inside them
+  (an oblate eclipse needs only the limb crossings, so its kernel costs a
+  fraction of the oblate transit's); float64 runs the MLX graph. Safe under
+  `mx.compile`.
 - **Transits and eclipses in one model: `elome.anvil.make_eclipse_flux`**,
   a batched model function any sampler can call (it needs no anvil): a
   secondary eclipse alone (`transittype="secondary"`) or with the

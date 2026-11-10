@@ -230,3 +230,117 @@ def test_errors():
         el.flux_dev_from_tau(TAU, PER, A, 0.3, 0.6, f=0.5, **kw)
     # exp_time = 0 makes the default contact rule instantaneous: allowed
     el.flux_dev_from_tau(TAU, PER, A, 0.3, R, integration="contact", **kw)
+
+
+# ---------------------------------------------------------------------------
+# the fp32 Metal kernels (metal_eclipse, metal_oblate)
+# ---------------------------------------------------------------------------
+
+needs_metal = pytest.mark.skipif(not el.metal_available(),
+                                 reason="the Metal kernels need a GPU")
+#: per-chain sets: the flattening spans the sphere, below f_sw, and a
+#: strongly flattened planet; b from central to grazing
+_KN = dict(a=[7.5, 7.8, 8.1, 8.4, 8.7, 9.0], b=[0.0, 0.17, 0.34, 0.51, 0.68, 0.85],
+           r=[0.06, 0.076, 0.092, 0.108, 0.124, 0.14], fp=[FP] * 6,
+           f=[0.0, 1e-6, 0.02, 0.1, 0.25, 0.4], theta=[-1.0, -0.54, -0.08, 0.38, 0.84, 1.3],
+           secosw=[0.25] * 6, sesinw=[-0.15] * 6)
+
+
+def _kernel_run(dtype, oblate, ecc, ss):
+    """Values, gradients in every parameter and tau's, of a weighted sum
+    through the eclipse; fp32-rounded inputs in either precision."""
+    names = ["a", "b", "r", "fp"] + (["f", "theta"] if oblate else []) + (
+        ["secosw", "sesinw"] if ecc else [])
+    c = float(el.occultation_offset(0.25, -0.15)) * PER if ecc else 0.5 * PER
+    tau = mx.array(np.tile(np.linspace(c - 0.12, c + 0.12, 1500), (6, 1)).astype(np.float32),
+                   dtype=dtype)
+    ps = [mx.array(np.asarray(_KN[k], np.float32), dtype=dtype) for k in names]
+    ct = mx.array(np.random.default_rng(5).normal(size=(6, 1500)), dtype=dtype)
+    xkw = dict(exp_time=EXP, integration="supersample", n_sub=ss) if ss > 1 else {}
+
+    def dev(t, *args):
+        d = dict(zip(names, args))
+        return el.flux_dev_from_tau(t, PER, d.pop("a"), d.pop("b"), d.pop("r"),
+                                    transittype="secondary", **d, **xkw)
+    out = dev(tau, *ps)
+    g = mx.grad(lambda t, *a: mx.sum(ct * dev(t, *a)),
+                argnums=tuple(range(len(ps) + 1)))(tau, *ps)
+    mx.eval(out, g)
+    return names, np.asarray(out, np.float64), [np.asarray(x, np.float64) for x in g]
+
+
+@needs_metal
+@pytest.mark.parametrize("ss", [1, 5], ids=["none", "supersample"])
+@pytest.mark.parametrize("ecc", [False, True], ids=["circular", "eccentric"])
+@pytest.mark.parametrize("oblate", [False, True], ids=["spherical", "oblate"])
+def test_kernel_matches_the_fp64_graph(oblate, ecc, ss):
+    """The fp32 kernels against the fp64 graph on the same (fp32-rounded)
+    inputs. The values' error is fp32's at a phase near pi (~1e-5 of fp at
+    the contacts, as the fp32 graph's); the gradients' is relative to each
+    one's largest element."""
+    with mx.stream(mx.gpu):
+        names, v32, g32 = _kernel_run(mx.float32, oblate, ecc, ss)
+    with mx.stream(mx.cpu):
+        _, v64, g64 = _kernel_run(mx.float64, oblate, ecc, ss)
+    assert np.any(v64 < 0.5 * FP) and np.any((v64 > 0.01 * FP) & (v64 < 0.99 * FP))
+    assert np.abs(v32 - v64).max() < 5e-5 * FP
+    for name, a, b in zip(["tau"] + names, g32, g64):
+        assert np.abs(a - b).max() <= 1e-3 * np.abs(b).max(), name
+
+
+@needs_metal
+def test_kernel_edges():
+    """A point planet is always visible, a planet in front of the star or
+    clear of it adds exactly nothing, totality is fp (1 + -1), and an
+    oblate set outside the domain is NaN alone."""
+    with mx.stream(mx.gpu):
+        tau = mx.array(np.linspace(-0.5 * PER, 0.5 * PER, 4001), dtype=mx.float32)
+        r = mx.array([0.0, 0.1, 0.1, 0.6], dtype=mx.float32)
+        f = mx.array([0.2, 0.0, 0.3, 0.5], dtype=mx.float32)
+        for kw in ({}, dict(f=f, theta=0.4)):
+            def loss(r):
+                return mx.sum(el.flux_dev_from_tau(tau, PER, A, 0.0, r,
+                                                   transittype="secondary", fp=FP, **kw))
+            out = np.asarray(el.flux_dev_from_tau(tau, PER, A, 0.0, r,
+                                                  transittype="secondary", fp=FP, **kw))
+            g = np.asarray(mx.grad(loss)(r))
+            assert np.all(out[0] == np.float32(FP)) and g[0] == 0.0
+            front = np.abs(np.asarray(tau)) < 0.25 * PER
+            assert np.all(out[1:3][:, front] == np.float32(FP))
+            assert np.abs(out[1:3].min(axis=1)).max() < 1e-6 * FP
+            if kw:
+                assert np.all(np.isnan(out[3])) and np.all(np.isfinite(out[:3]))
+
+
+@needs_metal
+@pytest.mark.parametrize("ecc", [0.0, 0.3])
+def test_transit_model_kernel_matches_its_graph(ecc):
+    """TransitModel's fp32 oblate eclipse, the kernel against use_metal=False's
+    graph: within two ulps of fp32's 1 (the flux is 1 + fp (...))."""
+    p = _params(ecc, 40.0, True)
+    t = T0 + 2 * PER + np.linspace(0.0, PER, 3001)
+    k = el.TransitModel(p, t, transittype="secondary", dtype=mx.float32).light_curve(p)
+    g = el.TransitModel(p, t, transittype="secondary", dtype=mx.float32,
+                        use_metal=False).light_curve(p)
+    assert k.min() < 1.0 + 0.5 * FP
+    assert np.abs(k - g).max() <= 2.0 * 2.0 ** -23
+
+
+def test_spherical_eclipse_never_touches_the_oblate_kernels():
+    """A spherical eclipse's kernel route imports none of the oblate Metal
+    code."""
+    import subprocess
+    import sys
+    code = r'''
+import sys, numpy as np, mlx.core as mx
+import elome as el
+tau = mx.array(np.linspace(1.6, 1.85, 101), dtype=mx.float32)
+for kw in ({}, dict(secosw=0.2, sesinw=0.1, exp_time=0.02, integration="supersample", n_sub=3)):
+    mx.eval(el.flux_dev_from_tau(tau, 3.45, 8.8, 0.3, 0.1, transittype="secondary",
+                                 fp=2e-3, **kw))
+print("IMPORTED:" + ",".join(m for m in ("elome.metal_oblate",) if m in sys.modules))
+'''
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                         timeout=600)
+    assert out.returncode == 0, out.stderr[-2000:]
+    assert out.stdout.strip().endswith("IMPORTED:"), out.stdout

@@ -12,9 +12,11 @@ the sky position is periodic in it).
 A spherical planet's visible fraction is the uniform-disc column s0 of
 ``solution.sn_dev`` at the planet's separation, with the near side pushed
 clear of the star (TransitModel's rule); an oblate planet's is
-``oblate_tau.eclipse_dev_from_tau_oblate``, imported only for one. The MLX
-graph only, in either precision (no Metal kernel); the exposure rule is
-"none" or "supersample", applied here for both.
+``oblate_tau.eclipse_dev_from_tau_oblate``, imported only for one. fp32
+data on the GPU stream takes the fused Metal kernels (``metal_eclipse``,
+``metal_oblate``), with the exposure rule in the kernel; anything else runs
+the MLX graph, fp64 on the CPU stream. The exposure rule is "none" or
+"supersample".
 
 Two orbit helpers for timing an eclipse: ``occultation_offset``, the time
 from transit to occultation in orbits, and ``light_travel_delay``, how
@@ -167,7 +169,8 @@ def eclipse_dev_from_tau(tau, period, a, b, r, fp, f=None, theta=None, k=None,
     (n, m) -- or (m,) for 1-D tau and no per-chain parameters. ``f`` given:
     an oblate planet (``theta`` defaulting to 0). ``mode``: metal._INT_NONE
     or _INT_SUPER (``n_sub`` uniform nodes over ``exp_time``, batman's
-    rule, as the transit graph's)."""
+    rule, as the transit graph's). fp32 on the GPU stream: the Metal
+    kernels, the exposure rule in them."""
     if tau.ndim not in (1, 2):
         raise ValueError(f"tau must be (m,) or (n, m); got {tau.shape}")
     oblate = f is not None
@@ -189,6 +192,22 @@ def eclipse_dev_from_tau(tau, period, a, b, r, fp, f=None, theta=None, k=None,
     per_c, a_c, b_c, r_c, fp_c = pc[:5]
     kh = pc[-2:] if ecc else [None, None]
     m = tau2d.shape[1]
+    if (tau2d.dtype == mx.float32 and M._gpu_stream_active()
+            and M.metal_available()):
+        if oblate:
+            from .metal_oblate import eclipse_vis_oblate_kernel
+            from .oblate import _in_domain
+            vis = eclipse_vis_oblate_kernel(tau2d, per_c, a_c, b_c, r_c,
+                                            *pc[5:7], *kh, exp_time=exp_time,
+                                            mode=mode, n_sub=n_sub)
+            vis = mx.where(_in_domain(r_c, pc[5])[:, None], vis, mx.nan)
+        else:
+            from .metal_eclipse import eclipse_vis_kernel
+            vis = eclipse_vis_kernel(tau2d, per_c, a_c, b_c, r_c, *kh,
+                                     exp_time=exp_time, mode=mode,
+                                     n_sub=n_sub)
+        out = mx.reshape(fp_c, (-1, 1)) * (1.0 + vis)
+        return out[0] if squeeze and n == 1 else out
     nodes = 1
     tt = tau2d
     if mode == M._INT_SUPER and exp_time != 0.0 and n_sub > 1:

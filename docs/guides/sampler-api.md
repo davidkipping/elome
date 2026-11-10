@@ -213,9 +213,9 @@ uniform disc of flux ratio `fp`: the same model as
 - Exposures take `integration="supersample"` (with `n_sub`) or none.
   The contact rule is for transits, and with `exp_time > 0` the default
   `integration="contact"` raises.
-- The eclipse runs as an MLX graph, in float32 on the GPU and float64 on
-  the CPU, not on the Metal kernels. It may be compiled. Rings, spots and
-  `ld_basis` are for transits.
+- In float32 on the GPU the eclipse runs on fused Metal kernels, with the
+  supersampling inside them; float64 runs the MLX graph on the CPU. It
+  may be compiled. Rings, spots and `ld_basis` are for transits.
 
 ## A transit and an eclipse together: `make_eclipse_flux`
 

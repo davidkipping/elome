@@ -49,8 +49,9 @@ eclipse = m2.light_curve(p)
 
 The orbit places the eclipse, as for a spherical planet (see
 {doc}`../spherical/light-curves`). Use `supersample_factor` for finite
-exposures; the contact rule is for primary transits. The eclipse runs as
-an MLX graph in float32 as well as float64, not on the GPU kernels.
+exposures; the contact rule is for primary transits. With
+`dtype=mx.float32` the eclipse runs on a GPU kernel of its own, as the
+transit does.
 
 ## Choosing the limb-darkening law
 

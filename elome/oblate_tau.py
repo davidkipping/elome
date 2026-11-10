@@ -981,16 +981,20 @@ def _eclipse_block_fn(ecc, ew, compiled):
 
 @fp64_on_cpu
 def eclipse_dev_from_tau_oblate(tau, period, a, b, r, f, theta, k=None,
-                                h=None, ew=False, compile_blocks=False):
+                                h=None, ew=False, compile_blocks=False,
+                                use_metal=True):
     """A uniform oblate planet's secondary eclipse: the visible fraction of
     its disc minus 1 (0 out of eclipse, -1 in totality), so that the flux
     is 1 + fp (1 + this). ``tau`` is (n, m) or (m,), the time since each
     point's mid-*transit* within half a period of it, as
     flux_dev_from_tau_oblate's (the orbit places the eclipse: near
     +-period / 2 on a circular orbit); arguments as there. The graph only,
-    with no kernel and no exposure rule (TransitModel supersamples on its
-    own grid); fp64 on the CPU stream in blocks of at most _OBLATE_BLOCK
-    points, each compiled once with ``compile_blocks``."""
+    with no exposure rule (TransitModel supersamples on its own grid).
+    fp32 data on the GPU stream takes the Metal kernel
+    (``metal_oblate.eclipse_vis_oblate_kernel``) unless ``use_metal`` is
+    False; anything else runs the graph, fp64 on the CPU stream in blocks of
+    at most _OBLATE_BLOCK points, each compiled once with
+    ``compile_blocks``."""
     if tau.ndim not in (1, 2):
         raise ValueError(f"tau must be (m,) or (n, m); got {tau.shape}")
     _check_domain(r, f)
@@ -1004,6 +1008,13 @@ def eclipse_dev_from_tau_oblate(tau, period, a, b, r, f, theta, k=None,
     rows = [M._canon_param(p, n, tau2d.dtype) for p in params]
     if tau2d.shape[0] != n:
         tau2d = mx.broadcast_to(tau2d, (n, tau2d.shape[1]))
-    out = _in_blocks(_eclipse_block_fn(ecc, ew, compile_blocks), tau2d, rows,
-                     1, _OBLATE_BLOCK)
+    if (use_metal and tau2d.dtype == mx.float32 and M._gpu_stream_active()
+            and M.metal_available()):
+        from .metal_oblate import eclipse_vis_oblate_kernel
+        from .oblate import _in_domain
+        out = eclipse_vis_oblate_kernel(tau2d, *rows, ew=ew)
+        out = mx.where(_in_domain(rows[3], rows[4])[:, None], out, mx.nan)
+    else:
+        out = _in_blocks(_eclipse_block_fn(ecc, ew, compile_blocks), tau2d,
+                         rows, 1, _OBLATE_BLOCK)
     return out[0] if squeeze and n == 1 else out
