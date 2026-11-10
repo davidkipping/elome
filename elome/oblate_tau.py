@@ -111,6 +111,27 @@ _N_CONTACT = {mx.float64: 14, mx.float32: 10}     # Newton steps in phase
 _FAR = 4.0               # far-side stand-in, |(X, Y)| > 1 + A for A < 1
 _T2_MIN = 1e-30          # the floor on a locked outline's squared anisotropy
 _TIDAL_G_RANGE = (-0.09, 0.6)   # q (1 + 3 q)(1 - q) on its monotonic branch
+_TIDAL_OFFSET_MAX = 0.1         # the offset over the periastron distance
+
+
+def _q_of_g(g, n=8):
+    """q on the branch through 0 with q (1 + 3 q)(1 - q) = g, by plain
+    Newton: numbers, numpy or MLX, no gradient."""
+    q = g / (1.0 + 2.0 * g)
+    for _ in range(n):
+        q = q - (q * (1.0 + 3.0 * q) * (1.0 - q) - g) / (1.0 + q * (4.0 - 9.0 * q))
+    return q
+
+
+def _long_axis(q):
+    """The ellipsoid's longest axis over its volumetric radius."""
+    u, v = 1.0 + 3.0 * q, 1.0 - q
+    return max(u, v) / (u * v) ** (1.0 / 3.0)
+
+
+# the q of the g range (-0.1311, 0.4699), and the longest axis inside it
+_TIDAL_Q_RANGE = tuple(_q_of_g(g, 60) for g in _TIDAL_G_RANGE)
+_TIDAL_LONG_MAX = max(_long_axis(q) for q in _TIDAL_Q_RANGE)
 
 
 # --------------------------------------------------------------------------
@@ -152,18 +173,26 @@ def _sky(phi, a, b, ecc):
 # a tidally locked planet's outline
 # --------------------------------------------------------------------------
 
-def tidal_outline(s, c, ci, rv, q, tw):
+def _tidal_pre(ci, tw):
+    """tidal_outline's per-set terms, (sin i, and the twist's sin^2, cos^2
+    and sin cos): for a caller that evaluates many phases of one set (the
+    contact solve)."""
+    si = mx.sqrt(mx.maximum(1.0 - ci * ci, 1e-12))
+    stw, ctw = sincos(tw)
+    return si, stw * stw, ctw * ctw, stw * ctw
+
+
+def tidal_outline(s, c, ci, rv, q, tw, pre=None):
     """(r, f, theta) of a locked planet's outline, for
     ``shape_cols_oblate`` and ``principal_frame``: the area-equivalent
     radius, the flattening and the long axis's sky angle [rad]. (s, c): sin,
     cos of the angle along the orbit from conjunction; ci = cos i; rv the
     volumetric radius; q in (-1/3, 1); tw the twist about the nose [rad].
     MLX arrays. Differentiable in all of them through q = 0, where f = 0:
-    an f and theta taken from S itself are not."""
+    an f and theta taken from S itself are not. ``pre``: _tidal_pre(ci, tw),
+    if the caller has it."""
     s2, c2, ci2 = s * s, c * c, ci * ci
-    si = mx.sqrt(mx.maximum(1.0 - ci2, 1e-12))
-    stw, ctw = sincos(tw)
-    sig, chi, kap = stw * stw, ctw * ctw, stw * ctw
+    si, sig, chi, kap = _tidal_pre(ci, tw) if pre is None else pre
     # (1 + 3 q)^2 = 1 + q al, (1 - q)^2 = 1 - q be
     al, be = 6.0 + 9.0 * q, 2.0 - q
     Txx = al * s2 - be * sig * c2
@@ -213,14 +242,24 @@ def tidal_q_from_hf(hf, mass_ratio, a, rv):
     h_f r2^3 / (2 mu a^3) with r2 the axis along the orbit, whose form in
     the volumetric radius is the cubic q (1 + 3 q)(1 - q) = h_f R_V^3 /
     (2 mu a^3). mass_ratio = mu = Mp / M*; a and rv in the same unit.
-    MLX arrays in, MLX out, differentiable; numbers in, numbers out."""
+    MLX arrays in, MLX out, differentiable; numbers in, numbers out. The
+    cubic has this root only for its right side within _TIDAL_G_RANGE and a
+    positive mass ratio: outside, numbers raise and MLX arrays give NaN."""
+    lo, hi = _TIDAL_G_RANGE
+    if any(isinstance(v, mx.array) for v in (hf, mass_ratio, a, rv)):
+        Q = 0.5 * hf / mass_ratio * (rv / a) ** 3
+        ok = (Q > lo) & (Q < hi) & (mass_ratio > 0.0)
+        return mx.where(ok, _tidal_q_solve(mx.clip(Q, lo, hi)), mx.nan)
+    hf, mass_ratio, a, rv = (np.asarray(v, dtype=np.float64)
+                             for v in (hf, mass_ratio, a, rv))
+    if not np.all(mass_ratio > 0.0):
+        raise ValueError(f"mass_ratio must be positive; got {mass_ratio}")
     Q = 0.5 * hf / mass_ratio * (rv / a) ** 3
-    if isinstance(Q, mx.array):
-        return _tidal_q_solve(Q)
-    Q = np.asarray(Q, dtype=np.float64)
-    q = Q / (1.0 + 2.0 * Q)
-    for _ in range(40):
-        q = q - (_tidal_g(q) - Q) / (1.0 + q * (4.0 - 9.0 * q))
+    if not np.all((Q > lo) & (Q < hi)):
+        raise ValueError(
+            f"h_f R_V^3 / (2 mu a^3) = {Q} is outside ({lo}, {hi}): no "
+            "ellipsoid of this model has that Love number")
+    q = _q_of_g(Q, 40)
     return float(q) if q.ndim == 0 else q
 
 
@@ -245,7 +284,7 @@ def _tidal_offset(a, b, rv, q, cm):
     return a1, b * a1 / a
 
 
-def _tidal_instant(phi, a, b, ecc, rv, q, tw, cm):
+def _tidal_instant(phi, a, b, ecc, rv, q, tw, cm, *pre):
     """(X, Y, dX/dphi, dY/dphi, front, r, f, theta): ``_sky`` and the
     outline. On a circular orbit (a, b) already hold the offset. On an
     eccentric one the shape and the offset follow the separation, nu comes
@@ -254,7 +293,8 @@ def _tidal_instant(phi, a, b, ecc, rv, q, tw, cm):
     if ecc is None:
         X, Y, dX, dY, front = sky_circular(phi, a, b)
         s, c = sincos(phi)
-        return (X, Y, dX, dY, front, *tidal_outline(s, c, b / a, rv, q, tw))
+        return (X, Y, dX, dY, front,
+                *tidal_outline(s, c, b / a, rv, q, tw, pre or None))
     ci, consts = ecc
     X, Y, dX, dY, front = sky_anchored(phi, a, 1.0, consts)
     rr = mx.sqrt(X * X + Y * Y)
@@ -262,7 +302,7 @@ def _tidal_instant(phi, a, b, ecc, rv, q, tw, cm):
     r2 = _tidal_r2(rv, qn)
     sc = 1.0 - cm * (r2 / a) ** 4 * r2 / rr
     return (X * sc, Y * ci * sc, dX, dY * ci, front,
-            *tidal_outline(X / rr, -Y / rr, ci, rv, qn, tw))
+            *tidal_outline(X / rr, -Y / rr, ci, rv, qn, tw, pre or None))
 
 
 def _tidal_bound(rv, q, e=None):
@@ -304,7 +344,7 @@ def _boundary_ext(x0, y0, A, B, kind):
 def _q_and_slope(phi, a, b, ecc, A, B, cth, sth, kind, tidal=None):
     """q (kind = -1: squared distance to the disc, 0 inside it) or M
     (kind = +1: squared largest boundary distance) at phase phi, and its
-    phase derivative; ``tidal`` = (rv, q, tw, cm) replaces the fixed
+    phase derivative; ``tidal`` = (rv, q, tw, cm, *pre) replaces the fixed
     outline by the locked planet's at phi, the slope leaving out its
     motion."""
     if tidal is None:
@@ -375,19 +415,26 @@ def contact_offsets_oblate(a, b, r, f, theta, k=None, h=None, ci=None,
                  else mx.array(np.asarray(v, dtype=np.float64), dtype=dt))
             return mx.reshape(mx.broadcast_to(x, shape), (n,))
 
+    checked = tidal and _check_tidal_orbit(a, b, r, f, k, h, ci=ci,
+                                           mass_ratio=mass_ratio)
     ctx = mx.stream(mx.cpu) if dt == mx.float64 else _nullctx()
     with ctx:
         a, b, r, f, theta = (norm(v) for v in (a, b, r, f, theta))
         if k is not None:
             k, h = norm(k), norm(h)
             ci = M._ecc_shape(a, b, k, h)[2] if ci is None else norm(ci)
-        cm = None
+        cm = dom = None
         if tidal:
-            cm = _tidal_cm(norm(0.0 if mass_ratio is None else mass_ratio))
+            mu = norm(0.0 if mass_ratio is None else mass_ratio)
+            cm = _tidal_cm(mu)
+            dom = _in_tidal_domain(r, f, None if k is None else k * k + h * h,
+                                   a, b / a if k is None else ci, mu)
             if k is None:
                 a, b = _tidal_offset(a, b, r, f, cm)
         out = _contact_offsets_oblate(a, b, r, f, theta, k, h, ci, tidal=tidal,
                                       cm=cm)
+        if tidal and not checked:
+            out = tuple(mx.where(dom, c, mx.nan) for c in out)
         return tuple(mx.reshape(c, shape) for c in out)
 
 
@@ -404,7 +451,8 @@ def contact_offsets_tidal(a, b, rv, q, theta=0.0, k=None, h=None, ci=None,
     """``contact_offsets_oblate`` for a tidally locked planet of volumetric
     radius rv, shape q and twist theta about its nose [rad]: its four
     contact phases, ordered and detached. Inputs as there; ``mass_ratio``
-    as ``flux_dev_from_tau``'s."""
+    as ``flux_dev_from_tau``'s. Outside the model's domain
+    (``_tidal_domain``) numbers raise and arrays give NaN."""
     return contact_offsets_oblate(a, b, rv, q, theta, k, h, ci, tidal=True,
                                   mass_ratio=mass_ratio)
 
@@ -436,7 +484,8 @@ def _contact_offsets_oblate(a, b, r, f, theta, k=None, h=None, ci=None,
                        (anchor_constants(k, h) if consts is None else consts))
         ecc = (ci, consts)
         cA = contact_offsets_anchored(A, a, b, k, h, ci, consts=consts)
-    tid = (r, f, theta, mx.stop_gradient(cm)) if tidal else None
+    tid = ((r, f, theta, mx.stop_gradient(cm),
+            *_tidal_pre(b / a if k is None else ci, theta)) if tidal else None)
     sth, cth = sincos(theta)
     lo, hi = cA[0], cA[3]
     lim = mx.maximum(hi - lo, 1e-12)
@@ -480,40 +529,111 @@ def _contact_offsets_oblate(a, b, r, f, theta, k=None, h=None, ci=None,
     return tuple(mx.stop_gradient(c) for c in (c1, c2, c3, c4))
 
 
-def _check_tidal_domain(rv, q):
-    """q in (-1/3, 1) and the ellipsoid's long axis squared within its short
-    axis, which is the oblate domain A^2 / B <= 1 at every phase, for host
-    values, raising; array arguments are checked in the graph
-    (_in_tidal_domain: NaN outside), as _check_domain's."""
-    if isinstance(rv, mx.array) or isinstance(q, mx.array):
-        return
-    rv = np.asarray(rv, dtype=np.float64)
-    q = np.asarray(q, dtype=np.float64)
-    if np.any(q <= -1.0 / 3.0) or np.any(q >= 1.0):
-        raise ValueError(f"tidal_q must be in (-1/3, 1); got {q}")
-    u, v = 1.0 + 3.0 * q, 1.0 - q
-    r2 = rv * (u * v) ** (-1.0 / 3.0)
-    if np.any(r2 * np.maximum(u, v) ** 2 > np.minimum(u, v) * (1.0 + 1e-12)):
-        raise ValueError(
-            "the ellipsoid's long axis squared exceeds its short axis: the "
-            "planet could cross the stellar limb more than twice, outside "
-            "the oblate path's domain")
+def _tidal_domain(xp, rv, q, a=None, ci=None, e=None, mu=None, tol=1e-12):
+    """The locked planet's domain, as (ok, message) pairs; xp is numpy or
+    mlx.core, and the optional arguments add their own conditions:
 
-
-def _in_tidal_domain(rv, q, e=None):
-    """The domain as a mask, for array arguments (see _check_tidal_domain);
-    with an eccentricity, at periastron, and with the separation's cubic on
-    its monotonic branch."""
-    qs = mx.clip(q, -0.3, 0.99)            # finite outside; ok masks those
-    ok = (q > -1.0 / 3.0) & (q < 1.0)
+    * q in (-1/3, 1);
+    * mu, the mass ratio (0: no offset), finite and not negative;
+    * e, the eccentricity -- given at all, the eccentric path: q follows
+      the separation on the cubic's branch through 0, so q itself must be
+      on it, in _TIDAL_Q_RANGE, and the cubic's right side at periastron in
+      _TIDAL_G_RANGE;
+    * the ellipsoid's long axis squared within its short axis, at
+      periastron: the oblate domain A^2 / B <= 1 at every phase (tol: the
+      rounding allowed, the data's);
+    * ci, cos i, below 1: b within the orbit;
+    * with mu and a, the offset below _TIDAL_OFFSET_MAX of the periastron
+      distance."""
+    out = [((q > -1.0 / 3.0) & (q < 1.0), "tidal_q must be in (-1/3, 1)")]
+    if mu is not None:
+        out.append(((mu >= 0.0) & (mu < math.inf),
+                    "mass_ratio must be finite and not negative"))
+    qs = xp.clip(q, -0.3, 0.99)            # finite outside; the first masks it
+    ome = 1.0
     if e is not None:
         lo, hi = _TIDAL_G_RANGE
-        gp = _tidal_g(qs) / (1.0 - mx.minimum(e, 0.999)) ** 3
-        ok = ok & (gp > lo) & (gp < hi)
-        qs = _tidal_q_solve(mx.clip(gp, lo, hi))
+        qlo, qhi = _TIDAL_Q_RANGE
+        out.append(((e >= 0.0) & (e < 1.0), "the eccentricity must be in [0, 1)"))
+        ome = 1.0 - xp.clip(e, 0.0, 0.999)
+        qc = xp.clip(q, qlo, qhi)
+        gp = qc * (1.0 + 3.0 * qc) * (1.0 - qc) / ome ** 3
+        out.append(((q > qlo) & (q < qhi),
+                    "with an eccentricity given (even 0), tidal_q must be in "
+                    f"({qlo:.4f}, {qhi:.4f}): the shape follows the "
+                    "separation on that branch"))
+        out.append(((gp > lo) & (gp < hi),
+                    "the shape at periastron is out of range: q (1 + 3 q)"
+                    f"(1 - q) / (1 - e)^3 must be in ({lo}, {hi})"))
+        qs = _q_of_g(xp.clip(gp, lo, hi))
     u, v = 1.0 + 3.0 * qs, 1.0 - qs
-    return ok & (_tidal_r2(rv, qs) * mx.maximum(u, v) ** 2
-                 <= mx.minimum(u, v) * (1.0 + 1e-12))
+    r2 = rv * (u * v) ** (-1.0 / 3.0)
+    out.append((r2 * xp.maximum(u, v) ** 2 <= xp.minimum(u, v) * (1.0 + tol),
+                "the ellipsoid's long axis squared exceeds its short axis: "
+                "the planet could cross the stellar limb more than twice, "
+                "outside the oblate path's domain"))
+    if ci is not None:
+        out.append((xp.abs(ci) < 1.0,
+                    "the impact parameter is outside the orbit: cos i >= 1"))
+    if mu is not None and a is not None:
+        pos = mu > 0.0
+        m1 = xp.where(pos, mu, 1.0)
+        cm = xp.where(pos, 1.0 / (m1 * (1.0 + m1)), 0.0)
+        # r2 along the orbit is at most the larger of rv and its periastron
+        # value
+        out.append((cm * (xp.maximum(rv, r2) / a) ** 5 < _TIDAL_OFFSET_MAX * ome,
+                    "the centre's offset exceeds a tenth of the periastron "
+                    "distance: mass_ratio is too small for this planet"))
+    return out
+
+
+def _check_tidal_domain(rv, q, a=None, ci=None, e=None, mass_ratio=None):
+    """``_tidal_domain`` for host values, raising; with an mx.array among
+    them the graph checks instead (_in_tidal_domain: NaN outside), as
+    _check_domain's."""
+    vals = dict(rv=rv, q=q, a=a, ci=ci, e=e, mu=mass_ratio)
+    if any(isinstance(v, mx.array) for v in vals.values()):
+        return
+    vals = {k: None if v is None else np.asarray(v, dtype=np.float64)
+            for k, v in vals.items()}
+    with np.errstate(all="ignore"):
+        for ok, msg in _tidal_domain(np, **vals):
+            if not np.all(ok):
+                raise ValueError(msg)
+
+
+def _check_tidal_orbit(a, b, rv, q, k=None, h=None, ew=False, ci=None,
+                       mass_ratio=None):
+    """_check_tidal_domain from the sampler API's (a, b, k, h): cos i as
+    metal._ecc_shape's. True if it checked: host values need no mask, whose
+    rounding, in the data's precision, could refuse what passed here."""
+    vals = [a, b, rv, q, mass_ratio] + ([k, h] if k is not None else []) \
+        + ([ci] if ci is not None else [])
+    if any(isinstance(v, mx.array) for v in vals):
+        return False
+    a, b = np.asarray(a, dtype=np.float64), np.asarray(b, dtype=np.float64)
+    e = None
+    with np.errstate(all="ignore"):
+        if k is None:
+            ci = b / a if ci is None else ci
+        else:
+            k, h = np.asarray(k, dtype=np.float64), np.asarray(h, dtype=np.float64)
+            e = k if ew else k * k + h * h
+            esw = e * np.sin(h) if ew else h * np.sqrt(e)
+            if ci is None:
+                ci = b * (1.0 + esw) / (a * np.maximum(1.0 - e * e,
+                                                       1.0 - M._E_MAX ** 2))
+    _check_tidal_domain(rv, q, a, ci, e, mass_ratio)
+    return True
+
+
+def _in_tidal_domain(rv, q, e=None, a=None, ci=None, mu=None):
+    """``_tidal_domain`` as one mask, for array arguments."""
+    tol = 1e-12 if rv.dtype == mx.float64 else 1e-6
+    ok = None
+    for m, _ in _tidal_domain(mx, rv, q, a, ci, e, mu, tol):
+        ok = m if ok is None else ok & m
+    return ok
 
 
 # --------------------------------------------------------------------------
@@ -743,7 +863,11 @@ def flux_dev_from_tau_oblate(tau, period, a, b, r, f, theta, law, u,
     law = get_law(law)
     if tau.ndim not in (1, 2):
         raise ValueError(f"tau must be (m,) or (n, m); got {tau.shape}")
-    (_check_tidal_domain if tidal else _check_domain)(r, f)
+    checked = False
+    if tidal:
+        checked = _check_tidal_orbit(a, b, r, f, k, h, ew, mass_ratio=mass_ratio)
+    else:
+        _check_domain(r, f)
     squeeze = tau.ndim == 1
     tau2d = tau[None, :] if squeeze else tau
     ecc = k is not None
@@ -761,10 +885,17 @@ def flux_dev_from_tau_oblate(tau, period, a, b, r, f, theta, law, u,
     kh = pc[-2:] if ecc else [None, None]
     cm = dom = None
     if tidal:
-        cm = _tidal_cm(M._canon_param(0.0 if mass_ratio is None else mass_ratio,
-                                      n, tau2d.dtype))
-        dom = _in_tidal_domain(pc[3], pc[4], None if not ecc else
-                               kh[0] if ew else kh[0] * kh[0] + kh[1] * kh[1])
+        mu = M._canon_param(0.0 if mass_ratio is None else mass_ratio,
+                            n, tau2d.dtype)
+        cm = _tidal_cm(mu)
+        if ecc:
+            e_d = kh[0] if ew else kh[0] * kh[0] + kh[1] * kh[1]
+            ci_d = _orbit_consts(pc[1], pc[2], kh[0], kh[1], ew)[0]
+        else:
+            e_d, ci_d = None, pc[2] / pc[1]
+        dom = (mx.ones((n,), dtype=mx.bool_) if checked else
+               mx.stop_gradient(_in_tidal_domain(pc[3], pc[4], e_d, pc[1],
+                                                 ci_d, mu)))
         if not ecc:
             pc[1], pc[2] = _tidal_offset(pc[1], pc[2], pc[3], pc[4], cm)
     w2d = (None if basis else

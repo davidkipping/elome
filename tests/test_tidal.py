@@ -382,8 +382,32 @@ def test_contact_kernel_matches_the_graph():
     with mx.stream(mx.gpu):
         r2 = OT._tidal_r2(r, q)
         k = np.asarray(contact_offsets_oblate_kernel(a, b, r2, q, tw, tidal=True))
-    g = np.stack([np.asarray(v) for v in el.contact_offsets_tidal(a, b, r, q, tw)], axis=1)
-    assert np.abs(k - g).max() < 2e-4
+    g = np.stack([np.asarray(v) for v in el.contact_offsets_tidal(
+        *(np.asarray(v, dtype=np.float64) for v in (a, b, r, q, tw)))], axis=1)
+    assert np.abs(k - g).max() < 5e-6
+
+
+@pytest.mark.skipif(not GPU, reason="needs Metal")
+def test_eccentric_contact_kernel_matches_the_graph():
+    """The eccentric kernel, with the offset, against the fp64 solve."""
+    from elome.metal_oblate import contact_offsets_oblate_kernel
+    n = 4
+    a = np.array([A_RS, A_RS, 2.6, 4.0])
+    b = np.array([0.08, 0.5, 0.4, 0.3])
+    q = np.array([0.05, -0.03, 0.1, 0.05])
+    tw = np.array([0.0, 0.4, -0.7, 0.2])
+    k = np.array([0.3, -0.2, 0.1, 0.5])
+    h = np.array([0.2, 0.3, -0.4, 0.1])
+    mu = np.array([0.0, MU_BIG, MU_BIG, 1e-3])
+    r = np.full(n, RV)
+    f32 = [mx.array(v, dtype=mx.float32) for v in (a, b, r, q, tw, k, h, mu)]
+    with mx.stream(mx.gpu):
+        ci = M._ecc_shape(f32[0], f32[1], f32[5], f32[6])[2]
+        got = np.asarray(contact_offsets_oblate_kernel(
+            *f32[:7], ci, tidal=True, cm=OT._tidal_cm(f32[7])))
+    ref = np.stack([np.asarray(v) for v in el.contact_offsets_tidal(
+        a, b, r, q, tw, k, h, mass_ratio=mu)], axis=1)
+    assert np.abs(got - ref).max() < 5e-6
 
 
 # -- limits --------------------------------------------------------------
@@ -783,3 +807,246 @@ def test_domain_arrays_are_nan(dtype):
         mx.eval(out)
     nan = np.isnan(np.asarray(out, dtype=np.float64)).all(axis=1)
     assert nan.tolist() == [False, True, True]
+
+
+# -- hardening -----------------------------------------------------------
+
+ECC0 = dict(secosw=0.0, sesinw=0.0)
+BOTH = pytest.mark.parametrize(
+    "dtype", [mx.float64] + ([mx.float32] if GPU else []),
+    ids=["fp64", "fp32"][:2 if GPU else 1])
+
+
+def _rows(dtype, b=0.3, rv=RV, a=A_RS, tau=TAU, **kw):
+    """flux_dev_from_tau on per-chain arrays: which rows are all NaN, and
+    the array."""
+    cv = lambda v: v if v is None or np.ndim(v) == 0 else mx.array(  # noqa: E731
+        np.asarray(v, dtype=np.float64), dtype=dtype)
+    with mx.stream(mx.cpu if dtype == mx.float64 else mx.gpu):
+        out = el.flux_dev_from_tau(
+            mx.array(tau, dtype=dtype), P, cv(a), cv(b), cv(rv),
+            limb_dark="hybrid5", u=W, **{k: cv(v) for k, v in kw.items()})
+        mx.eval(out)
+    out = np.asarray(out, dtype=np.float64)
+    assert np.all(np.isnan(out).all(axis=1) | np.isfinite(out).all(axis=1))
+    return np.isnan(out).all(axis=1).tolist(), out
+
+
+def test_the_eccentric_path_keeps_q_on_its_branch():
+    """With an eccentricity, even 0, q follows the separation on the
+    cubic's branch through 0: a q off it is refused, not swapped for the
+    branch's root of the same cubic."""
+    assert np.isfinite(flux(TAU, 0.3, -0.25, rv=0.1)).all()
+    for q, rv in ((-0.25, 0.1), (0.9, 0.004), (0.5, 0.02)):
+        with pytest.raises(ValueError, match="eccentricity given"):
+            flux(TAU, 0.3, q, rv=rv, **ECC0)
+    lo, hi = OT._TIDAL_Q_RANGE
+    assert lo == pytest.approx(-0.1312, abs=1e-4)
+    assert hi == pytest.approx(0.4696, abs=1e-4)
+
+
+@BOTH
+def test_the_eccentric_branch_as_arrays(dtype):
+    nan, _ = _rows(dtype, rv=0.02, tidal_q=[-0.25, -0.2, 0.05, 0.5, 0.9],
+                   **ECC0)
+    assert nan == [True, True, False, True, True]
+
+
+def test_zero_eccentricity_is_the_circular_path_across_its_range():
+    for q in (-0.13, 0.2, 0.46):
+        d = flux(TAU, 0.3, q, rv=0.02, **ECC0) - flux(TAU, 0.3, q, rv=0.02)
+        assert np.abs(d).max() < 1e-14
+
+
+def test_host_values_raise_at_periastron():
+    with pytest.raises(ValueError, match="periastron"):
+        flux(TAU, 0.3, -0.04, **kh(0.3, 0.0))
+    with pytest.raises(ValueError, match="periastron"):
+        flux(TAU, 0.3, 0.3, **kh(0.49, 0.0))
+    assert np.isfinite(flux(TAU, 0.3, 0.05, **kh(0.3, 0.0))).all()
+
+
+@pytest.mark.parametrize("mu,msg", [
+    (-0.01, "mass_ratio must"), (math.nan, "mass_ratio must"),
+    (math.inf, "mass_ratio must"), (1e-8, "offset"), (3e-7, "offset")])
+@pytest.mark.parametrize("orb", [{}, kh(0.1, 1.0)], ids=["circ", "ecc"])
+def test_mass_ratio_domain_host(mu, msg, orb):
+    with pytest.raises(ValueError, match=msg):
+        flux(TAU, 0.3, 0.05, mass_ratio=mu, **orb)
+
+
+@BOTH
+@pytest.mark.parametrize("orb", [{}, kh(0.1, 1.0)], ids=["circ", "ecc"])
+def test_mass_ratio_domain_arrays(dtype, orb):
+    """0 is no offset; a negative or non-finite ratio, or one so small that
+    the offset is no longer small, is NaN for its chain alone."""
+    mu = [1e-3, 0.0, -0.01, math.nan, math.inf, 1e-8, 3e-7]
+    nan, out = _rows(dtype, tidal_q=0.05, mass_ratio=mu, **orb)
+    assert nan == [False, False, True, True, True, True, True]
+    ref = flux(TAU, 0.3, 0.05, **orb)
+    assert np.abs(out[1] - ref).max() < (1e-15 if dtype == mx.float64 else 3e-7)
+
+
+def test_the_offset_limit_is_a_tenth_of_periastron():
+    q, e = 0.05, 0.2
+    r2 = max(RV, RV / ((1 + 3 * q) * (1 - q)) ** (1 / 3))
+    # cm (r2 / a)^5 = 0.1 (1 - e), mu << 1
+    mu = (r2 / A_RS) ** 5 / (0.1 * (1.0 - e))
+    assert np.isfinite(flux(TAU, 0.3, q, mass_ratio=3.0 * mu, **kh(e, 1.0))).all()
+    with pytest.raises(ValueError, match="offset"):
+        flux(TAU, 0.3, q, mass_ratio=0.5 * mu, **kh(e, 1.0))
+
+
+@BOTH
+def test_b_outside_the_orbit(dtype):
+    """cos i >= 1 is no orbit: an error, or NaN for arrays, on either path."""
+    with pytest.raises(ValueError, match="cos i"):
+        flux(TAU, 1.25, 0.01, a=1.2)
+    with pytest.raises(ValueError, match="cos i"):
+        flux(TAU, 1.00746, 0.01, a=1.7532, rv=0.0582,
+             secosw=0.03418, sesinw=0.73242)
+    nan, _ = _rows(dtype, a=1.2, b=[0.3, 1.25, -1.25], rv=0.05, tidal_q=0.01)
+    assert nan == [False, True, True]
+    nan, _ = _rows(dtype, a=1.7532, b=[0.5, 1.00746], rv=0.0582, tidal_q=0.01,
+                   secosw=0.03418, sesinw=0.73242)
+    assert nan == [False, True]
+
+
+@pytest.mark.skipif(not GPU, reason="needs Metal")
+@pytest.mark.parametrize("q", [0.99, -0.2, 0.3])
+def test_fp32_accepts_what_the_host_check_accepted(q):
+    """At the size limit, to fp64 rounding inside it."""
+    u, v = 1 + 3 * q, 1 - q
+    rv = min(u, v) / max(u, v) ** 2 * (u * v) ** (1 / 3) * (1 - 1e-9)
+    assert np.isfinite(flux(TAU, 0.0, q, rv=rv, dtype=mx.float32)).all()
+    with pytest.raises(ValueError, match="long axis"):
+        flux(TAU, 0.0, q, rv=rv * 1.001, dtype=mx.float32)
+
+
+def test_q_from_hf_domain():
+    for args, msg in (((1.5, 1e-5, A_RS, RV), "outside"), ((1.4, 1, 1, 1), "outside"),
+                      ((-0.4, 1, 1, 1), "outside"), ((1.5, 0.0, A_RS, RV), "positive"),
+                      ((1.5, -1e-3, A_RS, RV), "positive")):
+        with pytest.raises(ValueError, match=msg):
+            el.tidal_q_from_hf(*args)
+    got = el.tidal_q_from_hf([1.5, 1.0], 1.16e-3, A_RS, RV)
+    assert got.shape == (2,)
+    assert got[0] == pytest.approx(el.tidal_q_from_hf(1.5, 1.16e-3, A_RS, RV))
+    with mx.stream(mx.cpu):
+        out = np.asarray(el.tidal_q_from_hf(
+            F64([1.5, 1.5, 1.4, 1.5]), F64([1.16e-3, 1e-5, 1e-3, -1.0]), A_RS, RV))
+    assert np.isnan(out).tolist() == [False, True, False, True]
+    assert out[0] == pytest.approx(got[0], rel=1e-14)
+
+
+def test_contacts_domain():
+    for args, kw, msg in (((A_RS, 0.3, 0.6, 0.2), {}, "long axis"),
+                          ((A_RS, 0.3, 0.02, 0.5, 0.0), dict(k=0.3, h=0.2), "eccentricity given"),
+                          ((A_RS, 0.3, RV, 0.05), dict(mass_ratio=1e-9), "offset"),
+                          ((A_RS, 3.5, RV, 0.05), {}, "cos i")):
+        with pytest.raises(ValueError, match=msg):
+            el.contact_offsets_tidal(*args, **kw)
+    with mx.stream(mx.cpu):
+        cs = el.contact_offsets_tidal(A_RS, 0.3, F64([0.6, RV]), 0.2)
+    assert all(np.isnan(np.asarray(c)).tolist() == [True, False] for c in cs)
+
+
+def test_frontend_domain():
+    p = params(0.5)
+    p.rp = 0.02
+    m = el.TransitModel(p, TAU, dtype=mx.float64)
+    assert np.isfinite(m.light_curve(p)).all()
+    p.ecc = 0.01
+    with pytest.raises(ValueError, match="eccentricity given"):
+        m.light_curve(p)
+    p = params()
+    p.mass_ratio = 1e-9
+    with pytest.raises(ValueError, match="offset"):
+        el.TransitModel(p, TAU, dtype=mx.float64).light_curve(p)
+    # one eccentric set takes the batch down the eccentric path
+    ps = [params(0.5), params(0.05)]
+    for q in ps:
+        q.rp = 0.02
+    m = el.TransitModel(ps[0], TAU, dtype=mx.float64)
+    assert np.isfinite(m.light_curves(ps)).all()
+    ps[1].ecc = 0.1
+    with pytest.raises(ValueError, match="eccentricity given"):
+        m.light_curves(ps)
+
+
+def test_frontend_stray_fields():
+    p = params()
+    p.tidal_q, p.mass_ratio = None, 1e-3
+    with pytest.raises(ValueError, match="mass_ratio is a tidally locked"):
+        el.TransitModel(p, TAU)
+    p.mass_ratio, p.theta = None, 10.0
+    with pytest.raises(ValueError, match="tidal_q"):
+        el.TransitModel(p, TAU)
+    with pytest.raises(ValueError, match="tidal_q"):
+        el.flux_dev_from_tau(mx.array(TAU), P, A_RS, 0.3, RV,
+                             limb_dark="hybrid5", u=W, theta=0.2)
+
+
+@pytest.mark.skipif(not GPU, reason="needs Metal")
+@pytest.mark.parametrize("q", [1e-6, -5e-6, 9e-6, 3e-5, -3e-4])
+@pytest.mark.parametrize("k,h", [(0.0, 0.0), (0.3, 0.2)], ids=["circ", "ecc"])
+def test_kernel_twist_gradient_near_the_sphere(q, k, h):
+    """d/dtwist is O(q), and the kernel has all of it: the sky angle's part
+    too, which a near-circle's ellipse gives only to first order in f."""
+    ecc = (k, h) != (0.0, 0.0)
+    v0 = [P, A_RS, 0.3, RV, q, 0.5, k, h, 0.0]
+    g32 = _value_and_grad(mx.float32, mx.gpu, *v0, W, ecc=ecc)[1][6]
+    g64 = _value_and_grad(mx.float64, mx.cpu, *v0, W, ecc=ecc)[1][6]
+    assert np.abs(g32 - g64).max() < 2e-2 * np.abs(g64).max()
+
+
+@pytest.mark.skipif(not GPU, reason="needs Metal")
+@pytest.mark.parametrize("kw", CASES, ids=["none", "contact", "super"])
+@pytest.mark.parametrize("orb,mu,qs", [
+    ({}, None, (0.1, -0.03)), ({}, MU_BIG, (0.1, -0.03)),
+    (kh(0.3, 2.0), None, (0.1, -0.03)), (kh(0.3, 2.0), MU_BIG, (0.1, -0.03)),
+    (kh(0.6, -1.0), 1e-3, (0.02, -0.005))],
+    ids=["circ", "circ-mu", "ecc", "ecc-mu", "ecc6-mu"])
+def test_kernel_over_the_whole_orbit(kw, orb, mu, qs):
+    """The off-disc exit: every phase, the limb's neighbourhood densely."""
+    tau = np.concatenate([np.linspace(-0.5 * P, 0.5 * P, 301),
+                          np.linspace(-0.09, 0.09, 721)])
+    for q, tw in zip(qs, (0.4, -0.9)):
+        want = flux(tau, 0.5, q, theta=tw, mass_ratio=mu, **kw, **orb)
+        got = flux(tau, 0.5, q, theta=tw, mass_ratio=mu, dtype=mx.float32,
+                   **kw, **orb)
+        assert np.abs(got - want).max() < 1.5e-7
+        assert np.array_equal(got == 0.0, want == 0.0) or \
+            np.abs(want[got == 0.0]).max() < 1e-9
+
+
+@pytest.mark.skipif(not GPU, reason="needs Metal")
+def test_ew_kernel_gradients_match_fp64():
+    """The (e, w) kernels (an array ecc in the frontend): every gradient."""
+    def grads(dtype):
+        p = params(theta=20.0)
+        p.w, p.mass_ratio = 60.0, None
+        m = el.TransitModel(p, TAU, dtype=dtype)
+        rng = np.random.default_rng(7)
+        with mx.stream(mx.cpu if dtype == mx.float64 else mx.gpu):
+            c = mx.array(rng.normal(size=TAU.size), dtype=dtype)
+
+            def L(e, q, mu, th, rp):
+                p.ecc, p.tidal_q, p.mass_ratio, p.theta, p.rp = e, q, mu, th, rp
+                return mx.sum(c * m.light_curve_mx(p))
+            g = mx.grad(L, argnums=[0, 1, 2, 3, 4])(
+                *(mx.array(v, dtype=dtype) for v in (0.2, 0.05, MU_BIG, 20.0, RV)))
+            mx.eval(*g)
+        return [float(x.item()) for x in g]
+    g32, g64 = grads(mx.float32), grads(mx.float64)
+    for x, y in zip(g32, g64):
+        assert x == pytest.approx(y, rel=2e-3)
+
+
+def test_array_mass_ratio_is_per_chain():
+    mu = [0.0, 1e-3, MU_BIG]
+    for orb in ({}, kh(0.2, 1.0)):
+        _, out = _rows(mx.float64, tidal_q=[0.05, 0.05, -0.03], mass_ratio=mu, **orb)
+        for j, (q, m) in enumerate(zip((0.05, 0.05, -0.03), mu)):
+            ref = flux(TAU, 0.3, q, mass_ratio=m or None, **orb)
+            assert np.abs(out[j] - ref).max() < 1e-15

@@ -988,6 +988,39 @@ _OB_CONST = {
 _LIVE_SPLIT = "// ============================ live evaluation ============================"
 
 
+_SPH_RETURN = "    if (sph) return;\n"
+# A locked planet's sky angle turns with the phase, the inclination and the
+# twist, so it needs an accurate d/dtheta at any f: ob_cols_bd leaves it at 0
+# below f_sw (an oblate planet's fixed angle does not miss it), and just
+# above, t.x y0 - t.y x0 cancels to its last few fp32 digits. To first order
+# in f the ellipse's term is f beta(z) cos 2 psi, psi the centre's angle in
+# the ellipse's frame, so d/df in a frame turned by 45 degrees is
+# beta sin 2 psi and d/dtheta is 2 f times that: one more evaluation below
+# _TRI_F1, where its O(f) error and the direct form's rounding meet.
+_TRI_F1 = "1e-3f"
+_G4_LINE = "    g[4] = t.x * y0 - t.y * x0;\n"
+_TRI_G4_LINE = f"    g[4] = (fl < {_TRI_F1}) ? g4r : t.x * y0 - t.y * x0;\n"
+_TRI_SPH_RETURN = """    float g4r = 0.0f;
+    if (fl < TRI_F1) {
+        float xr = 0.70710678f * (x0 + y0), yr = 0.70710678f * (y0 - x0);
+        ob_frozen fzr;
+        ob_solve(xr, yr, A, B, fzr);
+        dv genr[HYB_NGEN];
+        ob_eval<dv>(dv(xr, float4(1.0f, 0.0f, 0.0f, 0.0f)),
+                    dv(yr, float4(0.0f, 1.0f, 0.0f, 0.0f)),
+                    dv(A, float4(0.0f, 0.0f, 1.0f, 0.0f)),
+                    dv(B, float4(0.0f, 0.0f, 0.0f, 1.0f)),
+                    fzr, xr, yr, A, B, genr);
+        float4 tr = -wct[0] * genr[0].d;
+        for (int j = 0; j < HYB_NW; ++j)
+            for (int c = 0; c < HYB_NGEN; ++c)
+                tr -= (wct[j + 1] * HYB_SMAT[j * HYB_NGEN + c]) * genr[c].d;
+        g4r = fl * (tr.z * A - tr.w * B) / omf;
+    }
+    if (sph) { g[4] = g4r; return; }
+""".replace("TRI_F1", _TRI_F1)
+
+
 def _ob_header(law) -> str:
     head, tail = _OB_FN.split(_LIVE_SPLIT)
     src = head.replace("metal::precise::", "metal::fast::") + _LIVE_SPLIT + tail
@@ -1301,17 +1334,24 @@ _OB_ORBITS["eccew"] = dict(
 # node writes its own outline over the head's r, fl, cth, sth, sqf
 _TRI_SET = ("ob_tri_frame(ts, tc, ci, si, tq, r2, tw, tf, &r, &fl, &cth, &sth, "
             "&sqf);")
+# A node whose centre is further from the star's than 1 + the ellipsoid's
+# longest axis adds exactly nothing: it leaves before any outline work (lim2
+# is that distance squared, with rounding room; a NaN keeps the node).
+_TRI_OFF = "if (front && X * X + Y * Y >= lim2) front = false; "
 _TRI_LOAD = ("    float r2 = rin[y], tq = fin[y];\n"
              "    float si = ob_si(ci);\n"
              "    ob_tw tw = ob_twist(thin[y]);\n"
              "    ob_tri tf;\n"
-             "    float ts, tc;\n")
+             "    float ts, tc;\n"
+             "    float lim2 = 1.0f + 1.001f * fabs(r2) * max(1.0f + 3.0f * tq, 1.0f - tq);\n"
+             "    lim2 *= lim2;\n")
 _OB_ORBITS["tri"] = dict(
     inputs=["bin"],
     load="    float bv  = bin[y];\n    float ci  = bv / av;\n" + _TRI_LOAD,
-    xy="ob_xy_tri(TT, per, av, bv, &X, &Y, &front, &ts, &tc); " + _TRI_SET,
+    xy="ob_xy_tri(TT, per, av, bv, &X, &Y, &front, &ts, &tc); " + _TRI_OFF
+       + "if (front) { " + _TRI_SET + " }",
     xyd="ob_xy_circ_d(TT, per, av, bv, &X, &Y, &front, &dXp, &dYp, dXt, dYt); "
-        "ts = dXt[0]; tc = -dYt[1]; " + _TRI_SET,
+        + _TRI_OFF + "if (front) { ts = dXt[0]; tc = -dYt[1]; " + _TRI_SET + " }",
     nth=2, live="2", tidal=True,
     dphi="g_nu",
     th="            a_th[0] -= w * g_ci * ci / av;\n"
@@ -1330,22 +1370,31 @@ _TRI_ECC_LOAD = ("    float o[NORB_I];\n"
                  "    ob_tw tw = ob_twist(thin[y]);\n"
                  "    ob_tri tf;\n"
                  "    float ts, tc, tq, r2, sc, gp, Qr, rr, X1, Y1;\n"
-                 "    float dnp, dlp, dnu[9], dlr[9];\n")
-_TRI_ECC_XY = ("ob_xy_ecc(TT, per, av, o, &X, &Y, &front); "
+                 "    float dnp, dlp, dnu[9], dlr[9];\n"
+                 "    float lim2 = 1.0f + TRI_LONG * fabs(rv);\n"
+                 "    lim2 *= lim2 / TRI_SC2;\n")
+# the same exit before the node's solve, on the position at cos i with no
+# offset: inside the domain (oblate_tau._tidal_domain) the longest axis is
+# under TRI_LONG rv and the offset's scale above sqrt(TRI_SC2); outside it
+# the chain is NaN
+_TRI_ECC_OFF = "if (front && X * X + Y * Y * ci * ci >= lim2) front = false; "
+_TRI_ECC_XY = ("ob_xy_ecc(TT, per, av, o, &X, &Y, &front); " + _TRI_ECC_OFF
+               + "if (front) { "
                "rr = metal::precise::sqrt(X * X + Y * Y); ts = X / rr; tc = -Y / rr; "
                "ob_tri_sep(rr, av, tQ, rv, cm, &tq, &r2, &sc, &gp, &Qr); "
-               "X *= sc; Y *= ci * sc; " + _TRI_SET)
+               "X *= sc; Y *= ci * sc; " + _TRI_SET + " }")
 
 
 def _tri_ecc(all_slots):
     return dict(
         inputs=["orb"], load=_TRI_ECC_LOAD, xy=_TRI_ECC_XY,
         xyd=f"ob_xy_ecc_d(TT, per, av, o, &X, &Y, &front, &dXp, &dYp, dXt, dYt, "
-            f"{all_slots}); ob_tri_geo(X, Y, dXp, dYp, dXt, dYt, &rr, &ts, &tc, "
+            f"{all_slots}); " + _TRI_ECC_OFF + "if (front) { "
+            "ob_tri_geo(X, Y, dXp, dYp, dXt, dYt, &rr, &ts, &tc, "
             "&dnp, dnu, &dlp, dlr); "
             "ob_tri_sep(rr, av, tQ, rv, cm, &tq, &r2, &sc, &gp, &Qr); "
             "ob_tri_scale(ci, sc, &X, &Y, &dXp, &dYp, dXt, dYt, &X1, &Y1); "
-            + _TRI_SET,
+            + _TRI_SET + " }",
         nth=10, tidal=True, live="10", dphi="g_nu * dnp + g_lr * dlp",
         post="            float g_lr, g_la, g_cm;\n"
              "            { float r22 = r2 * r2;\n"
@@ -1580,6 +1629,10 @@ def _src(body: str, orbit: str, law, basis: bool, vjp: bool) -> str:
     else:
         s = s.replace("EVAL", _EVAL_B if basis else _EVAL_F)
         s = s.replace("NACC", "HYB_NCOL" if basis else "1")
+    if plug.get("tidal"):
+        from .oblate_tau import _TIDAL_LONG_MAX, _TIDAL_OFFSET_MAX
+        s = (s.replace("TRI_LONG", f"{1.001 * _TIDAL_LONG_MAX:.6f}f")
+              .replace("TRI_SC2", f"{(0.99 - _TIDAL_OFFSET_MAX) ** 2:.6f}f"))
     s = (s.replace("TH_LIVE", plug["live"])
           .replace("NSLOT_C", f"{_nslot(law, orbit, basis)}u")
           .replace("NTH_U", f"{nth}u")
@@ -1587,7 +1640,7 @@ def _src(body: str, orbit: str, law, basis: bool, vjp: bool) -> str:
           .replace("NORB_I", str(M.NORB))
           .replace("NORB_C", f"{M.NORB}u"))
     for marker in ("ORB_", "TH_LIVE", "NTH", "NSLOT", "EVAL", "NACC", "NWS",
-                   "W_LOADS", "CT_LOAD"):
+                   "W_LOADS", "CT_LOAD", "TRI_"):
         assert marker not in s, f"unexpanded {marker} in oblate tau kernel"
     return M._tau_src(s)
 
@@ -1598,9 +1651,14 @@ def _header(law, orbit):
         hdr += M._ecc_header()
         hdr += M._subst(_OB_ECC_FN.replace("SOLVE", M._SOLVE))
     hdr += M._subst(_OB_ORBIT_FN)
+    ob = _ob_header(law)
     if orbit.startswith("tri"):
         hdr += M._subst(_OB_TRI_FN)
-    return hdr + _ob_header(law) + M._subst(_OB_PHOT_FN)
+        # d/dtheta below f_sw (_TRI_SPH_RETURN)
+        assert ob.count(_SPH_RETURN) == 1 and ob.count(_G4_LINE) == 1
+        ob = (ob.replace(_SPH_RETURN, _TRI_SPH_RETURN)
+                .replace(_G4_LINE, _TRI_G4_LINE))
+    return hdr + ob + M._subst(_OB_PHOT_FN)
 
 
 def _get_kernels(law, orbit: str, basis: bool):

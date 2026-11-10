@@ -1869,8 +1869,13 @@ def flux_dev_from_tau(tau: mx.array, period, a, b, r, u1=None, u2=None, *,
             ellc has it. ``r`` is the volumetric radius (r1 r2 r3)^(1/3), not
             the oblate mode's area-equivalent one. -1/3 < q < 1, the sign
             free, so that a sphere (q = 0, with a usable d/dq) is not an
-            edge; the longest axis squared must not exceed the shortest. An
-            h_f goes through ``tidal_q_from_hf``. Primary transits, hybrid
+            edge; the longest axis squared must not exceed the shortest.
+            With secosw/sesinw, even 0, q is held to the cubic's branch
+            through 0: -0.131 < q < 0.470, and q (1 + 3 q)(1 - q) /
+            (1 - e)^3 in (-0.09, 0.6). cos i < 1; mass_ratio finite and not
+            negative, its offset under a tenth of the periastron distance
+            (``oblate_tau._tidal_domain``). Outside, numbers raise and
+            arrays give NaN. An h_f goes through ``tidal_q_from_hf``. Primary transits, hybrid
             laws. The same kernels and graph as f=, at about the same cost.
         ring_in, ring_out, ring_f, ring_tau: a ring in the planet's
             equatorial plane (``elome.rings``): inner and outer radii in
@@ -2022,7 +2027,8 @@ def flux_dev_from_tau(tau: mx.array, period, a, b, r, u1=None, u2=None, *,
         if f is not None or theta is not None or ringed:
             raise ValueError("spots are for a spherical planet: no f=, theta= or ring")
     if theta is not None and f is None and not ringed and tidal_q is None:
-        raise ValueError("theta= is an oblate planet's; pass f= too")
+        raise ValueError("theta= is an oblate or a tidally locked planet's; "
+                         "pass f= or tidal_q= too")
     if f is not None and limb_dark == "quadratic":
         raise ValueError("oblate planets (f=) take a hybrid law: "
                          "limb_dark='hybrid2' | 'hybrid4' | 'hybrid5'")

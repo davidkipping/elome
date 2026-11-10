@@ -408,7 +408,7 @@ def test_gradients_finite_on_a_sweep(dtype):
 def test_keyword_errors():
     with pytest.raises(ValueError, match="hybrid law"):
         el.flux_dev_from_tau(TAU, P, A_RS, 0.3, 0.1, 0.4, 0.2, f=0.2)
-    with pytest.raises(ValueError, match="pass f= too"):
+    with pytest.raises(ValueError, match="pass f= or tidal_q= too"):
         el.flux_dev_from_tau(TAU, P, A_RS, 0.3, 0.1, limb_dark="hybrid4",
                              u=W["hybrid4"], theta=0.3)
     with pytest.raises(ValueError, match="u1/u2"):

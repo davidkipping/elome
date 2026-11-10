@@ -162,7 +162,7 @@ def test_light_curve_mx_equals_light_curve_and_differentiates():
 def test_errors():
     with pytest.raises(ValueError, match="hybrid law"):
         el.TransitModel(P(limb_dark="quadratic", u=[0.4, 0.2]), T)
-    with pytest.raises(ValueError, match="set params.f too"):
+    with pytest.raises(ValueError, match="set params.f, "):
         q = spherical()
         q.theta = 30.0
         el.TransitModel(q, T)

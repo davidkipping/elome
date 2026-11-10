@@ -28,8 +28,9 @@ about 5%, so the same number means a different planet in the two modes.
 
 The nose fixes one axis, so one freedom remains: `theta` turns $r_2$ and
 $r_3$ about the nose by a fixed angle $\vartheta$, default 0. At conjunction
-on an edge-on orbit it is the sky angle of the outline's long axis, the
-oblate mode's `theta`. The twist stays fixed relative to the orbit: it
+on an edge-on orbit it is the sky angle of the outline's long axis for
+$q > 0$, the oblate mode's `theta`, and of its short axis for $q < 0$. The
+twist stays fixed relative to the orbit: it
 follows the star, it does not hold a direction on the sky.
 
 An ellipsoid always projects to an ellipse, so each instant is an oblate
@@ -93,7 +94,8 @@ dev = elome.flux_dev_from_tau(tau, 0.925, 2.99, 0.08, 0.1215,
 ```
 
 `elome.contact_offsets_tidal(a, b, rv, q, theta)` returns the four contact
-phases, and takes `k`, `h` and `mass_ratio`.
+phases, and takes `k`, `h` and `mass_ratio`. It has the model's domain,
+below.
 
 ## Shape, mass ratio and Love number
 
@@ -125,13 +127,36 @@ dev = elome.flux_dev_from_tau(tau, 0.925, a, 0.08, rv, limb_dark="hybrid5",
 
 ## What $q$ can be
 
-$-1/3 < q < 1$. **A negative $q$ is allowed**, so the sphere is an ordinary
-point of the domain and not its edge. The light curve and its gradients are
-smooth through $q = 0$, where the mode is the spherical path.
+$-1/3 < q < 1$ on a circular orbit. **A negative $q$ is allowed**, so the
+sphere is an ordinary point of the domain and not its edge. The light curve
+and its gradients are smooth through $q = 0$, where the mode is the spherical
+path.
 
-The longest axis squared may not exceed the shortest, the oblate domain at
-every phase. A value outside the domain raises an error for host numbers and
-gives NaN for arrays, as in the oblate mode.
+**With an eccentricity the range is narrower.** There $q$ follows the
+separation through the cubic $q(1+3q)(1-q) \propto r^{-3}$, which has one $q$
+for each separation only on its branch through 0. So:
+
+- $-0.131 < q < 0.470$, and
+- $q(1+3q)(1-q)/(1-e)^3$, the cubic at periastron, between −0.09 and 0.6.
+
+The negative side is tight: $q = -0.04$ is out of range at $e = 0.3$. This is
+the domain whenever an eccentricity is passed, even one of 0: `secosw` and
+`sesinw` in `flux_dev_from_tau`, an array `ecc` in `TransitModel`, and every
+set of a `light_curves` batch that has one eccentric set. Inside it, $e = 0$
+is the circular model exactly.
+
+Three more conditions hold on any orbit:
+
+- The longest axis squared may not exceed the shortest, at periastron: the
+  oblate domain at every phase.
+- $|b|$ must lie inside the orbit, $\cos i < 1$.
+- `mass_ratio` must be finite and not negative (0 is no offset), and the
+  offset under a tenth of the periastron distance. A hot Jupiter's is about
+  $10^{-4}$ of it.
+
+A value outside the domain raises an error for host numbers and gives NaN for
+arrays, as in the oblate mode. `tidal_q_from_hf` does the same when no $q$ has
+the Love number asked for.
 
 ## Symmetry
 
@@ -191,7 +216,7 @@ hybrid law. `ellc` has no twist, so `theta` is 0 in any comparison.
 - On an eccentric orbit the nose stays on the star however fast the planet
   would have to turn to keep it there, and the shape responds at once to the
   separation. Both are taken as given.
-- $q(1+3q)(1-q)$ scaled to periastron must stay between −0.09 and 0.6.
+- On an eccentric orbit $q$ has a narrower range, given above.
 
 ## Accuracy and cost
 

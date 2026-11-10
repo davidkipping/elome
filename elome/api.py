@@ -132,15 +132,21 @@ def _is_oblate(params) -> bool:
     if (not obl and getattr(params, "theta", None) is not None
             and not _is_ringed(params)
             and getattr(params, "tidal_q", None) is None):
-        raise ValueError("params.theta is an oblate planet's or a ring's; "
-                         "set params.f too, or params.ring_in (or leave theta "
-                         "None)")
+        raise ValueError("params.theta is an oblate planet's, a ring's or a "
+                         "tidally locked planet's; set params.f, "
+                         "params.ring_in or params.tidal_q too (or leave "
+                         "theta None)")
     return obl
 
 
 def _is_tidal(params) -> bool:
-    """params.tidal_q given = a tidally locked planet."""
-    return getattr(params, "tidal_q", None) is not None
+    """params.tidal_q given = a tidally locked planet. mass_ratio alone is
+    an error: it is the locked planet's."""
+    tidal = getattr(params, "tidal_q", None) is not None
+    if not tidal and getattr(params, "mass_ratio", None) is not None:
+        raise ValueError("params.mass_ratio is a tidally locked planet's; "
+                         "set params.tidal_q too (or leave mass_ratio None)")
+    return tidal
 
 
 class TransitParams:
@@ -1118,7 +1124,15 @@ class TransitModel:
         from .oblate import _check_domain
         from .oblate_tau import _check_tidal_domain
         if self._tidal:
-            _check_tidal_domain(params.rp, params.tidal_q)
+            host = (params.rp, params.tidal_q, params.a, params.inc,
+                    params.ecc, params.mass_ratio)
+            if not any(is_arr(v) for v in host):
+                # an array ecc is the eccentric path at any value
+                ev = float(params.ecc)
+                _check_tidal_domain(
+                    params.rp, params.tidal_q, params.a,
+                    np.cos(np.radians(float(params.inc))),
+                    ev if ev > 0.0 else None, params.mass_ratio)
         else:
             _check_domain(params.rp, params.f)
         t0_off, per, a, rp, ci, ci_py, gmask = self._prep(params, cast, rad,
@@ -1527,7 +1541,11 @@ class TransitModel:
                 from .oblate import _check_domain
                 from .oblate_tau import _check_tidal_domain
                 if self._tidal:
-                    _check_tidal_domain(cols["rp"], cols["tidal_q"])
+                    # one eccentric set takes every set down that path
+                    _check_tidal_domain(
+                        cols["rp"], cols["tidal_q"], cols["a"], np.cos(inc),
+                        ecc if bool(np.any(ecc > 0.0)) else None,
+                        cols["mass_ratio"])
                 else:
                     _check_domain(cols["rp"], cols["f"])
                 b_np = contact_geometry(

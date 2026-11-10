@@ -239,8 +239,13 @@ Args:
         ellc has it. ``r`` is the volumetric radius (r1 r2 r3)^(1/3), not
         the oblate mode's area-equivalent one. -1/3 < q < 1, the sign
         free, so that a sphere (q = 0, with a usable d/dq) is not an
-        edge; the longest axis squared must not exceed the shortest. An
-        h_f goes through ``tidal_q_from_hf``. Primary transits, hybrid
+        edge; the longest axis squared must not exceed the shortest.
+        With secosw/sesinw, even 0, q is held to the cubic's branch
+        through 0: -0.131 < q < 0.470, and q (1 + 3 q)(1 - q) /
+        (1 - e)^3 in (-0.09, 0.6). cos i < 1; mass_ratio finite and not
+        negative, its offset under a tenth of the periastron distance
+        (``oblate_tau._tidal_domain``). Outside, numbers raise and
+        arrays give NaN. An h_f goes through ``tidal_q_from_hf``. Primary transits, hybrid
         laws. The same kernels and graph as f=, at about the same cost.
     ring_in, ring_out, ring_f, ring_tau: a ring in the planet's
         equatorial plane (``elome.rings``): inner and outer radii in
@@ -384,7 +389,8 @@ contact_offsets_tidal(a, b, rv, q, theta=0.0, k=None, h=None, ci=None, mass_rati
 ``contact_offsets_oblate`` for a tidally locked planet of volumetric
 radius rv, shape q and twist theta about its nose [rad]: its four
 contact phases, ordered and detached. Inputs as there; ``mass_ratio``
-as ``flux_dev_from_tau``'s.
+as ``flux_dev_from_tau``'s. Outside the model's domain
+(``_tidal_domain``) numbers raise and arrays give NaN.
 ```
 
 ### `tidal_q_from_hf`
@@ -398,7 +404,9 @@ tidal_q_from_hf(hf, mass_ratio, a, rv)
 h_f r2^3 / (2 mu a^3) with r2 the axis along the orbit, whose form in
 the volumetric radius is the cubic q (1 + 3 q)(1 - q) = h_f R_V^3 /
 (2 mu a^3). mass_ratio = mu = Mp / M*; a and rv in the same unit.
-MLX arrays in, MLX out, differentiable; numbers in, numbers out.
+MLX arrays in, MLX out, differentiable; numbers in, numbers out. The
+cubic has this root only for its right side within _TIDAL_G_RANGE and a
+positive mass ratio: outside, numbers raise and MLX arrays give NaN.
 ```
 
 ### `tidal_hf_from_q`
@@ -414,7 +422,7 @@ The inverse of ``tidal_q_from_hf``: 2 mu (a / r2)^3 q.
 ### `oblate_tau.tidal_outline`
 
 ```python
-tidal_outline(s, c, ci, rv, q, tw)
+tidal_outline(s, c, ci, rv, q, tw, pre=None)
 ```
 
 ```text
@@ -424,7 +432,8 @@ radius, the flattening and the long axis's sky angle [rad]. (s, c): sin,
 cos of the angle along the orbit from conjunction; ci = cos i; rv the
 volumetric radius; q in (-1/3, 1); tw the twist about the nose [rad].
 MLX arrays. Differentiable in all of them through q = 0, where f = 0:
-an f and theta taken from S itself are not.
+an f and theta taken from S itself are not. ``pre``: _tidal_pre(ci, tw),
+if the caller has it.
 ```
 
 ### `ring_kinks`

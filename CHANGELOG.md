@@ -18,7 +18,10 @@ every release is tagged `vX.Y.Z` in git.
   gradients are smooth through the sphere at `q = 0`. Hybrid laws and
   primary transits, circular and eccentric orbits, every exposure rule; the
   fp32 Metal kernels and the fp64 graph, at the oblate mode's cost.
-  `contact_offsets_tidal` gives the contacts.
+  `contact_offsets_tidal` gives the contacts. With an eccentricity `q` is
+  held to the range in which it follows the separation uniquely
+  (−0.131 < q < 0.470); outside the model's domain numbers raise and arrays
+  give NaN.
 - **Secondary eclipses of oblate planets.** `TransitModel(...,
   transittype="secondary")` now takes an oblate planet (`params.f`): the
   planet is a uniform disc of flux ratio `fp`, eclipsed by the star, on
