@@ -11,8 +11,9 @@ contain it. Run the measurements on an otherwise-idle GPU.
 
 --check also reads the GPU kernel tables back to the results files their
 benchmarks write (tau_kernel.json, hybrid_kernels.json,
-oblate_kernels.json, spot_kernels.json: bench_tau_kernel.py,
-bench_hybrid.py, bench_oblate.py, bench_spots.py), and the cross-code comparison tables (spherical, oblate and
+oblate_kernels.json, spot_kernels.json, eclipse_kernels.json:
+bench_tau_kernel.py, bench_hybrid.py, bench_oblate.py, bench_spots.py,
+bench_eclipse.py), and the cross-code comparison tables (spherical, oblate and
 ringed planets, starspots) back to the results files the comparison runs
 write (precision*.json, speed.json, batch_scaling.json,
 oblate_compare/results_oblate.json, ring_compare/results_ring.json,
@@ -83,9 +84,10 @@ def check():
     n_cmp, bad_cmp, pages_cmp = check_comparisons()
     n_ker, bad_ker, pages_ker = check_kernels()
     n_sp, bad_sp, pages_sp = check_spots()
-    bad += bad_cmp + bad_ker + bad_sp
-    n_cmp += n_ker + n_sp
-    pages = len(set(expect) | pages_cmp | pages_ker | pages_sp)
+    n_ec, bad_ec, pages_ec = check_eclipses()
+    bad += bad_cmp + bad_ker + bad_sp + bad_ec
+    n_cmp += n_ker + n_sp + n_ec
+    pages = len(set(expect) | pages_cmp | pages_ker | pages_sp | pages_ec)
     print("\n".join(bad) if bad else f"docs agree with the measurements "
           f"({sum(map(len, expect.values())) + n_cmp} numbers on {pages} pages)")
     return not bad
@@ -277,6 +279,26 @@ def check_spots():
     n, bad = _check_pages(pages)
     return n, bad, set(pages)
 
+
+
+def check_eclipses():
+    """(numbers checked, failures, pages) for the secondary-eclipse cost
+    table, against eclipse_kernels.json (bench_eclipse.py)."""
+    ec = json.load(open(os.path.join(HERE, "eclipse_kernels.json")))
+    ns = ec["n_sub"]
+    rows = {}
+    for rule, label in (("none", "one evaluation per point"),
+                        ("supersample", f"supersampling (`n_sub = {ns}`)")):
+        g = ec["rules"][rule]
+        for shape, word in (("sphere", "spherical"), ("oblate", "oblate")):
+            e, t = g[f"{shape}_eclipse"], g[f"{shape}_transit"]
+            rows[f"{word}, {label}"] = [
+                e["forward_ms"] * 1e-3, e["forward_ms"] / t["forward_ms"],
+                e["value_grad_ms"] * 1e-3, e["value_grad_ms"] / t["value_grad_ms"]]
+    pages = {"guides/sampler-api.md": (
+        {"(`benchmarks/bench_eclipse.py`": rows}, [])}
+    n, bad = _check_pages(pages)
+    return n, bad, set(pages)
 
 def check_comparisons():
     """(numbers checked, failures, pages) for the comparison pages."""

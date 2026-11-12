@@ -1,0 +1,43 @@
+{
+ "chains": 512,
+ "points": 5000,
+ "n_sub": 15,
+ "rules": {
+  "none": {
+   "sphere_transit": {
+    "forward_ms": 0.7344582118093967,
+    "value_grad_ms": 1.6240407712757587
+   },
+   "sphere_eclipse": {
+    "forward_ms": 0.48787519335746765,
+    "value_grad_ms": 1.0884585790336132
+   },
+   "oblate_transit": {
+    "forward_ms": 15.167375095188618,
+    "value_grad_ms": 47.46929230168462
+   },
+   "oblate_eclipse": {
+    "forward_ms": 2.1182079799473286,
+    "value_grad_ms": 4.638249985873699
+   }
+  },
+  "supersample": {
+   "sphere_transit": {
+    "forward_ms": 4.330249968916178,
+    "value_grad_ms": 11.72991655766964
+   },
+   "sphere_eclipse": {
+    "forward_ms": 2.3551671765744686,
+    "value_grad_ms": 5.419124849140644
+   },
+   "oblate_transit": {
+    "forward_ms": 249.99245814979076,
+    "value_grad_ms": 769.8443750850856
+   },
+   "oblate_eclipse": {
+    "forward_ms": 26.30000002682209,
+    "value_grad_ms": 54.831250105053186
+   }
+  }
+ }
+}

@@ -51,7 +51,8 @@ transit (`benchmarks/bench_oblate.py`, M2 Max):
 Under the contact rule, an exposure that no contact falls inside costs
 `n_gl` evaluations; one containing a contact costs `n_gl` more per
 contact. In absolute terms, an oblate light curve of a few thousand
-points takes milliseconds.
+points takes milliseconds. A secondary eclipse costs about a tenth of
+the transit; see {doc}`../guides/sampler-api`.
 
 ## Against other oblate-planet codes
 

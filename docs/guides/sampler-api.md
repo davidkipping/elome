@@ -217,6 +217,22 @@ uniform disc of flux ratio `fp`: the same model as
   supersampling inside them; float64 runs the MLX graph on the CPU. It
   may be compiled. Rings, spots and `ld_basis` are for transits.
 
+The eclipse kernels, 512 chains × 5,000 points around the eclipse on a
+circular orbit (`benchmarks/bench_eclipse.py`, M2 Max), against the
+transit of the same planet with hybrid4 under the same exposure rule
+($f = 0.2$ for the oblate planet):
+
+| | forward | vs transit | value + gradient | vs transit |
+|---|---:|---:|---:|---:|
+| spherical, one evaluation per point | 0.49 ms | 0.66× | 1.1 ms | 0.67× |
+| oblate, one evaluation per point | 2.1 ms | 0.14× | 4.6 ms | 0.10× |
+| spherical, supersampling (`n_sub = 15`) | 2.4 ms | 0.54× | 5.4 ms | 0.46× |
+| oblate, supersampling (`n_sub = 15`) | 26.3 ms | 0.11× | 54.8 ms | 0.07× |
+
+An oblate planet's eclipse needs only the area of its outline inside the
+disc, from one quartic per point, where its transit also integrates the
+limb darkening, so it costs about a tenth as much.
+
 ## A transit and an eclipse together: `make_eclipse_flux`
 
 `elome.anvil.make_eclipse_flux` builds a joint transit-and-eclipse model,
