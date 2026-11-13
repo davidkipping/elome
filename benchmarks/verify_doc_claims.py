@@ -11,9 +11,10 @@ contain it. Run the measurements on an otherwise-idle GPU.
 
 --check also reads the GPU kernel tables back to the results files their
 benchmarks write (tau_kernel.json, hybrid_kernels.json,
-oblate_kernels.json, spot_kernels.json, eclipse_kernels.json:
-bench_tau_kernel.py, bench_hybrid.py, bench_oblate.py, bench_spots.py,
-bench_eclipse.py), and the cross-code comparison tables (spherical, oblate and
+oblate_kernels.json, spot_kernels.json, eclipse_kernels.json,
+eclipse_exposure.json: bench_tau_kernel.py, bench_hybrid.py,
+bench_oblate.py, bench_spots.py, bench_eclipse.py,
+bench_eclipse_exposure.py), and the cross-code comparison tables (spherical, oblate and
 ringed planets, starspots) back to the results files the comparison runs
 write (precision*.json, speed.json, batch_scaling.json,
 oblate_compare/results_oblate.json, ring_compare/results_ring.json,
@@ -283,20 +284,33 @@ def check_spots():
 
 def check_eclipses():
     """(numbers checked, failures, pages) for the secondary-eclipse cost
-    table, against eclipse_kernels.json (bench_eclipse.py)."""
+    and accuracy tables, against eclipse_kernels.json (bench_eclipse.py)
+    and eclipse_exposure.json (bench_eclipse_exposure.py)."""
     ec = json.load(open(os.path.join(HERE, "eclipse_kernels.json")))
-    ns = ec["n_sub"]
+    ns, ng = ec["n_sub"], ec["n_gl"]
     rows = {}
     for rule, label in (("none", "one evaluation per point"),
-                        ("supersample", f"supersampling (`n_sub = {ns}`)")):
+                        ("supersample", f"supersampling (`n_sub = {ns}`)"),
+                        ("contact", f"contact rule (`n_gl = {ng}`)")):
         g = ec["rules"][rule]
         for shape, word in (("sphere", "spherical"), ("oblate", "oblate")):
             e, t = g[f"{shape}_eclipse"], g[f"{shape}_transit"]
             rows[f"{word}, {label}"] = [
                 e["forward_ms"] * 1e-3, e["forward_ms"] / t["forward_ms"],
                 e["value_grad_ms"] * 1e-3, e["value_grad_ms"] / t["value_grad_ms"]]
+    ex = json.load(open(os.path.join(HERE, "eclipse_exposure.json")))
+    acc = {}
+    for planet, col in (("sphere", 0), ("sphere_ecc", 1), ("oblate", 2)):
+        for r in ex["planets"][planet]["rows"]:
+            rule = ("supersampling" if r["method"] == "supersample"
+                    else "contact rule")
+            label = f"{rule}, `{'N' if rule == 'supersampling' else 'n_gl'} = {r['n']}`"
+            label += ", float32" if r["float32"] else ""
+            acc.setdefault(label, [None] * 3)[col] = r["max_err_depth"]
     pages = {"guides/sampler-api.md": (
-        {"(`benchmarks/bench_eclipse.py`": rows}, [])}
+        {"(`benchmarks/bench_eclipse.py`": rows}, []),
+             "guides/exposures.md": (
+        {"(`benchmarks/bench_eclipse_exposure.py`": acc}, [])}
     n, bad = _check_pages(pages)
     return n, bad, set(pages)
 

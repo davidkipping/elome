@@ -68,10 +68,15 @@ every release is tagged `vX.Y.Z` in git.
   with gradients in every parameter (finite in e at e = 0 on
   `TransitModel`'s (e, w) route); float32 on the GPU runs two new fused
   kernels, spherical and oblate, at each point's time since its own
-  mid-eclipse. For a 29-minute exposure, a spherical planet's float32
-  `n_gl = 7` is within 1-2e-5 of the eclipse depth, against 2-11% for
-  15-sample supersampling and 0.3-1% for 101; an oblate planet's is within
-  1e-4, against 1-4% for 15 samples.
+  mid-eclipse. For a hot Jupiter's eclipse over a 29-minute exposure,
+  `n_gl = 5` is within 2.4e-5 of the eclipse depth, for spherical and
+  oblate planets and on an eccentric orbit, against 1.4e-2 for
+  15-sample supersampling and 2.0e-3 for 101; float32 with `n_gl = 7` is
+  within 1.4e-5. On the GPU it halves a spherical eclipse's cost against
+  15-sample supersampling and costs an oblate one about the same. The
+  finite-exposures guide has the table
+  (`benchmarks/bench_eclipse_exposure.py`), and the sampler guide the
+  eclipse kernels' costs under each rule.
 - **Secondary eclipses in `make_transit_target`**, with the same
   `transittype`, `timing`, `ecc`, `w` and `rstar` options, for a spherical
   planet on an unspotted star, and the same exposure rules. `fp` and

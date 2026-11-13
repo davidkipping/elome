@@ -10,8 +10,8 @@ event, circular orbit, Kepler long cadence):
   oblate_transit   f = 0.2, theta = 0.5 rad, hybrid4
   oblate_eclipse   f = 0.2, theta = 0.5 rad, transittype="secondary"
 
-Both events take the same exposure rule: one evaluation per point, or
-supersampling with n_sub = 15 (an eclipse has no contact rule). Each
+Both events take the same exposure rule: one evaluation per point,
+supersampling with n_sub = 15, or the contact rule with n_gl = 5. Each
 configuration runs in its own subprocess, interleaved over rounds;
 reported is the median over rounds of each round's median. value+grad
 evaluates value AND gradients in every array input.
@@ -35,9 +35,10 @@ P, A, B, R = 3.4525, 8.84, 0.30, 0.1153
 F, TH, FP = 0.2, 0.5, 1e-3
 EXP = 29.4 / 60.0 / 24.0
 N_SUB = 15
+N_GL = 5
 W4 = [0.2, 0.2, 0.1, 0.1]
 ROUTES = ("sphere_transit", "sphere_eclipse", "oblate_transit", "oblate_eclipse")
-RULES = ("none", "supersample")
+RULES = ("none", "supersample", "contact")
 
 
 def worker(route, grad, n, m, rule, reps):
@@ -58,6 +59,8 @@ def worker(route, grad, n, m, rule, reps):
     kw = {}
     if rule == "supersample":
         kw = dict(exp_time=EXP, integration="supersample", n_sub=N_SUB)
+    elif rule == "contact":
+        kw = dict(exp_time=EXP, integration="contact", n_gl=N_GL)
     args = [tau] + [full(v) for v in (P, A, B, R)]
     if event == "eclipse":
         kw["transittype"] = "secondary"
@@ -125,7 +128,7 @@ def main():
             res[(r, rule, g)].append(json.loads(out.splitlines()[-1])["s"])
 
     med = {k: statistics.median(v) * 1e3 for k, v in res.items()}
-    print(f"\n{a.chains} chains x {a.points} points, n_sub={N_SUB} "
+    print(f"\n{a.chains} chains x {a.points} points, n_sub={N_SUB}, n_gl={N_GL} "
           f"(median of {a.rounds} isolated rounds)\n")
     print("| route | rule | forward | vs transit | value+grad | vs transit |")
     print("|---|---|---:|---:|---:|---:|")
@@ -139,6 +142,7 @@ def main():
     path = os.path.join(os.path.dirname(here), "eclipse_kernels.json")
     with open(path, "w") as f:
         json.dump({"chains": a.chains, "points": a.points, "n_sub": N_SUB,
+                   "n_gl": N_GL,
                    "rules": {rule: {r: {"forward_ms": med[(r, rule, False)],
                                         "value_grad_ms": med[(r, rule, True)]}
                                     for r in ROUTES} for rule in RULES}},

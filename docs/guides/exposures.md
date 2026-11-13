@@ -74,6 +74,27 @@ times the work.
 In float32 on the GPU, `TransitModel` integrates the contact rule inside
 its fused kernel, as the sampler API does below.
 
+### Secondary eclipses
+
+A 29-minute exposure of a hot Jupiter's eclipse ($P = 3.45$ d,
+$a = 8.84$, $r_p = 0.115$, $b = 0.3$), with the largest error as a
+fraction of the eclipse depth (`benchmarks/bench_eclipse_exposure.py`):
+
+| method | spherical | spherical, $e = 0.3$ | oblate, $f = 0.2$ |
+|---|---:|---:|---:|
+| supersampling, `N = 15` | $1.4\times10^{-2}$ | $1.1\times10^{-2}$ | $1.4\times10^{-2}$ |
+| supersampling, `N = 101` | $2.0\times10^{-3}$ | $1.5\times10^{-3}$ | $2.0\times10^{-3}$ |
+| contact rule, `n_gl = 5` | $1.8\times10^{-5}$ | $2.4\times10^{-5}$ | $1.9\times10^{-5}$ |
+| contact rule, `n_gl = 7` | $4.0\times10^{-6}$ | $5.3\times10^{-6}$ | $4.3\times10^{-6}$ |
+| contact rule, `n_gl = 7`, float32 | $1.2\times10^{-5}$ | $1.4\times10^{-5}$ | $1.2\times10^{-5}$ |
+
+The float64 rows run the MLX graph. The float32 row runs
+the fused GPU kernels through the sampler API, which returns $F - 1$. In
+float32, `TransitModel`'s flux $F$ is rounded near 1, to within
+$6\times10^{-8}$: that is $6\times10^{-5}$ of this depth, more than the
+rule's own error. For what the contact rule costs on the GPU, see
+{doc}`sampler-api`.
+
 ## In the sampler API
 
 `flux_dev_from_tau` integrates inside the GPU kernel, in registers, so

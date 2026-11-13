@@ -2,41 +2,60 @@
  "chains": 512,
  "points": 5000,
  "n_sub": 15,
+ "n_gl": 5,
  "rules": {
   "none": {
    "sphere_transit": {
-    "forward_ms": 0.7344582118093967,
-    "value_grad_ms": 1.6240407712757587
+    "forward_ms": 0.7339590229094028,
+    "value_grad_ms": 1.6324999742209911
    },
    "sphere_eclipse": {
-    "forward_ms": 0.48787519335746765,
-    "value_grad_ms": 1.0884585790336132
+    "forward_ms": 0.5054590292274952,
+    "value_grad_ms": 1.0697501711547375
    },
    "oblate_transit": {
-    "forward_ms": 15.167375095188618,
-    "value_grad_ms": 47.46929230168462
+    "forward_ms": 15.130292158573866,
+    "value_grad_ms": 47.48695809394121
    },
    "oblate_eclipse": {
-    "forward_ms": 2.1182079799473286,
-    "value_grad_ms": 4.638249985873699
+    "forward_ms": 2.1127909421920776,
+    "value_grad_ms": 4.6516661532223225
    }
   },
   "supersample": {
    "sphere_transit": {
-    "forward_ms": 4.330249968916178,
-    "value_grad_ms": 11.72991655766964
+    "forward_ms": 4.328375216573477,
+    "value_grad_ms": 11.738999746739864
    },
    "sphere_eclipse": {
-    "forward_ms": 2.3551671765744686,
-    "value_grad_ms": 5.419124849140644
+    "forward_ms": 2.3596249520778656,
+    "value_grad_ms": 5.412083119153976
    },
    "oblate_transit": {
-    "forward_ms": 249.99245814979076,
-    "value_grad_ms": 769.8443750850856
+    "forward_ms": 250.24829199537635,
+    "value_grad_ms": 769.2614169791341
    },
    "oblate_eclipse": {
-    "forward_ms": 26.30000002682209,
-    "value_grad_ms": 54.831250105053186
+    "forward_ms": 26.26062510535121,
+    "value_grad_ms": 54.79212524369359
+   }
+  },
+  "contact": {
+   "sphere_transit": {
+    "forward_ms": 2.882333006709814,
+    "value_grad_ms": 7.633791770786047
+   },
+   "sphere_eclipse": {
+    "forward_ms": 1.324750017374754,
+    "value_grad_ms": 2.6850001886487007
+   },
+   "oblate_transit": {
+    "forward_ms": 156.50645783171058,
+    "value_grad_ms": 469.74162524566054
+   },
+   "oblate_eclipse": {
+    "forward_ms": 24.34641681611538,
+    "value_grad_ms": 48.9272503182292
    }
   }
  }

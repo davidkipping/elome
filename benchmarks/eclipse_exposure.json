@@ -1,0 +1,111 @@
+{
+ "exp_time_min": 29.4,
+ "points": 2001,
+ "planets": {
+  "sphere": {
+   "reference_agreement": 9.49906819869284e-10,
+   "rows": [
+    {
+     "method": "supersample",
+     "n": 15,
+     "float32": false,
+     "max_err_depth": 0.014210430374639316
+    },
+    {
+     "method": "supersample",
+     "n": 101,
+     "float32": false,
+     "max_err_depth": 0.0020205074673373957
+    },
+    {
+     "method": "contact",
+     "n": 5,
+     "float32": false,
+     "max_err_depth": 1.812794625521974e-05
+    },
+    {
+     "method": "contact",
+     "n": 7,
+     "float32": false,
+     "max_err_depth": 4.04404087994692e-06
+    },
+    {
+     "method": "contact",
+     "n": 7,
+     "float32": true,
+     "max_err_depth": 1.2379987701649497e-05
+    }
+   ]
+  },
+  "sphere_ecc": {
+   "reference_agreement": 1.254996107036277e-09,
+   "rows": [
+    {
+     "method": "supersample",
+     "n": 15,
+     "float32": false,
+     "max_err_depth": 0.010698943342823952
+    },
+    {
+     "method": "supersample",
+     "n": 101,
+     "float32": false,
+     "max_err_depth": 0.0015226491216768778
+    },
+    {
+     "method": "contact",
+     "n": 5,
+     "float32": false,
+     "max_err_depth": 2.386324804426465e-05
+    },
+    {
+     "method": "contact",
+     "n": 7,
+     "float32": false,
+     "max_err_depth": 5.332579711136987e-06
+    },
+    {
+     "method": "contact",
+     "n": 7,
+     "float32": true,
+     "max_err_depth": 1.3996396930338051e-05
+    }
+   ]
+  },
+  "oblate": {
+   "reference_agreement": 1.0180745135812685e-09,
+   "rows": [
+    {
+     "method": "supersample",
+     "n": 15,
+     "float32": false,
+     "max_err_depth": 0.014177808116411228
+    },
+    {
+     "method": "supersample",
+     "n": 101,
+     "float32": false,
+     "max_err_depth": 0.0020155017939060826
+    },
+    {
+     "method": "contact",
+     "n": 5,
+     "float32": false,
+     "max_err_depth": 1.9323521227576634e-05
+    },
+    {
+     "method": "contact",
+     "n": 7,
+     "float32": false,
+     "max_err_depth": 4.322515012589179e-06
+    },
+    {
+     "method": "contact",
+     "n": 7,
+     "float32": true,
+     "max_err_depth": 1.201432930919566e-05
+    }
+   ]
+  }
+ }
+}
