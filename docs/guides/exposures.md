@@ -65,11 +65,11 @@ times the work.
   separately for ingress and egress. See {doc}`../oblate/light-curves`.
 - **Gradients.** The quadrature nodes move with the parameters, so the
   gradient is exactly the gradient of the integral that was computed.
-
-- **Secondary eclipses of spherical planets.** The eclipse on an orbit
-  is the transit of the same orbit turned by 180°, at the impact
-  parameter of the occultation, so its contacts and its split are that
-  transit's. An oblate planet's eclipse takes supersampling.
+- **Secondary eclipses.** The eclipse on an orbit is the transit of the
+  same orbit turned by 180°, at the impact parameter of the occultation:
+  the planet sits opposite its place on that transit, and its outline is
+  symmetric about its centre, so the eclipse's contacts and its split are
+  that transit's, for spherical and oblate planets alike.
 
 In float32 on the GPU, `TransitModel` integrates the contact rule inside
 its fused kernel, as the sampler API does below.

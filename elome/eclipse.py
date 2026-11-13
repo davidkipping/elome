@@ -16,9 +16,9 @@ clear of the star (TransitModel's rule); an oblate planet's is
 data on the GPU stream takes the fused Metal kernels (``metal_eclipse``,
 ``metal_oblate``), with the exposure rule in the kernel; anything else runs
 the MLX graph, fp64 on the CPU stream. The exposure rule is "none",
-"supersample" or, for a spherical planet, "contact": the transit of the
-orbit turned by pi, whose contact split the transit route already does
-(``_eclipse_dev_contact``).
+"supersample" or "contact": the eclipse is the transit of the orbit turned
+by pi, whose contacts are the eclipse's (``_eclipse_dev_contact``;
+``oblate_tau._eclipse_turned``).
 
 Two orbit helpers for timing an eclipse: ``occultation_offset``, the time
 from transit to occultation in orbits, and ``light_travel_delay``, how
@@ -196,6 +196,13 @@ def _eclipse_from_transit(D, r, fp):
     return fc * (1.0 + mx.where(pos, D / mx.where(pos, rc * rc, 1.0), 0.0))
 
 
+@mx.compile
+def _fp_times(vis, fp):
+    """fp (1 + vis) per row: the eclipse's F - 1 from the visible fraction
+    - 1, in one pass."""
+    return mx.reshape(fp, (-1, 1)) * (1.0 + vis)
+
+
 def _eclipse_dev_contact(tau2d, period, a, b, r, fp, k, h, exp_time, n_gl):
     """F - 1 of a spherical planet's eclipse under the contact rule, (n, m),
     from (n,) parameters. The eclipse on the orbit
@@ -206,10 +213,17 @@ def _eclipse_dev_contact(tau2d, period, a, b, r, fp, k, h, exp_time, n_gl):
     distance from the star. A uniform disc's overlap with the star is
     symmetric in the two discs, so the visible fraction - 1 is the transit
     deviation D of a star without limb darkening (u = 0) over r^2, and the
-    transit route integrates the exposure: its kernel on an fp32 GPU, its
-    graph otherwise, the contacts the flipped orbit's own. (The kernel
-    computes the limb-darkening terms that u = 0 then zeroes, about twice an
-    eclipse kernel's work per node.)"""
+    transit graph integrates the exposure, the contacts the flipped orbit's
+    own. An fp32 GPU runs the same rule on the eclipse's own kernel
+    (metal_eclipse.eclipse_vis_contact_kernel: the transit's orbit and
+    split, the eclipse's photometry, half the transit kernel's work per
+    node)."""
+    if (tau2d.dtype == mx.float32 and M._gpu_stream_active()
+            and M.metal_available()):
+        from .metal_eclipse import eclipse_vis_contact_kernel
+        vis = eclipse_vis_contact_kernel(tau2d, period, a, b, r, k, h,
+                                         exp_time=exp_time, n_gl=n_gl)
+        return _fp_times(vis, fp)
     if k is None:
         dev, b_occ, orbit = mx.zeros_like(period), b, {}
     else:
@@ -231,19 +245,15 @@ def eclipse_dev_from_tau(tau, period, a, b, r, fp, f=None, theta=None, k=None,
     (n, m) -- or (m,) for 1-D tau and no per-chain parameters. ``f`` given:
     an oblate planet (``theta`` defaulting to 0). ``mode``: metal._INT_NONE,
     _INT_SUPER (``n_sub`` uniform nodes over ``exp_time``, batman's rule, as
-    the transit graph's) or _INT_CONTACT (spherical planets: ``n_gl``
-    Gauss-Legendre nodes per piece of the exposure split at the contacts,
-    _eclipse_dev_contact). fp32 on the GPU stream: the Metal kernels, the
-    exposure rule in them."""
+    the transit graph's) or _INT_CONTACT (``n_gl`` Gauss-Legendre nodes per
+    piece of the exposure split at the contacts: _eclipse_dev_contact, and
+    oblate_tau.eclipse_dev_from_tau_oblate for an oblate planet). fp32 on
+    the GPU stream: the Metal kernels, the exposure rule in them."""
     if tau.ndim not in (1, 2):
         raise ValueError(f"tau must be (m,) or (n, m); got {tau.shape}")
     oblate = f is not None
     contact = mode == M._INT_CONTACT and exp_time != 0.0
     if oblate:
-        if contact:
-            raise ValueError("the contact rule for an oblate planet's eclipse "
-                             "is not available yet; use "
-                             "integration='supersample'")
         from .oblate import _check_domain
         _check_domain(r, f)
     squeeze = tau.ndim == 1
@@ -261,6 +271,13 @@ def eclipse_dev_from_tau(tau, period, a, b, r, fp, f=None, theta=None, k=None,
     per_c, a_c, b_c, r_c, fp_c = pc[:5]
     kh = pc[-2:] if ecc else [None, None]
     m = tau2d.shape[1]
+    if contact and oblate:
+        from .oblate_tau import eclipse_dev_from_tau_oblate
+        vis = eclipse_dev_from_tau_oblate(tau2d, per_c, a_c, b_c, r_c, *pc[5:7],
+                                          *kh, exp_time=exp_time, mode=mode,
+                                          n_gl=int(n_gl))
+        out = _fp_times(vis, fp_c)
+        return out[0] if squeeze and n == 1 else out
     if contact:
         out = _eclipse_dev_contact(tau2d, per_c, a_c, b_c, r_c, fp_c, *kh,
                                    exp_time, int(n_gl))

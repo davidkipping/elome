@@ -1811,7 +1811,7 @@ def flux_dev_from_tau_oblate_kernel(tau2d, per_c, a_c, b_c, r_c, f_c, th_c,
 # f_sw the value is the sphere's (metal_eclipse.mp_ecl_vis) and d/df comes
 # from the ellipse at f = f_sw, as ob_cols_bd's. The orbit plug-ins are
 # _OB_ORBITS' circular and eccentric ones; exposure is none or
-# supersampling (an eclipse has no contact rule).
+# supersampling (the contact rule's kernels follow).
 
 _ECL_OB_FN = r"""
 struct ob_ecl_fz { int regime; float lo, hi, dth; };   // ob_frozen's first part
@@ -2113,6 +2113,252 @@ def eclipse_vis_oblate_kernel(tau2d, per_c, a_c, b_c, r_c, f_c, th_c, k=None,
         orbit = "eccew" if ew else "ecc"
     core = _make_ecl_core(exp_time, mode, n_sub, orbit)
     return core(tau2d, per_c, a_c, shape, r_c, f_c, th_c)
+
+
+# The contact rule, as metal_eclipse's for a sphere: the eclipse is the
+# transit of the orbit turned by pi at the time since mid-eclipse, and the
+# outline, symmetric about its centre, overlaps the star the same seen from
+# either side, so the _OB_ORBITS plug-ins run on the turned orbit and
+# ob_ecl_vis takes its sky position as it stands. The contacts are the
+# turned transit's oblate ones (contact_offsets_oblate_kernel), detached;
+# the shift's period and dev partials are added as there.
+
+_ECL_OB_C_HEAD = """
+    uint x = thread_position_in_grid.x;
+    uint y = thread_position_in_grid.y;
+    if (x >= (uint)npts) return;
+    uint i = y * (uint)npts + x;
+
+    float per = perin[y];
+    float dev = devin[y];
+    // the time since this point's own mid-eclipse, within half a period
+    float dt0 = (taui[i] - 0.5f * per) - per * dev;
+    float nep = metal::rint(dt0 / per);
+    float tau0 = dt0 - per * nep;
+    float av  = ain[y];
+ORB_LOAD
+    float r   = rin[y];
+    float fl  = fin[y];
+    float th  = thin[y];
+    float cth = metal::precise::cos(th), sth = metal::precise::sin(th);
+    float sqf = metal::precise::sqrt(1.0f - fl);
+    float hw_exp = 0.5f * expt;
+    // a node whose centre is further from the star's than 1 + the long
+    // semi-axis adds exactly nothing (with rounding room; NaN skips it)
+    float lim2 = 1.0f + 1.001f * fabs(r) / sqf;
+    lim2 *= lim2;
+""" + M._TAU_SKIP
+
+_ECL_OB_C_FWD = _ECL_OB_C_HEAD + """
+    float X, Y;
+    bool front;
+    if (skip) { out[i] = 0.0f; return; }
+""" + M._TAU_EDGES + """
+    float A = 0.0f, S = 0.0f;
+    for (int iv = 0; iv < 5; ++iv) {
+        float lo = edge[iv], hi = edge[iv + 1];
+        float mid = 0.5f * (lo + hi), hw = 0.5f * (hi - lo);
+        for (int j = 0; j < ngl; ++j) {
+            float w = hw * wg[j];
+            float tt = mid + hw * xg[j];
+            // a node of zero weight adds exactly nothing: skip its evaluation
+            front = false;
+            if (w != 0.0f) { ORB_XY(tt) }
+            if (front && X * X + Y * Y < lim2)
+                A += w * ob_ecl_vis(X, Y, r, fl, cth, sth, sqf);
+            S += w;
+        }
+    }
+    out[i] = (S > 0.0f) ? (A / S) : 0.0f;
+"""
+
+# per-point gradient in tau; per-chain slots (per, theta..., r, f,
+# theta_sky, dev)
+_ECL_OB_C_VJP = _ECL_OB_C_HEAD + """
+    float ctv = ct[i];
+    float X, Y, dXp, dYp;
+    float dXt[NTH], dYt[NTH];
+    bool front;
+    float g[5];
+    float p_per = 0.0f, p_r = 0.0f, p_f = 0.0f, p_ts = 0.0f;
+    float p_th[NTH];
+    for (int k = 0; k < NTH; ++k) p_th[k] = 0.0f;
+    float g_tau = 0.0f;
+    if (skip) {
+        // the quotient gives ctv * (+0): match its sign
+        float zc = ctv * 0.0f;
+        g_tau = zc;  p_per = zc;  p_r = zc;  p_f = zc;  p_ts = zc;
+        for (int k = 0; k < NTH; ++k) p_th[k] = zc;
+    } else {
+""" + M._TAU_EDGES + """
+        float A = 0.0f, S = 0.0f, dA = 0.0f, dS = 0.0f;
+        float a_per = 0.0f, a_r = 0.0f, a_f = 0.0f, a_ts = 0.0f;
+        float a_th[NTH];
+        for (int k = 0; k < NTH; ++k) a_th[k] = 0.0f;
+        for (int iv = 0; iv < 5; ++iv) {
+            float lo = edge[iv], hi = edge[iv + 1];
+            float dlo = dedge[iv], dhi = dedge[iv + 1];
+            float mid = 0.5f * (lo + hi), hw = 0.5f * (hi - lo);
+            float dmid = 0.5f * (dlo + dhi), dhw = 0.5f * (dhi - dlo);
+            for (int j = 0; j < ngl; ++j) {
+                float w = hw * wg[j];
+                float dw = dhw * wg[j];
+                float tt = mid + hw * xg[j];
+                float dtt = dmid + dhw * xg[j];
+                front = false;
+                if (w != 0.0f || dw != 0.0f) { ORB_XYD(tt) }
+                float f = 0.0f, dfdtt = 0.0f;
+                if (front && X * X + Y * Y < lim2) {
+                    f = ob_ecl_vis_d(X, Y, r, fl, cth, sth, sqf, g);
+                    dfdtt = (g[0] * dXp + g[1] * dYp) * (MP_TWO_PI / per);
+                    a_per += w * (-dfdtt * tt / per);
+                    for (int k = 0; k < NTH; ++k)
+                        a_th[k] += w * (g[0] * dXt[k] + g[1] * dYt[k]);
+                    a_r  += w * g[2];
+                    a_f  += w * g[3];
+                    a_ts += w * g[4];
+                }
+                A += w * f;   S += w;
+                dA += dw * f + w * dfdtt * dtt;
+                dS += dw;
+            }
+        }
+        if (S > 0.0f) {
+            float inv = 1.0f / S;
+            g_tau = ctv * (dA * S - A * dS) * inv * inv;
+            p_per = ctv * a_per * inv;
+            for (int k = 0; k < NTH; ++k) p_th[k] = ctv * a_th[k] * inv;
+            p_r  = ctv * a_r * inv;
+            p_f  = ctv * a_f * inv;
+            p_ts = ctv * a_ts * inv;
+        }
+    }
+    // the shift tau0 = tau - P (1/2 + dev + nep)
+    p_per -= (0.5f + dev + nep) * g_tau;
+    float p_dev = -per * g_tau;
+    gtau[i] = g_tau;
+    int n_live = TH_LIVE;                     // uniform over the simdgroup
+    p_per = metal::simd_sum(p_per);
+    for (int k = 0; k < NTH; ++k)
+        if (k < n_live) p_th[k] = metal::simd_sum(p_th[k]);
+    p_r  = metal::simd_sum(p_r);
+    p_f  = metal::simd_sum(p_f);
+    p_ts = metal::simd_sum(p_ts);
+    p_dev = metal::simd_sum(p_dev);
+    if (metal::simd_is_first()) {
+        uint ngrp = ((uint)npts + 31u) / 32u;
+        uint ob = y * NSLOT_C * ngrp + x / 32u;
+        gpar[ob] = p_per;
+        for (int k = 0; k < NTH; ++k)
+            if (k < n_live) gpar[ob + (1u + (uint)k) * ngrp] = p_th[k];
+        gpar[ob + (1u + NTH_U) * ngrp] = p_r;
+        gpar[ob + (2u + NTH_U) * ngrp] = p_f;
+        gpar[ob + (3u + NTH_U) * ngrp] = p_ts;
+        gpar[ob + (4u + NTH_U) * ngrp] = p_dev;
+    }
+"""
+
+
+def _ecl_ob_c_src(body: str, orbit: str) -> str:
+    # one more slot than _ecl_ob_src's, for dev
+    nth = _OB_ORBITS[orbit]["nth"]
+    return _ecl_ob_src(body.replace("NSLOT_C", f"{nth + 5}u"), orbit)
+
+
+def _get_ecl_contact_kernels(orbit: str):
+    key = ("obl-ecl-contact", orbit)
+    if key not in M._kernels:
+        hdr = _ecl_ob_header(orbit)
+        ins = (["taui", "perin", "ain"] + _OB_ORBITS[orbit]["inputs"]
+               + ["rin", "fin", "thin", "devin", "cs", "xg", "wg", "expt",
+                  "ngl", "npts"])
+        M._kernels[key] = (
+            mx.fast.metal_kernel(
+                name=f"mp_oeclc_fwd_{orbit}", input_names=ins,
+                output_names=["out"], header=hdr,
+                source=_ecl_ob_c_src(_ECL_OB_C_FWD, orbit)),
+            mx.fast.metal_kernel(
+                name=f"mp_oeclc_vjp_{orbit}", input_names=ins[:-1] + ["ct", "npts"],
+                output_names=["gtau", "gpar"], header=hdr,
+                source=_ecl_ob_c_src(_ECL_OB_C_VJP, orbit)))
+    return M._kernels[key]
+
+
+def _make_ecl_contact_core(exp_time, n_gl, orbit):
+    """custom_function over the contact-rule oblate eclipse kernels.
+    Primals: (tau2d, period, a, shape, r, f, theta, dev, cs), ``shape`` the
+    turned orbit's, ``dev`` occultation_offset - 1/2, ``cs`` the turned
+    transit's detached contact times."""
+    key = ("obl-ecl-contact", orbit, float(exp_time), int(n_gl))
+    if key in M._tau_cores:
+        return M._tau_cores[key]
+    from .exposure import gauss_legendre
+    xg_np, wg_np = gauss_legendre(n_gl)
+    nth = _OB_ORBITS[orbit]["nth"]
+    nslot = nth + 5
+
+    def _static(dtype):
+        return mx.array(xg_np, dtype=dtype), mx.array(wg_np, dtype=dtype)
+
+    @mx.custom_function
+    def core(tau2d, period, a, shape, r, f, theta, dev, cs):
+        n, m = tau2d.shape
+        xg, wg = _static(tau2d.dtype)
+        k = _get_ecl_contact_kernels(orbit)[0]
+        return k(inputs=[tau2d, period, a, shape, r, f, theta, dev, cs, xg, wg,
+                         exp_time, int(n_gl), int(m)],
+                 output_shapes=[(n, m)], output_dtypes=[mx.float32],
+                 grid=(m, n, 1), threadgroup=(256, 1, 1))[0]
+
+    @core.vjp
+    def _vjp(primals, cotangent, output):
+        ct = cotangent if isinstance(cotangent, mx.array) else cotangent[0]
+        tau2d = primals[0]
+        n, m = tau2d.shape
+        cols = (m + 31) // 32
+        xg, wg = _static(tau2d.dtype)
+        k = _get_ecl_contact_kernels(orbit)[1]
+        gtau, gpar = k(
+            inputs=[*primals, xg, wg, exp_time, int(n_gl), ct, int(m)],
+            output_shapes=[(n, m), (n, nslot, cols)],
+            output_dtypes=[mx.float32] * 2, init_value=0.0,
+            grid=(m, n, 1), threadgroup=(256, 1, 1))
+        g = mx.sum(gpar, axis=2)
+        if orbit == "circ":
+            g_shape = g[:, 2]
+        else:
+            g_shape = mx.zeros((n, M.NORB), dtype=g.dtype)
+            g_shape[:, mx.array(M._ECC_TH_COLS)] = g[:, 2:1 + nth]
+        return (gtau, g[:, 0], g[:, 1], g_shape, g[:, 1 + nth], g[:, 2 + nth],
+                g[:, 3 + nth], g[:, 4 + nth], mx.zeros_like(primals[-1]))
+
+    M._tau_cores[key] = core
+    return core
+
+
+def eclipse_vis_oblate_contact_kernel(tau2d, per_c, a_c, b_c, r_c, f_c, th_c,
+                                      k=None, h=None, ew=False, exp_time=0.0,
+                                      n_gl=5):
+    """The fp32 kernel route of the contact rule for an oblate planet's
+    eclipse: canonical (n,) parameters in, the visible fraction minus 1,
+    (n, m), averaged over each exposure, out; outside the domain not masked
+    (the caller's). ``ew``: (k, h) hold (e, w) (oblate_tau._orbit_consts)."""
+    n = tau2d.shape[0]
+    if k is None:
+        orbit, shape = "circ", b_c
+        dev = mx.zeros_like(per_c)
+        cs = contact_offsets_oblate_kernel(a_c, b_c, r_c, f_c, th_c)
+    else:
+        from .anchored import pack_orbit_constants
+        from .oblate_tau import _eclipse_turned
+        dev, ci, turned, b_occ, kc, hc = _eclipse_turned(a_c, b_c, k, h, ew)
+        shape = pack_orbit_constants(None, None, ci, consts=turned)
+        cs = contact_offsets_oblate_kernel(a_c, b_occ, r_c, f_c, th_c, kc, hc,
+                                           ci, consts=turned)
+        orbit = "eccew" if ew else "ecc"
+    cs = mx.stop_gradient(cs * (per_c / (2.0 * math.pi))[:, None])
+    core = _make_ecl_contact_core(exp_time, n_gl, orbit)
+    return core(tau2d, per_c, a_c, shape, r_c, f_c, th_c, dev, cs)
 
 
 # ---------------------------------------------------------------------------

@@ -962,17 +962,81 @@ def _eclipse_graph(tau, period, a, b, r, f, theta, k=None, h=None, ew=False):
     return mx.where(pos, e0 / mx.where(pos, math.pi * rv * rv, 1.0), 0.0)
 
 
+def _eclipse_turned(a, b, k, h, ew=False):
+    """An eccentric eclipse as the transit of the orbit turned by pi, (e, w
+    + pi): (dev, cos i, the turned orbit's anchored constants, its impact
+    parameter b_occ at occultation, its (k, h) for the detached contact
+    starts). dev is occultation_offset - 1/2, mid-eclipse P (1/2 + dev)
+    after mid-transit; with ``ew``, (k, h) hold (e, w [rad]) and dev comes
+    from e cos w, smooth at e = 0."""
+    from .anchored import anchor_constants, anchor_constants_ew
+    from .eclipse import _occultation_offset_dev_ew, occultation_offset_dev
+    from .exposure import contact_geometry
+    ci = _orbit_consts(a, b, k, h, ew)[0]
+    if ew:
+        e, w = k, h
+        turned = anchor_constants_ew(e, w + math.pi)
+        dev = _occultation_offset_dev_ew(e, w)
+        kc, hc = _contact_kh(e, w + math.pi, True)
+    else:
+        e = k * k + h * h
+        turned = anchor_constants(-k, -h)
+        dev = occultation_offset_dev(k, h)
+        kc, hc = -k, -h
+    b_occ = contact_geometry(a, e, turned[2], ci)[1]
+    return dev, ci, turned, b_occ, kc, hc
+
+
+def _eclipse_contacts(period, a, b, r, f, theta, k=None, h=None, ew=False):
+    """The contact rule's split of an eclipse for the graph: dev (n,),
+    mid-eclipse P (1/2 + dev) after mid-transit, and the turned transit's
+    four contact phases about it (n, 4), detached (interior split points)."""
+    if k is None:
+        dev = mx.zeros_like(period)
+        cs = _contact_offsets_oblate(a, b, r, f, theta)
+    else:
+        dev, ci, turned, b_occ, kc, hc = _eclipse_turned(a, b, k, h, ew)
+        cs = _contact_offsets_oblate(a, b_occ, r, f, theta, kc, hc, ci,
+                                     consts=turned)
+    cs = mx.stack([mx.reshape(c, (-1,)) for c in cs], axis=1)
+    return dev, mx.stop_gradient(cs)
+
+
+def _eclipse_graph_contact(tau, rows, dev, cs, ew, exp_time, n_gl):
+    """_eclipse_graph averaged over each exposure by the contact rule:
+    Gauss-Legendre on the window split at the contacts, which are held
+    about mid-eclipse (_eclipse_contacts) and move with it, as the kernel's
+    (metal_oblate's contact eclipse kernels), so the two routes' gradients
+    are one quadrature's."""
+    from .exposure import exposure_nodes
+    n, m = tau.shape
+    per = mx.reshape(rows[0], (-1, 1))
+    # the time since each point's own mid-eclipse, within half a period
+    d = (tau - 0.5 * per) - per * mx.reshape(dev, (-1, 1))
+    d = d - per * mx.round(d / per)
+    T, W = exposure_nodes(d, 0.0, mx.stop_gradient(per), exp_time,
+                          tuple(cs[:, j:j + 1] for j in range(4)), int(n_gl),
+                          dtype=tau.dtype)
+    T = T + (tau - d)[..., None]
+    vis = _eclipse_graph(mx.reshape(T, (n, -1)), *rows, ew=ew)
+    return mx.sum(mx.reshape(vis, T.shape) * W, axis=-1)
+
+
 _eclipse_block_fns: dict = {}
 
 
-def _eclipse_block_fn(ecc, ew, compiled):
-    """``run(tt, rows)`` for _in_blocks, as _block_fn's."""
+def _eclipse_block_fn(ecc, ew, compiled, exp_time=0.0, n_gl=0):
+    """``run(tt, rows)`` for _in_blocks, as _block_fn's. ``n_gl`` > 0: the
+    contact rule, the rows ending in (dev, cs) (_eclipse_contacts)."""
     def raw(tt, *rows):
+        if n_gl:
+            return _eclipse_graph_contact(tt, rows[:-2], *rows[-2:], ew,
+                                          exp_time, n_gl)
         return _eclipse_graph(tt, *rows[:6], *(rows[6:] if ecc else ()),
                               ew=ew)
     fn = raw
     if compiled:
-        key = (bool(ecc), bool(ew))
+        key = (bool(ecc), bool(ew), float(exp_time), int(n_gl))
         fn = _eclipse_block_fns.get(key)
         if fn is None:
             fn = _eclipse_block_fns[key] = mx.compile(raw)
@@ -982,19 +1046,24 @@ def _eclipse_block_fn(ecc, ew, compiled):
 @fp64_on_cpu
 def eclipse_dev_from_tau_oblate(tau, period, a, b, r, f, theta, k=None,
                                 h=None, ew=False, compile_blocks=False,
-                                use_metal=True):
+                                use_metal=True, exp_time=0.0, mode=None,
+                                n_gl=5):
     """A uniform oblate planet's secondary eclipse: the visible fraction of
     its disc minus 1 (0 out of eclipse, -1 in totality), so that the flux
     is 1 + fp (1 + this). ``tau`` is (n, m) or (m,), the time since each
     point's mid-*transit* within half a period of it, as
     flux_dev_from_tau_oblate's (the orbit places the eclipse: near
-    +-period / 2 on a circular orbit); arguments as there. The graph only,
-    with no exposure rule (TransitModel supersamples on its own grid).
-    fp32 data on the GPU stream takes the Metal kernel
-    (``metal_oblate.eclipse_vis_oblate_kernel``) unless ``use_metal`` is
-    False; anything else runs the graph, fp64 on the CPU stream in blocks of
-    at most _OBLATE_BLOCK points, each compiled once with
-    ``compile_blocks``."""
+    +-period / 2 on a circular orbit); arguments as there. Instantaneous,
+    or with ``mode`` metal._INT_CONTACT and ``exp_time`` the contact rule:
+    ``n_gl`` Gauss-Legendre nodes per piece of each exposure split at the
+    contacts of the transit of the orbit turned by pi (_eclipse_turned),
+    which are the eclipse's (TransitModel supersamples on its own grid).
+    fp32 data on the GPU stream takes the Metal kernels
+    (``metal_oblate.eclipse_vis_oblate_kernel``, and
+    ``eclipse_vis_oblate_contact_kernel`` for the contact rule) unless
+    ``use_metal`` is False; anything else runs the graph, fp64 on the CPU
+    stream in blocks of at most _OBLATE_BLOCK points, each compiled once
+    with ``compile_blocks``."""
     if tau.ndim not in (1, 2):
         raise ValueError(f"tau must be (m,) or (n, m); got {tau.shape}")
     _check_domain(r, f)
@@ -1008,12 +1077,25 @@ def eclipse_dev_from_tau_oblate(tau, period, a, b, r, f, theta, k=None,
     rows = [M._canon_param(p, n, tau2d.dtype) for p in params]
     if tau2d.shape[0] != n:
         tau2d = mx.broadcast_to(tau2d, (n, tau2d.shape[1]))
+    contact = mode == M._INT_CONTACT and exp_time != 0.0
     if (use_metal and tau2d.dtype == mx.float32 and M._gpu_stream_active()
             and M.metal_available()):
-        from .metal_oblate import eclipse_vis_oblate_kernel
         from .oblate import _in_domain
-        out = eclipse_vis_oblate_kernel(tau2d, *rows, ew=ew)
+        if contact:
+            from .metal_oblate import eclipse_vis_oblate_contact_kernel
+            out = eclipse_vis_oblate_contact_kernel(
+                tau2d, *rows, ew=ew, exp_time=exp_time, n_gl=int(n_gl))
+        else:
+            from .metal_oblate import eclipse_vis_oblate_kernel
+            out = eclipse_vis_oblate_kernel(tau2d, *rows, ew=ew)
         out = mx.where(_in_domain(rows[3], rows[4])[:, None], out, mx.nan)
+    elif contact:
+        # the split depends on the parameters alone: once per set
+        split = _eclipse_contacts(*rows, ew=ew)
+        out = _in_blocks(_eclipse_block_fn(ecc, ew, compile_blocks, exp_time,
+                                           int(n_gl)),
+                         tau2d, rows + list(split), 5 * int(n_gl),
+                         _OBLATE_BLOCK)
     else:
         out = _in_blocks(_eclipse_block_fn(ecc, ew, compile_blocks), tau2d,
                          rows, 1, _OBLATE_BLOCK)

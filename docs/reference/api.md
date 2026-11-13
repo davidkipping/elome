@@ -296,9 +296,9 @@ Args:
         A spherical or oblate planet (``f``, ``theta``); no ring,
         spots or ``ld_basis``. The limb-darkening arguments are
         optional and ignored. Exposures: ``"none"``,
-        ``"supersample"``, or for a spherical planet ``"contact"``
-        (the eclipse is the transit of the orbit turned by pi, so its
-        contacts and split are the transit's). fp32 on the GPU runs
+        ``"supersample"`` or ``"contact"`` (the eclipse is the transit
+        of the orbit turned by pi, so its contacts and split are the
+        transit's). fp32 on the GPU runs
         fused Metal kernels, anything else the MLX graph; gradients in
         ``tau``, every parameter and ``fp``.
 

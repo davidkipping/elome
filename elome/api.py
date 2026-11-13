@@ -552,11 +552,6 @@ class TransitModel:
                                  "'hybrid4' | 'hybrid5'")
             if transittype != "primary":
                 raise ValueError("a ringed planet is primary-transit only")
-        elif self._oblate and transittype == "secondary":
-            if integration == "contact":
-                raise ValueError("the contact rule for an oblate planet's "
-                                 "eclipse is not available yet; use "
-                                 "supersample_factor")
         elif self._oblate and transittype == "primary":
             # (a secondary eclipse sees the planet as a uniform disc, so it
             # takes any law and ignores it, as the spherical one does)
@@ -1252,7 +1247,12 @@ class TransitModel:
         if fn is not None:
             return fn
         from . import oblate_tau
+        from .metal import _INT_CONTACT, _INT_NONE
         use_metal = self.use_metal
+        contact = self.integration == "contact"
+        mode = _INT_CONTACT if contact else _INT_NONE
+        exp_time = self.exp_time if contact else 0.0
+        n_gl = self.n_gl
 
         def raw(tt, t0, per, a, b, rp, f, th, fp, k=None, h=None,
                 blocks=False):
@@ -1260,15 +1260,17 @@ class TransitModel:
             tau = tau - per * mx.round(tau / per)
             return 1.0 + fp * (1.0 + oblate_tau.eclipse_dev_from_tau_oblate(
                 tau, per, a, b, rp, f, th, k=k, h=h, ew=orbit == "ew",
-                compile_blocks=blocks, use_metal=use_metal))
+                compile_blocks=blocks, use_metal=use_metal,
+                exp_time=exp_time, mode=mode, n_gl=n_gl))
         whole = mx.compile(raw)
+        nodes = 5 * n_gl if contact else 1
 
         def fn(tt, t0, *rest):
             # as _oblate_fn's: a call larger than one block runs uncompiled
             # around a compiled block
             n = max([x.shape[0] for x in (tt, t0, *rest[:6])
                      if x.ndim == 2] or [1])
-            if n * tt.shape[-1] > oblate_tau._OBLATE_BLOCK:
+            if n * tt.shape[-1] * nodes > oblate_tau._OBLATE_BLOCK:
                 return raw(tt, t0, *rest, blocks=True)
             return whole(tt, t0, *rest)
         self._compiled[key] = fn
