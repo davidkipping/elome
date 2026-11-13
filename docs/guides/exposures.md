@@ -60,6 +60,9 @@ times the work.
 The contact rule is for primary transits. Use supersampling for
 secondary eclipses.
 
+In float32 on the GPU, `TransitModel` integrates the contact rule inside
+its fused kernel, as the sampler API does below.
+
 ## In the sampler API
 
 `flux_dev_from_tau` integrates inside the GPU kernel, in registers, so

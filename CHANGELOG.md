@@ -65,6 +65,31 @@ every release is tagged `vX.Y.Z` in git.
   `elome.light_travel_delay`, the delay of the eclipse in days. Floats or
   MLX arrays, differentiable.
 
+### Changed
+- **`TransitModel` runs spherical planets on the sampler API's fused
+  kernels.** In float32 on the GPU, the contact rule, secondary eclipses
+  and the hybrid laws now compute the orbit, the exposure and the
+  photometry in one kernel, as `flux_dev_from_tau` does, in place of an
+  MLX graph for the orbit and the contact rule feeding a separate
+  photometry kernel. `light_curve`, `light_curves` and `light_curve_mx`
+  all take it. Against the previous route:
+  - the contact rule, quadratic and hybrid laws, 10³–10⁵ points: 1.1–9×
+    faster for the flux, 1.8–14× with gradients; 128 parameter sets of
+    10³ points, 7–13×;
+  - secondary eclipses, 10³–10⁶ points: 1.1–6× for the flux, 2.2–9× with
+    gradients;
+  - the hybrid laws with 15-sample supersampling, eccentric, 10⁶ points:
+    5× either way;
+  - the hybrid laws on a circular orbit without the contact rule: the
+    flux with gradients 1.3–2× faster at 10⁵–10⁷ points. There
+    `light_curve`, which no gradient can reach, keeps the MLX graph, whose
+    flux alone is about 20% faster than the kernel's at 10⁶–10⁷ points.
+
+  Under the contact rule the float32 flux is now closer to float64, about
+  3×10⁻⁸ against 2×10⁻⁷. Orbits given as arrays of `ecc` and `w`, float64,
+  the CPU, `use_metal=False` and the polynomial law keep the MLX graphs
+  unchanged.
+
 ### Fixed
 - Two numbers in the sampler guide's starspot notes rendered with a
   stray tab in place of `\times`.

@@ -194,7 +194,8 @@ class TestEccentricKernelRouting:
     def test_fp64_and_secondary_do_not_use_the_kernel(self):
         """The kernel decision is recorded in the compiled-graph cache
         key, (circular, kernel): fp64 cannot run it, and a secondary
-        eclipse is a graph the kernel does not serve."""
+        eclipse is not the model kernel's -- on an fp32 GPU model it takes
+        the eclipse kernel instead (_sph_tau_fn)."""
         m64, p64 = self._model(0.3, mx.float64, n=101)
         assert not m64._kernel_usable()
         m64.light_curve(p64)
@@ -205,7 +206,8 @@ class TestEccentricKernelRouting:
             p, np.linspace(-0.35, 0.35, 101), transittype="secondary",
             dtype=mx.float32)
         msec.light_curve(p)
-        assert list(msec._compiled) == [(False, False)]
+        assert list(msec._compiled) == ([("sph-tau", "kh")] if msec._kernel_usable()
+                                        else [(False, False)])
 
     def test_use_metal_false_disables_it(self):
         p, _ = _params(ecc=0.3, w=63.0)
@@ -367,8 +369,9 @@ def test_use_metal_takes_effect_after_first_use(law, u):
 
 @_needs_gpu
 def test_batched_contact_rule_uses_the_kernel(monkeypatch):
-    """light_curves' contact rule hands the core (n, m, nodes) separations,
-    which flux_dev_metal sent to the graph fallback (about 4x slower)."""
+    """light_curves' contact rule once handed the core (n, m, nodes)
+    separations, which flux_dev_metal sent to the graph fallback (about 4x
+    slower). It now runs the tau kernel, which never falls back either."""
     import elome.metal as M
 
     def no_graph(*a, **k):
@@ -380,3 +383,86 @@ def test_batched_contact_rule_uses_the_kernel(monkeypatch):
     monkeypatch.setattr(M, "flux_dev_analytic", no_graph)
     batch = _mp(rp=np.array([0.09, 0.11]))
     np.testing.assert_allclose(m.light_curves(batch), ref, rtol=0, atol=5e-7)
+
+
+_CONTACT = dict(exp_time=0.02, integration="contact", n_gl=7)
+_T_WIDE = 0.31 + np.linspace(-0.12, 0.12, 801)        # _mp's t0
+
+
+@_needs_gpu
+@pytest.mark.parametrize("law,u", [("quadratic", [0.35, 0.22]), ("linear", [0.4]),
+                                   ("uniform", [])])
+@pytest.mark.parametrize("ecc", [0.0, 0.3], ids=["circular", "e0.3"])
+def test_contact_rule_takes_the_tau_kernel(law, u, ecc):
+    """The quadratic family under the contact rule runs the quadratic tau
+    kernel on an fp32 GPU model (orbit, contacts, quadrature and
+    photometry in one pass): within fp32 noise of use_metal=False's graph
+    and closer than it to the fp64 model."""
+    p = _mp(limb_dark=law, u=u, ecc=ecc, w=63.0)
+    m = elome.TransitModel(p, _T_WIDE, dtype=mx.float32, **_CONTACT)
+    got = m.light_curve(p)
+    assert list(m._compiled) == [("sph-tau", "circ" if ecc == 0.0 else "kh")]
+    graph = elome.TransitModel(p, _T_WIDE, dtype=mx.float32, use_metal=False,
+                               **_CONTACT).light_curve(p)
+    f64 = elome.TransitModel(p, _T_WIDE, **_CONTACT).light_curve(p)
+    assert got.min() < 0.99
+    assert np.abs(got - graph).max() < 1e-6
+    assert np.abs(got - f64).max() < 2e-7
+
+
+@_needs_gpu
+def test_polynomial_contact_rule_keeps_its_graph():
+    """The polynomial law has no kernel: its contact rule stays the graph."""
+    p = _mp(limb_dark="polynomial", u=[0.3, 0.2, 0.1])
+    m = elome.TransitModel(p, _T_WIDE, dtype=mx.float32, **_CONTACT)
+    m.light_curve(p)
+    assert list(m._compiled) == [(True, False)]
+
+
+@_needs_gpu
+def test_contact_rule_batches_match_the_loop():
+    """light_curves on the tau kernel, one row per set, against the loop:
+    bitwise for circular sets, within a few ulps for eccentric ones (the
+    batch folds b at conjunction on the host in fp64, light_curve in the
+    fp32 graph) and when one eccentric set takes the whole batch down the
+    (k, h) orbit."""
+    rng = np.random.default_rng(8)
+    m = elome.TransitModel(_mp(), _T_WIDE, dtype=mx.float32, **_CONTACT)
+    ulp = float(np.finfo(np.float32).eps)
+    for eccs, exact in (([0.0] * 3, True), ([0.1, 0.3, 0.2], False),
+                        ([0.0, 0.3, 0.0, 0.5], False)):
+        sets = [_mp(ecc=e, w=rng.uniform(0, 360), rp=rng.uniform(0.08, 0.12),
+                    inc=rng.uniform(87.0, 88.5), u=[rng.uniform(0.2, 0.5), 0.2])
+                for e in eccs]
+        batched = m.light_curves(sets)
+        looped = np.stack([m.light_curve(q) for q in sets])
+        if exact:
+            assert np.array_equal(batched, looped)
+        else:
+            assert np.abs(batched - looped).max() <= 4 * ulp
+
+
+@_needs_gpu
+@pytest.mark.parametrize("ecc", [0.0, 0.3], ids=["circular", "e0.3"])
+def test_contact_rule_gradients_through_the_tau_kernel(ecc):
+    """light_curve_mx's gradients in t0, rp, a, inc, u1 and u2 under the
+    contact rule, through the tau kernel's VJP, against the fp64 model's,
+    condition-scaled."""
+    ct = np.random.default_rng(9).normal(size=_T_WIDE.size)
+
+    def grads(dtype):
+        m = elome.TransitModel(_mp(ecc=ecc, w=63.0), _T_WIDE, dtype=dtype, **_CONTACT)
+        with mx.stream(mx.gpu if dtype == mx.float32 else mx.cpu):
+            c = mx.array(ct, dtype=dtype)
+
+            def loss(t0, rp, a, inc, u1, u2):
+                q = _mp(ecc=ecc, w=63.0, t0=t0, rp=rp, a=a, inc=inc, u=[u1, u2])
+                return mx.sum(c * m.light_curve_mx(q))
+            g = mx.grad(loss, argnums=tuple(range(6)))(
+                *[mx.array(v, dtype=dtype) for v in (0.31, 0.11, 9.5, 87.6, 0.35, 0.22)])
+            mx.eval(g)
+        assert any(isinstance(k, tuple) and k[0] == "sph-tau"
+                   for k in m._compiled) == (dtype == mx.float32)
+        return np.array([float(np.asarray(x, np.float64)) for x in g])
+    g32, g64 = grads(mx.float32), grads(mx.float64)
+    assert np.abs(g32 - g64).max() / np.abs(g64).max() < 2e-3

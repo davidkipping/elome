@@ -308,7 +308,8 @@ def test_kernel_less_graphs_compile_once_across_streams(kw):
     """Where no kernel branch is reachable, the cache key must not split
     on the stream (it once compiled the contact graph twice). The key is
     derived from the branch structure in _get_compiled, not from a rule
-    restated in _kernel_usable."""
+    restated in _kernel_usable. (On the GPU the contact rule takes the tau
+    kernel, a key of its own; the graph is still compiled once.)"""
     model_kw = {k: v for k, v in kw.items() if k in ("exp_time",
                                                      "integration")}
     par_kw = {k: v for k, v in kw.items() if k in ("limb_dark", "u")}
@@ -317,7 +318,8 @@ def test_kernel_less_graphs_compile_once_across_streams(kw):
     m.light_curve(params(**par_kw))
     with mx.stream(mx.cpu):
         mx.eval(m.light_curve_mx(params(rp=mx.array(0.1), **par_kw)))
-    assert list(m._compiled) == [(False, False)]
+    tau = [("sph-tau", "kh")] if "integration" in model_kw else []
+    assert list(m._compiled) == tau + [(False, False)]
 
 
 @pytest.mark.skipif(not metal_available(), reason="Metal unavailable")

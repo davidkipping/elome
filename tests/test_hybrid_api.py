@@ -92,7 +92,8 @@ def test_eccentric_runs(law):
 
 
 # ---------------------------------------------------------------------------
-# fp32 GPU: the fused z-input kernel behind _photom
+# fp32 GPU: the tau kernel (_sph_tau_fn); the z-input kernel behind _photom
+# serves the (e, w) orbit and direct _hybrid_dev calls
 # ---------------------------------------------------------------------------
 
 MODES = {"plain": {}, "contact": dict(exp_time=EXP, integration="contact"),
@@ -122,18 +123,30 @@ def kernel_spy():
 @pytest.mark.parametrize("law", NAMES)
 @pytest.mark.parametrize("mode", MODES)
 @pytest.mark.parametrize("ecc", [0.0, 0.3], ids=["circ", "e0.3"])
-def test_fp32_gpu_model_runs_the_fused_kernel(law, mode, ecc):
-    """The photometry runs in metal_hybrid's z-kernel -- the spy sees it
-    traced on the GPU stream -- and agrees with the fp32 graph
-    (use_metal=False) at fp32 noise and with the fp64 model within 2e-6.
-    The cache keys are the quadratic law's: the z-kernel decision lives in
-    the trace, not the key."""
+def test_fp32_gpu_model_runs_the_tau_kernel(law, mode, ecc):
+    """The whole model -- orbit, exposure rule, photometry -- runs in
+    metal_hybrid's tau kernel (the "sph-tau" cache key; the z-kernel is
+    never traced) and agrees with the fp32 graph (use_metal=False) at fp32
+    noise and with the fp64 model within 2e-6. The exception: on a circular
+    orbit without the contact rule light_curve, which no gradient reaches,
+    takes the faster forward, the circular graph into the z-kernel, and
+    light_curve_mx still takes the tau kernel."""
     p = params(law, ecc=ecc, w=63.0)
     m = elome.TransitModel(p, T, dtype=mx.float32, **MODES[mode])
     with kernel_spy() as calls:
         got = m.light_curve(p)
-    assert calls == [True]
-    assert list(m._compiled) == [(ecc == 0.0, False)]
+    orbit = "circ" if ecc == 0.0 else "kh"
+    if ecc == 0.0 and mode != "contact":
+        assert calls == [True]
+        assert list(m._compiled) == [(True, False)]
+        with kernel_spy() as calls:
+            raw = np.array(m.light_curve_mx(p), dtype=np.float64)
+        assert calls == []
+        assert list(m._compiled) == [(True, False), ("sph-tau", orbit)]
+        assert np.abs(raw.reshape(T.size, -1).mean(axis=1) - got).max() < 1e-6
+    else:
+        assert calls == []
+        assert list(m._compiled) == [("sph-tau", orbit)]
     graph = elome.TransitModel(p, T, dtype=mx.float32, use_metal=False,
                                      **MODES[mode]).light_curve(p)
     f64 = elome.TransitModel(p, T, **MODES[mode]).light_curve(p)
@@ -168,21 +181,22 @@ def test_fp32_light_curves_match_the_loop(law, mode):
 @pytest.mark.skipif(not metal_available(), reason="Metal unavailable")
 @pytest.mark.parametrize("mode", ["plain", "contact"])
 def test_a_cpu_stream_first_call_does_not_pin_the_graph(mode):
-    """The CPU-stream-first-call trap does not apply to a z-kernel: its decision is made
-    inside the trace, and mx.compile keeps one trace per stream, so the
-    graph first traced on the CPU stream (hybrid.py's graph, the entry
-    point never called) is retraced on the GPU with the kernel. One cache
-    key, two traces, two outcomes; the spy sees the GPU trace alone."""
+    """The CPU-stream-first-call trap: a first call on the CPU stream runs
+    hybrid.py's graph (no kernel can run there, so the z-kernel entry point
+    is never called), and the later GPU calls still take the tau kernel --
+    the route is chosen per call, from the active stream. (light_curve_mx:
+    light_curve itself takes the circular graph on the GPU without the
+    contact rule.)"""
     law = "hybrid5"
     m = elome.TransitModel(params(law), T, dtype=mx.float32,
                                  **MODES[mode])
     with kernel_spy() as calls:
         with mx.stream(mx.cpu):
-            a = m.light_curve(params(law))
-        b = m.light_curve(params(law))
-        m.light_curve(params(law))
-    assert calls == [True]
-    assert list(m._compiled) == [(True, False)]
+            a = np.array(m.light_curve_mx(params(law)))
+        b = np.array(m.light_curve_mx(params(law)))
+        m.light_curve_mx(params(law))
+    assert calls == []
+    assert list(m._compiled) == [(True, False), ("sph-tau", "circ")]
     assert np.abs(a - b).max() < 1e-6
 
 
@@ -274,8 +288,8 @@ def test_fp32_cpu_stream_fallback_is_the_graph_bitwise(law, mode):
 @pytest.mark.skipif(not metal_available(), reason="Metal unavailable")
 @pytest.mark.parametrize("law", NAMES)
 def test_fp32_light_curve_mx_gradients_through_the_kernel(law):
-    """Gradients in rp, a, inc and every weight through the kernel's VJP
-    against the fp64 model's, condition-scaled."""
+    """Gradients in rp, a, inc and every weight through the tau kernel's
+    VJP against the fp64 model's, condition-scaled."""
     n_w = LAWS[law].n_w
     w0 = np.array(WEIGHTS[law])
     ct = np.random.default_rng(6).normal(size=T.size)
@@ -290,12 +304,11 @@ def test_fp32_light_curve_mx_gradients_through_the_kernel(law):
                 return mx.sum(c * m.light_curve_mx(
                     params(law, u=w, rp=rp, a=a, inc=inc)))
 
-            with kernel_spy() as calls:
-                g = mx.grad(loss, argnums=(0, 1, 2, 3))(
-                    *[mx.array(v, dtype=dtype) for v in (RP, A, INC)],
-                    mx.array(w0, dtype=dtype))
-                mx.eval(g)
-        assert calls == ([True] if dtype == mx.float32 else [])
+            g = mx.grad(loss, argnums=(0, 1, 2, 3))(
+                *[mx.array(v, dtype=dtype) for v in (RP, A, INC)],
+                mx.array(w0, dtype=dtype))
+            mx.eval(g)
+        assert (("sph-tau", "circ") in m._compiled) == (dtype == mx.float32)
         return np.concatenate([np.atleast_1d(np.asarray(x, np.float64))
                                for x in g])
 
@@ -530,3 +543,53 @@ def test_a_model_keeps_its_law_when_the_registry_changes():
         assert np.array_equal(e, ref)
     finally:
         Hm.LAWS.pop("x", None)
+
+
+@pytest.mark.skipif(not metal_available(), reason="Metal unavailable")
+@pytest.mark.parametrize("ecc", [0.0, 0.3], ids=["circ", "e0.3"])
+def test_a_hybrid_law_eclipse_is_an_eclipse(ecc):
+    """A secondary eclipse sees a uniform disc whatever the law: on the
+    tau route a hybrid-law eclipse takes the eclipse kernel, not the hybrid
+    transit kernel, and equals the quadratic-law model's bit for bit."""
+    sq = math.sqrt(ecc)
+    c = float(elome.occultation_offset(sq * math.cos(math.radians(63.0)),
+                                       sq * math.sin(math.radians(63.0)))) * P
+    t = np.linspace(c - 0.2, c + 0.2, 801)
+    p = params("hybrid4", ecc=ecc, w=63.0, fp=2e-3)
+    m = elome.TransitModel(p, t, transittype="secondary", dtype=mx.float32)
+    got = m.light_curve(p)
+    q = params("hybrid4", ecc=ecc, w=63.0, fp=2e-3)
+    q.limb_dark, q.u = "quadratic", [0.4, 0.2]
+    ref = elome.TransitModel(q, t, transittype="secondary", dtype=mx.float32).light_curve(q)
+    assert list(m._compiled) == [("sph-tau", "circ" if ecc == 0.0 else "kh")]
+    assert got.min() < 1.0 + 1e-3
+    assert np.array_equal(got, ref)
+
+
+def test_spherical_tau_routes_never_touch_the_oblate_or_ring_kernels():
+    """TransitModel's spherical tau-kernel routes -- a hybrid law under
+    every exposure rule, the quadratic contact rule -- import none of the
+    oblate or ring code."""
+    import subprocess
+    import sys
+    code = r'''
+import sys, numpy as np, mlx.core as mx
+import elome as el
+t = np.linspace(-0.12, 0.12, 201)
+for law, u in (("hybrid4", [0.2, 0.2, 0.1, 0.1]), ("quadratic", [0.4, 0.25])):
+    for ecc in (0.0, 0.3):
+        for kw in ({}, dict(exp_time=0.02, supersample_factor=3),
+                   dict(exp_time=0.02, integration="contact", n_gl=5)):
+            p = el.TransitParams()
+            p.t0, p.per, p.rp, p.a, p.inc, p.ecc, p.w = 0.0, 3.45, 0.1, 8.8, 87.5, ecc, 63.0
+            p.limb_dark, p.u = law, u
+            m = el.TransitModel(p, t, dtype=mx.float32, **kw)
+            m.light_curve(p)
+            m.light_curves([p, p])
+mods = ("elome.metal_oblate", "elome.metal_rings", "elome.rings_tau")
+print("IMPORTED:" + ",".join(m for m in mods if m in sys.modules))
+'''
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                         timeout=600)
+    assert out.returncode == 0, out.stderr[-2000:]
+    assert out.stdout.strip().endswith("IMPORTED:"), out.stdout

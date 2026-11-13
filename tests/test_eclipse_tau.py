@@ -326,9 +326,100 @@ def test_transit_model_kernel_matches_its_graph(ecc):
     assert np.abs(k - g).max() <= 2.0 * 2.0 ** -23
 
 
+@needs_metal
+@pytest.mark.parametrize("ss", [1, 7], ids=["none", "supersample"])
+@pytest.mark.parametrize("ecc", [0.0, 0.3])
+def test_transit_model_spherical_eclipse_takes_the_kernel(ecc, ss):
+    """TransitModel's fp32 spherical eclipse on the GPU runs the eclipse
+    kernel: within two ulps of fp32's 1 of use_metal=False's graph, and
+    within fp32's rounding of the fp64 model."""
+    p = _params(ecc, 40.0, False)
+    t = T0 + 2 * PER + np.linspace(0.0, PER, 3001)
+    mkw = dict(supersample_factor=ss, exp_time=EXP) if ss > 1 else {}
+    m = el.TransitModel(p, t, transittype="secondary", dtype=mx.float32, **mkw)
+    k = m.light_curve(p)
+    assert ("sph-tau", "kh" if ecc else "circ") in m._compiled
+    g32 = el.TransitModel(p, t, transittype="secondary", dtype=mx.float32,
+                          use_metal=False, **mkw)
+    g = g32.light_curve(p)
+    assert not any(key[0] == "sph-tau" for key in g32._compiled if isinstance(key, tuple))
+    d = el.TransitModel(p, t, transittype="secondary", **mkw).light_curve(p)
+    assert k.min() < 1.0 + 0.5 * FP
+    assert np.abs(k - g).max() <= 2.0 * 2.0 ** -23
+    assert np.abs(k - d).max() < 4e-7
+
+
+@needs_metal
+def test_transit_model_spherical_eclipse_batches_and_routes():
+    """light_curves runs light_curve's kernel route row by row: equal to the
+    loop for circular sets, within two ulps when an eccentric set takes the
+    whole batch down the (k, h) orbit. An array ecc keeps its (e, w)
+    graph."""
+    rng = np.random.default_rng(2)
+    t = T0 + 2 * PER + np.linspace(0.0, PER, 1501)
+
+    def sets(eccs):
+        out = []
+        for e in eccs:
+            p = _params(e, rng.uniform(0.0, 360.0), False)
+            p.rp, p.inc, p.fp = rng.uniform(0.07, 0.13), rng.uniform(87.5, 88.5), rng.uniform(1e-3, 3e-3)
+            out.append(p)
+        return out
+    m = el.TransitModel(_params(0.0, 90.0, False), t, transittype="secondary",
+                        dtype=mx.float32)
+    for eccs, exact in (([0.0] * 3, True), ([0.2, 0.4, 0.1], True),
+                        ([0.0, 0.3, 0.0, 0.5], False)):
+        s = sets(eccs)
+        batched = m.light_curves(s)
+        looped = np.stack([m.light_curve(p) for p in s])
+        if exact:
+            assert np.array_equal(batched, looped)
+        else:
+            assert np.abs(batched - looped).max() <= 2.0 * 2.0 ** -23
+    p = _params(0.3, 40.0, False)
+    p.ecc = mx.array(0.3, dtype=mx.float32)
+    m2 = el.TransitModel(_params(0.3, 40.0, False), t, transittype="secondary",
+                         dtype=mx.float32)
+    mx.eval(m2.light_curve_mx(p))
+    assert "ew" in m2._compiled and not any(
+        isinstance(key, tuple) and key[0] == "sph-tau" for key in m2._compiled)
+
+
+@needs_metal
+@pytest.mark.parametrize("ecc", [0.0, 0.3])
+def test_transit_model_spherical_eclipse_gradients(ecc):
+    """light_curve_mx's gradients in t0, per, rp, a, fp and inc on the
+    kernel route against the fp64 model. Each against a cotangent its
+    gradient does not cancel on: a positive bump over the eclipse for rp,
+    a, fp and inc (one sign across it), an odd one for t0 and per. Dense
+    times: d/drp is singular at the contacts, so a coarse grid leaves it
+    to a few points there and their fp32 rounding (the fp32 graph's too)."""
+    t = T0 + 2 * PER + np.linspace(0.0, PER, 30001)
+    ph = ((t - T0) / PER) % 1.0
+    c = float(el.occultation_offset(*_kw(ecc, 40.0, False).values())) if ecc else 0.5
+    x = (ph - c) / 0.02
+    bump = np.exp(-0.5 * x * x)
+
+    def grads(dt, stream, wgt):
+        def loss(t0, per, rp, a, fp, inc):
+            q = _params(ecc, 40.0, False)
+            q.t0, q.per, q.rp, q.a, q.fp, q.inc = t0, per, rp, a, fp, inc
+            m = el.TransitModel(q, t, transittype="secondary", dtype=dt)
+            return mx.sum(m.light_curve_mx(q) * mx.array(wgt, dtype=dt))
+        with mx.stream(stream):
+            xs = [mx.array(v, dtype=dt) for v in (T0, PER, R, A, FP, INC)]
+            return dict(zip(["t0", "per", "rp", "a", "fp", "inc"],
+                            (float(np.asarray(g, np.float64))
+                             for g in mx.grad(loss, argnums=tuple(range(6)))(*xs))))
+    for wgt, names in ((bump, ("rp", "a", "fp", "inc")), (bump * x, ("t0", "per"))):
+        g32, g64 = grads(mx.float32, mx.gpu, wgt), grads(mx.float64, mx.cpu, wgt)
+        for name in names:
+            assert abs(g32[name] - g64[name]) <= 1e-3 * abs(g64[name]), name
+
+
 def test_spherical_eclipse_never_touches_the_oblate_kernels():
-    """A spherical eclipse's kernel route imports none of the oblate Metal
-    code."""
+    """A spherical eclipse's kernel route -- the sampler API's and
+    TransitModel's -- imports none of the oblate or ring code."""
     import subprocess
     import sys
     code = r'''
@@ -338,7 +429,18 @@ tau = mx.array(np.linspace(1.6, 1.85, 101), dtype=mx.float32)
 for kw in ({}, dict(secosw=0.2, sesinw=0.1, exp_time=0.02, integration="supersample", n_sub=3)):
     mx.eval(el.flux_dev_from_tau(tau, 3.45, 8.8, 0.3, 0.1, transittype="secondary",
                                  fp=2e-3, **kw))
-print("IMPORTED:" + ",".join(m for m in ("elome.metal_oblate",) if m in sys.modules))
+p = el.TransitParams()
+p.t0, p.per, p.rp, p.a, p.inc, p.ecc, p.w = 0.0, 3.45, 0.1, 8.8, 88.0, 0.0, 90.0
+p.limb_dark, p.u, p.fp = "quadratic", [0.4, 0.2], 2e-3
+t = np.linspace(1.6, 1.85, 101)
+for ecc, ss in ((0.0, 1), (0.2, 3)):
+    p.ecc = ecc
+    m = el.TransitModel(p, t, transittype="secondary", dtype=mx.float32,
+                        supersample_factor=ss, exp_time=0.02)
+    m.light_curve(p)
+    m.light_curves([p, p])
+mods = ("elome.metal_oblate", "elome.metal_rings", "elome.rings_tau")
+print("IMPORTED:" + ",".join(m for m in mods if m in sys.modules))
 '''
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
                          timeout=600)

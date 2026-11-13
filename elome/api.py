@@ -659,6 +659,8 @@ class TransitModel:
         """F - 1 for a hybrid law on separations ``z``: the fused z-input
         kernel (metal_hybrid) wherever it can run -- the role flux_dev_metal
         plays for the quadratic law -- and hybrid.py's graph otherwise.
+        (Where it can run, only the (e, w) orbit gets here: the circular and
+        (k, h) orbits take the tau kernel, _sph_tau_fn.)
 
         The decision is _kernel_usable's, taken here, inside the trace,
         from the active stream (mx.compile keeps one trace per stream, so
@@ -718,10 +720,13 @@ class TransitModel:
         # so a graph the kernel never serves is compiled once, not once
         # per stream. This is THE statement of what the *model* kernel
         # serves: primary transits with quadratic limb darkening, on the
-        # (k, h) or circular graph, without the contact rule. Every other
-        # fp32 graph reaches a z-input kernel (quadratic or hybrid) through
-        # _photom, decided inside the trace, which mx.compile keeps per
-        # stream: no key needed.
+        # (k, h) or circular graph, without the contact rule. Where a kernel
+        # can run, the eclipse, the hybrid laws and the contact rule on
+        # those orbits take the tau kernels instead (_sph_tau_fn, chosen in
+        # _model_eval before any graph here). Every other fp32 graph -- the
+        # (e, w) orbit, or a kernel-less stream -- reaches a z-input kernel
+        # (quadratic or hybrid) through _photom, decided inside the trace,
+        # which mx.compile keeps per stream: no key needed.
         kernel_branch = (not ew and not vec and self.transittype == "primary"
                          and self.integration != "contact")
         kern = kernel_branch and self._kernel_usable()
@@ -864,9 +869,11 @@ class TransitModel:
         self._compiled[key] = fn
         return fn
 
-    def _model_eval(self, params, uv) -> mx.array:
+    def _model_eval(self, params, uv, grad=True) -> mx.array:
         """One parameter set -> flux, through the compiled graphs. The one
-        path behind light_curve and light_curve_mx.
+        path behind light_curve and light_curve_mx; ``grad=False`` (from
+        light_curve, whose numpy result no gradient can reach) lets a route
+        pick the faster forward over the faster gradient.
 
         A field holding an mx.array stays in the graph (gradients flow); a
         Python number is folded on the host in fp64 and cast once, so with
@@ -928,6 +935,19 @@ class TransitModel:
             ld = _ld_coeffs(params, conv=cast, u=uv)
 
         route = self._ecc_route(params, cast, rad, is_arr)
+        graph_first = route[0] == "circ" and not grad and self._circ_graph_faster()
+        if route[0] != "ew" and self._tau_kernels() and not graph_first:
+            head = (self._t_mx, t0_off, per, a)
+            last = (fp,) if self.transittype == "secondary" else ld
+            if route[0] == "circ":
+                b = (a * ci if is_arr(params.a) or is_arr(params.inc)
+                     else cast(float(params.a) * ci_py))
+                f = self._sph_tau_fn("circ")(*head, b, rp, *last)
+            else:
+                _, k, h, ev, sq = route
+                b = contact_geometry(a, cast(ev), h * sq, ci)[1]  # e sin w = h sqrt(e)
+                f = self._sph_tau_fn("kh")(*head, b, rp, *last, k, h)
+            return self._apply_masks(f, gmask)
         if route[0] == "ew":
             _, e, wr, emask = route
             f = self._get_compiled(False, ew=True)(
@@ -1013,6 +1033,99 @@ class TransitModel:
             if m is not None:
                 f = f * m
         return f
+
+    # -- spherical planets on the sampler API's kernels ----------------------
+    #
+    # The oblate route's structure for a spherical planet: time since each
+    # point's own mid-transit, then the fused tau kernel that
+    # flux_dev_from_tau runs, so the orbit, the contact rule and the
+    # photometry are one pass (supersampling stays this model's own grid and
+    # average). It serves what the model kernel does not: a secondary
+    # eclipse, a hybrid law, and the quadratic law (with the uniform and
+    # linear ones) under the contact rule. Only where those kernels run --
+    # an fp32 GPU model with use_metal -- and on the circular and (k, h)
+    # orbits; an array ecc's (e, w) graph, fp64, the CPU stream and
+    # use_metal=False keep the graphs above, bit for bit. The polynomial law
+    # has no kernel and keeps its graph everywhere.
+
+    def _tau_kernels(self) -> bool:
+        """Does this call take the tau kernels (_sph_tau_fn)? Where a kernel
+        can run here (_kernel_usable): a secondary eclipse, a hybrid law,
+        or the quadratic family under the contact rule. The caller rules
+        out the (e, w) orbit, and the oblate, ringed and spotted models
+        never get here."""
+        if not self._kernel_usable():
+            return False
+        if self.transittype == "secondary" or self._hlaw is not None:
+            return True
+        return self.integration == "contact" and self.limb_dark != "polynomial"
+
+    def _sph_tau_fn(self, orbit: str):
+        """The compiled spherical model on the tau kernels: (tt, t0, per,
+        a, b, rp, *last[, k, h]) -> flux, with ``b`` the impact parameter at
+        conjunction and ``orbit`` "circ" or "kh". (m,) times with scalar
+        parameters, or (1, m) times with (n, 1) columns for light_curves.
+        ``last``, by model:
+
+        * a secondary eclipse, (fp,): 1 + fp (1 + the visible fraction's
+          deviation), on the eclipse kernel (metal_eclipse), whatever the
+          law;
+        * a hybrid law, (u,): the hybrid tau kernel (metal_hybrid);
+        * the quadratic family, (u1, u2): the quadratic tau kernel (metal).
+
+        Under the contact rule the kernel integrates each exposure with this
+        model's n_gl."""
+        key = ("sph-tau", orbit)
+        fn = self._compiled.get(key)
+        if fn is not None:
+            return fn
+        from .metal import _INT_CONTACT, _INT_NONE
+        contact = self.integration == "contact"
+        mode = _INT_CONTACT if contact else _INT_NONE
+        exp_time = self.exp_time if contact else 0.0
+        n_gl = self.n_gl
+        if self.transittype == "secondary":
+            from .eclipse import eclipse_dev_from_tau
+
+            def dev(tau, per, a, b, rp, last, k, h):
+                return eclipse_dev_from_tau(tau, per, a, b, rp, last[0], k=k, h=h)
+        elif self._hlaw is not None:
+            from .metal_hybrid import flux_dev_from_tau_hybrid
+            law = self._hlaw
+
+            def dev(tau, per, a, b, rp, last, k, h):
+                return flux_dev_from_tau_hybrid(tau, per, a, b, rp, law, last[0],
+                                                exp_time, mode, n_gl, 1, k=k, h=h)
+        else:
+            from .metal import _flux_dev_from_tau_impl
+
+            def dev(tau, per, a, b, rp, last, k, h):
+                return _flux_dev_from_tau_impl(tau, per, a, b, rp, *last, exp_time,
+                                               mode, n_gl, 1, False, k, h)
+
+        def flux(tt, t0, per, a, b, rp, last, k=None, h=None):
+            tau = tt - t0
+            tau = tau - per * mx.round(tau / per)
+            return 1.0 + dev(tau, per, a, b, rp, last, k, h)
+        if orbit == "circ":
+            def raw(tt, t0, per, a, b, rp, *last):
+                return flux(tt, t0, per, a, b, rp, last)
+        else:
+            def raw(tt, t0, per, a, b, rp, *rest):
+                return flux(tt, t0, per, a, b, rp, rest[:-2], *rest[-2:])
+        fn = self._compiled[key] = mx.compile(raw)
+        return fn
+
+    # A circular hybrid transit without the contact rule has an orbit cheap
+    # enough that the graph (the orbit in MLX, then the z-input kernel)
+    # computes the flux about 20% faster than the tau kernel at 10^6-10^7
+    # points, while the tau kernel's value and gradient are 1.5-2 times
+    # faster than the graph's. So light_curve, which no gradient can reach,
+    # takes the graph there, and light_curve_mx and light_curves the kernel.
+
+    def _circ_graph_faster(self) -> bool:
+        return (self._hlaw is not None and self.transittype == "primary"
+                and self.integration != "contact")
 
     # -- oblate planets ------------------------------------------------------
     #
@@ -1368,10 +1481,10 @@ class TransitModel:
         uv = self._check_law(params)
         if self._stream is not None:
             with mx.stream(self._stream):
-                f = self._model_eval(params, uv)
+                f = self._model_eval(params, uv, grad=False)
                 out = np.array(f, dtype=np.float64)
         else:
-            out = np.array(self._model_eval(params, uv), dtype=np.float64)
+            out = np.array(self._model_eval(params, uv, grad=False), dtype=np.float64)
         if (self.supersample_factor > 1
                 and self.integration == "supersample"):
             out = out.reshape(self.t.size,
@@ -1565,6 +1678,19 @@ class TransitModel:
                     out = model("kh")(*args, k, h, *mu)
                 else:
                     out = model("circ")(*args, *mu)
+            elif self._tau_kernels():
+                # light_curve's tau-kernel route, one row per set: an
+                # eccentric set takes every set down the (k, h) orbit
+                b_np = contact_geometry(
+                    cols["a"], ecc, ecc * np.sin(w), np.cos(inc),
+                    sqrt=np.sqrt, maximum=np.maximum)[1]
+                last = ((fp,) if self.transittype == "secondary"
+                        else (uvec,) if self._n_vec else (u1, u2))
+                args = (self._t_mx[None, :], t0, per, a, col(b_np), rp, *last)
+                if bool(np.any(ecc > 0.0)):
+                    out = self._sph_tau_fn("kh")(*args, k, h)
+                else:
+                    out = self._sph_tau_fn("circ")(*args)
             elif self.integration == "contact":
                 b_np = contact_geometry(
                     cols["a"], ecc, ecc * np.sin(w), np.cos(inc),

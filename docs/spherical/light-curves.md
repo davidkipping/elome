@@ -67,7 +67,9 @@ on an eccentric one. Against batman,
 the agreement is at batman's own accuracy, about $10^{-8}$.
 
 `dtype=mx.float32` runs on the GPU, in a single fused Metal kernel that
-computes the orbit and the photometry together. It is accurate to about
+computes the orbit and the photometry together, and under the contact
+rule the exposure too. (The polynomial law has no kernel and runs as an
+MLX graph.) It is accurate to about
 $2\times10^{-7}$ in flux and computes $10^7$ points in about 10 ms.
 Absolute mission times (BJD, BTJD) are fine in both precisions: in
 float32 the model re-centres the times on the host, in float64, before
