@@ -37,8 +37,9 @@ every release is tagged `vX.Y.Z` in git.
   transits and eclipses together on one `tau`. `1 + dev` is
   `TransitModel`'s secondary-eclipse flux; `fp` takes per-chain values
   and a gradient; the limb-darkening arguments are optional and ignored;
-  exposures by supersampling. In float32 on the GPU, spherical and oblate
-  eclipses run on fused Metal kernels with the supersampling inside them
+  exposures by supersampling or, for a spherical planet, the contact rule
+  (below). In float32 on the GPU, spherical and oblate eclipses run on
+  fused Metal kernels with the supersampling inside them
   (an oblate eclipse needs only the limb crossings, so its kernel costs a
   fraction of the oblate transit's); float64 runs the MLX graph. Safe under
   `mx.compile`.
@@ -53,6 +54,18 @@ every release is tagged `vX.Y.Z` in git.
   occultation-timed model are centred on each point's nearer event,
   `elome.orbit.occultation_center_times`. The sampler guide's
   hand-written joint example is replaced by it.
+- **The contact rule for secondary eclipses of spherical planets.**
+  `TransitModel(transittype="secondary", integration="contact")` and
+  `flux_dev_from_tau(transittype="secondary")`, whose default rule it is,
+  split each exposure at the eclipse's contacts. The eclipse on an orbit
+  is the transit of the same orbit turned by 180° (secosw, sesinw ->
+  -secosw, -sesinw) at the impact parameter of the occultation, so its
+  contacts are that transit's, and the eclipse is that transit, with no
+  limb darkening, over r²: the transit's kernel and graph integrate it,
+  every orbit and both precisions, with gradients in every parameter
+  (finite in e at e = 0 on `TransitModel`'s (e, w) route). For a
+  29-minute exposure, float32 `n_gl = 7` is within 1-2e-5 of the eclipse
+  depth, against 2-11% for 15-sample supersampling and 0.3-1% for 101.
 - **Secondary eclipses in `make_transit_target`**, with the same
   `transittype`, `timing`, `ecc`, `w` and `rstar` options, for a spherical
   planet on an unspotted star. `fp` and `tocc_off` join

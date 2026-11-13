@@ -210,9 +210,10 @@ uniform disc of flux ratio `fp`: the same model as
   other parameter.
 - The limb-darkening arguments are optional and ignored, so a transit
   and an eclipse can be called with the same keywords.
-- Exposures take `integration="supersample"` (with `n_sub`) or none.
-  The contact rule is for transits, and with `exp_time > 0` the default
-  `integration="contact"` raises.
+- Exposures: a spherical planet's eclipse takes the contact rule (the
+  default) as a transit does, or `integration="supersample"` (with
+  `n_sub`), or none. An oblate planet's eclipse takes supersampling, and
+  with `exp_time > 0` the default `integration="contact"` raises.
 - In float32 on the GPU the eclipse runs on fused Metal kernels, with the
   supersampling inside them; float64 runs the MLX graph on the CPU. It
   may be compiled. Rings, spots and `ld_basis` are for transits.

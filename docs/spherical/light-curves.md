@@ -112,8 +112,9 @@ in batman. If your timing precision needs it, subtract
 `elome.light_travel_delay(a, b, rstar, secosw, sesinw)` (days, with
 `rstar` in solar radii) from the times of the eclipse model.
 
-`integration="contact"` is for primary transits. Use
-`supersample_factor` for a secondary eclipse.
+Exposures integrate as for a transit: `supersample_factor`, or
+`integration="contact"`, the more accurate rule (see
+{doc}`../guides/exposures`).
 
 ## Differences from batman
 

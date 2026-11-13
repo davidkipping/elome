@@ -429,6 +429,34 @@ def _unpack_ld(vec, tail):
     return u1, u2, None, fp
 
 
+def _eclipse_split(t0, per, rp, a, ci, k=None, h=None, b=None, ew=False):
+    """(mid-eclipse time, the four contact phases about it) for the contact
+    rule's split of a secondary eclipse: the eclipse on (e, w) is the transit
+    of the orbit turned by pi, (e, w + pi), at the impact parameter at
+    occultation, so its contacts are that transit's
+    (eclipse._eclipse_dev_contact has the geometry). Circular: pass ``b``;
+    eccentric: (k, h), or with ``ew`` (e, w [rad]) -- the offset then from
+    e cos w, smooth at e = 0.
+    Like the transit's contacts these carry their gradients, so the graph's
+    gradient is that of the quadrature it computes."""
+    if k is None:
+        return t0 + 0.5 * per, contact_offsets(rp, a, b)
+    from .eclipse import _occultation_offset_dev_ew, occultation_offset_dev
+    if ew:
+        e, w = k, h
+        flipped = anchor_constants_ew(e, w + math.pi)
+        dev = _occultation_offset_dev_ew(e, w)
+    else:
+        from .anchored import anchor_constants
+        e = k * k + h * h
+        flipped = anchor_constants(-k, -h)
+        dev = occultation_offset_dev(k, h)
+    esw_flipped = flipped[2]
+    b_occ = contact_geometry(a, e, esw_flipped, ci)[1]
+    cs = contact_offsets_anchored(rp, a, b_occ, None, None, ci, consts=flipped)
+    return t0 + per * (0.5 + dev), cs
+
+
 class TransitModel:
     """Precomputes the (super)sampled time grid; ``light_curve(params)``
     evaluates the model for (possibly updated) parameters, batman-style.
@@ -467,8 +495,6 @@ class TransitModel:
         if integration == "contact":
             if exp_time <= 0.0:
                 raise ValueError("contact integration needs exp_time > 0")
-            if transittype != "primary":
-                raise ValueError("contact integration is primary-transit only")
             if supersample_factor > 1:
                 raise ValueError("supersample_factor is for "
                                  "integration='supersample'; the contact rule "
@@ -526,6 +552,11 @@ class TransitModel:
                                  "'hybrid4' | 'hybrid5'")
             if transittype != "primary":
                 raise ValueError("a ringed planet is primary-transit only")
+        elif self._oblate and transittype == "secondary":
+            if integration == "contact":
+                raise ValueError("the contact rule for an oblate planet's "
+                                 "eclipse is not available yet; use "
+                                 "supersample_factor")
         elif self._oblate and transittype == "primary":
             # (a secondary eclipse sees the planet as a uniform disc, so it
             # takes any law and ignores it, as the spherical one does)
@@ -754,12 +785,17 @@ class TransitModel:
                 f = self._photom(z, front, rp, u1, u2, fp, uvec=uv)
                 return mx.sum(f * w, axis=1)
 
+            eclipse = self.transittype == "secondary"
+
             if circular:
                 def raw(t0, per, a, b, rp, *ld_fp):
                     u1, u2, uv, fp = _unpack_ld(vec, ld_fp)
                     ci = b / a
-                    cs = contact_offsets(rp, a, b)
-                    T, W = exposure_nodes(t, t0, per, ex, cs, n_gl,
+                    if eclipse:
+                        centre, cs = _eclipse_split(t0, per, rp, a, ci, b=b)
+                    else:
+                        centre, cs = t0, contact_offsets(rp, a, b)
+                    T, W = exposure_nodes(t, centre, per, ex, cs, n_gl,
                                           dtype=self.dtype)
                     phase = (2.0 * math.pi) * (T - t0) / per
                     sphi, cphi = sincos(phase)
@@ -775,10 +811,15 @@ class TransitModel:
                     else:
                         e = k * k + h * h
                         esw = h * mx.sqrt(mx.maximum(e, 1e-30))  # e sin w
-                    b_conj = contact_geometry(a, e, esw, ci)[1]
-                    cs = contact_offsets_anchored(rp, a, b_conj, k, h, ci,
-                                                  **kw)
-                    T, W = exposure_nodes(t, t0, per, ex, cs, n_gl,
+                    if eclipse:
+                        centre, cs = _eclipse_split(t0, per, rp, a, ci, k, h,
+                                                    ew=ew)
+                    else:
+                        b_conj = contact_geometry(a, e, esw, ci)[1]
+                        centre = t0
+                        cs = contact_offsets_anchored(rp, a, b_conj, k, h, ci,
+                                                      **kw)
+                    T, W = exposure_nodes(t, centre, per, ex, cs, n_gl,
                                           dtype=self.dtype)
                     phi = (2.0 * math.pi) * (T - t0) / per
                     z, front = separation_anchored(phi, k, h, a, ci, **kw)
@@ -1088,7 +1129,8 @@ class TransitModel:
             from .eclipse import eclipse_dev_from_tau
 
             def dev(tau, per, a, b, rp, last, k, h):
-                return eclipse_dev_from_tau(tau, per, a, b, rp, last[0], k=k, h=h)
+                return eclipse_dev_from_tau(tau, per, a, b, rp, last[0], k=k, h=h,
+                                            exp_time=exp_time, mode=mode, n_gl=n_gl)
         elif self._hlaw is not None:
             from .metal_hybrid import flux_dev_from_tau_hybrid
             law = self._hlaw
@@ -1741,8 +1783,11 @@ class TransitModel:
                 return self._photom(z, front, rp, u1, u2, fp, uvec=uvec)
             # exact contacts (linearised ones returned as is at e = 0);
             # in contact mode self._t_mx is the exposure mid-times
-            cs = contact_offsets_anchored(rp, a, b, k, h, ci)
-            T, W = exposure_nodes(tt, t0, per, self.exp_time, cs, self.n_gl,
+            if self.transittype == "secondary":
+                centre, cs = _eclipse_split(t0, per, rp, a, ci, k, h)
+            else:
+                centre, cs = t0, contact_offsets_anchored(rp, a, b, k, h, ci)
+            T, W = exposure_nodes(tt, centre, per, self.exp_time, cs, self.n_gl,
                                   dtype=dt)
             phi = (2.0 * math.pi) * (T - t0[..., None]) / per[..., None]
             z, front = separation_anchored(phi, k[..., None], h[..., None],

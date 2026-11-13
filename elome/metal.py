@@ -1925,9 +1925,11 @@ def flux_dev_from_tau(tau: mx.array, period, a, b, r, u1=None, u2=None, *,
             still the time since mid-transit; the orbit places the eclipse.
             A spherical or oblate planet (``f``, ``theta``); no ring,
             spots or ``ld_basis``. The limb-darkening arguments are
-            optional and ignored. Exposures: ``"none"`` or
-            ``"supersample"`` (the contact rule is for transits). The MLX
-            graph in either precision, no Metal kernel; gradients in
+            optional and ignored. Exposures: ``"none"``,
+            ``"supersample"``, or for a spherical planet ``"contact"``
+            (the eclipse is the transit of the orbit turned by pi, so its
+            contacts and split are the transit's). fp32 on the GPU runs
+            fused Metal kernels, anything else the MLX graph; gradients in
             ``tau``, every parameter and ``fp``.
 
     Returns:
@@ -2000,14 +2002,10 @@ def flux_dev_from_tau(tau: mx.array, period, a, b, r, u1=None, u2=None, *,
         if ld_basis:
             raise ValueError("ld_basis is for transits: a secondary eclipse "
                              "has no limb darkening")
-        if mode == _INT_CONTACT:
-            raise ValueError("the contact rule is for transits; a secondary "
-                             "eclipse with exp_time > 0 takes "
-                             "integration='supersample'")
         from .eclipse import eclipse_dev_from_tau
         return eclipse_dev_from_tau(tau, period, a, b, r, fp, f, theta,
                                     secosw, sesinw, float(exp_time), mode,
-                                    int(n_sub))
+                                    int(n_sub), int(n_gl))
     if fp is not None:
         raise ValueError("fp= is a secondary eclipse's flux ratio; pass "
                          "transittype='secondary' too")

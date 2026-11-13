@@ -168,7 +168,7 @@ def test_errors():
         el.TransitModel(q, T)
     with pytest.raises(ValueError, match="needs params.fp"):
         el.TransitModel(P(), T, transittype="secondary")
-    with pytest.raises(ValueError, match="primary-transit only"):
+    with pytest.raises(ValueError, match="not available yet"):
         el.TransitModel(P(fp=1e-4), T, transittype="secondary",
                         integration="contact", exp_time=EXP)
     m = el.TransitModel(P(), T)

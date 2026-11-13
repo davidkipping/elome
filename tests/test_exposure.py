@@ -199,13 +199,13 @@ class TestIntegrationWithTheRest:
             _model(integration="contact")
         with pytest.raises(ValueError, match="supersample|contact"):
             _model(exp_time=EXP, integration="simpson")
-        with pytest.raises(ValueError, match="primary"):
-            p = elome.TransitParams()
-            p.t0, p.per, p.rp, p.a, p.inc = 0.0, 3.456, 0.1, 8.8, 87.07
-            p.ecc, p.w, p.u, p.limb_dark = 0.0, 90.0, [], "uniform"
-            p.fp = 1e-3
-            elome.TransitModel(p, T, transittype="secondary",
-                                     exp_time=EXP, integration="contact")
+        p = elome.TransitParams()       # a spherical eclipse takes the rule
+        p.t0, p.per, p.rp, p.a, p.inc = 0.0, 3.456, 0.1, 8.8, 87.07
+        p.ecc, p.w, p.u, p.limb_dark = 0.0, 90.0, [], "uniform"
+        p.fp = 1e-3
+        m = elome.TransitModel(p, T, transittype="secondary",
+                               exp_time=EXP, integration="contact")
+        assert np.isfinite(m.light_curve(p)).all()
 
 
 class TestRegressions:

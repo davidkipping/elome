@@ -66,8 +66,10 @@ times the work.
 - **Gradients.** The quadrature nodes move with the parameters, so the
   gradient is exactly the gradient of the integral that was computed.
 
-The contact rule is for primary transits. Use supersampling for
-secondary eclipses.
+- **Secondary eclipses of spherical planets.** The eclipse on an orbit
+  is the transit of the same orbit turned by 180°, at the impact
+  parameter of the occultation, so its contacts and its split are that
+  transit's. An oblate planet's eclipse takes supersampling.
 
 In float32 on the GPU, `TransitModel` integrates the contact rule inside
 its fused kernel, as the sampler API does below.

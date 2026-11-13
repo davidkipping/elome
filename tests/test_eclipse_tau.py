@@ -224,8 +224,8 @@ def test_errors():
                              spot_time=TAU, prot=10.0, limb_dark="hybrid2", **kw)
     with pytest.raises(ValueError, match="ld_basis"):
         el.flux_dev_from_tau(TAU, PER, A, 0.3, R, ld_basis=True, **kw)
-    with pytest.raises(ValueError, match="integration='supersample'"):
-        el.flux_dev_from_tau(TAU, PER, A, 0.3, R, exp_time=EXP, **kw)
+    with pytest.raises(ValueError, match="not available yet"):
+        el.flux_dev_from_tau(TAU, PER, A, 0.3, R, f=F, exp_time=EXP, **kw)
     with pytest.raises(ValueError, match="r_eff"):
         el.flux_dev_from_tau(TAU, PER, A, 0.3, 0.6, f=0.5, **kw)
     # exp_time = 0 makes the default contact rule instantaneous: allowed
@@ -446,3 +446,197 @@ print("IMPORTED:" + ",".join(m for m in mods if m in sys.modules))
                          timeout=600)
     assert out.returncode == 0, out.stderr[-2000:]
     assert out.stdout.strip().endswith("IMPORTED:"), out.stdout
+
+
+# ---------------------------------------------------------------------------
+# the contact rule: a spherical planet's eclipse is the transit of the orbit
+# turned by pi (eclipse._eclipse_dev_contact)
+# ---------------------------------------------------------------------------
+
+_ORBITS = [(0.0, 90.0), (0.3, 40.0), (0.6, -70.0)]
+
+
+def _around_eclipse(ecc, w, half=0.15, n=601):
+    k = math.sqrt(ecc) * math.cos(math.radians(w))
+    h = math.sqrt(ecc) * math.sin(math.radians(w))
+    c = float(el.occultation_offset(k, h)) * PER
+    tau = c + np.linspace(-half, half, n)
+    return tau - PER * np.round(tau / PER)
+
+
+def _contact(tau, ecc, w, r=R, **kw):
+    return el.flux_dev_from_tau(tau, PER, A, _b(ecc, w), r, transittype="secondary",
+                                fp=FP, exp_time=EXP, **_kw(ecc, w, False), **kw)
+
+
+@pytest.mark.parametrize("ecc,w", _ORBITS)
+def test_contact_rule_converges_to_the_exposure_average(ecc, w):
+    """fp64: n_gl = 7 is within 1e-5 of the depth of n_gl = 40, which a
+    dense supersample of the eclipse's own graph approaches as O(1/N)."""
+    tau = _around_eclipse(ecc, w)
+    ref = np.asarray(_contact(tau, ecc, w, n_gl=40))
+    assert np.abs(np.asarray(_contact(tau, ecc, w, n_gl=7)) - ref).max() < 1e-5 * FP
+    ss = np.asarray(_contact(tau, ecc, w, integration="supersample", n_sub=2001))
+    assert np.abs(ss - ref).max() < 2e-3 * FP
+
+
+@pytest.mark.parametrize("ecc,w", _ORBITS)
+def test_contact_rule_is_transit_model_s(ecc, w):
+    """The two implementations agree: TransitModel's graph splits about the
+    eclipse on the orbit itself (api._eclipse_split), the sampler API runs
+    the flipped transit; the same nodes, so the same flux to rounding."""
+    t = T0 + _around_eclipse(ecc, w)
+    p = _params(ecc, w, False)
+    m = el.TransitModel(p, t, transittype="secondary", exp_time=EXP,
+                        integration="contact", n_gl=7)
+    got = 1.0 + np.asarray(_contact(t - T0, ecc, w, n_gl=7))
+    assert np.abs(m.light_curve(p) - got).max() < 1e-12 * FP
+
+
+def test_contact_rule_point_planet():
+    """r = 0: always visible, F - 1 = fp exactly, with finite gradients."""
+    tau = _around_eclipse(0.3, 40.0)
+    assert np.all(np.asarray(_contact(tau, 0.3, 40.0, r=0.0)) == FP)
+    g = mx.grad(lambda r: mx.sum(_contact(mx.array(tau), 0.3, 40.0, r=r)))(mx.array(0.0))
+    assert np.isfinite(float(g))
+
+
+@needs_metal
+@pytest.mark.parametrize("r", [0.01, R, 1.5])
+@pytest.mark.parametrize("ecc,w", _ORBITS)
+def test_contact_rule_fp32_matches_fp64(ecc, w, r):
+    """The fp32 kernel route within 1e-4 of the depth of fp64 (measured
+    1-5e-5: fp32's floor, against 2-11% for 15-sample supersampling)."""
+    tau = _around_eclipse(ecc, w, half=0.3 if r > 1 else 0.15)
+    f64 = np.asarray(_contact(tau, ecc, w, r=r, n_gl=7))
+    f32 = np.asarray(_contact(mx.array(tau, dtype=mx.float32), ecc, w, r=r, n_gl=7),
+                     np.float64)
+    assert np.abs(f32 - f64).max() < 1e-4 * FP
+
+
+@pytest.mark.parametrize("dtype", [mx.float64, mx.float32])
+@pytest.mark.parametrize("ecc,w", [(0.0, 90.0), (0.3, 40.0)])
+def test_contact_rule_gradients(ecc, w, dtype):
+    """Gradients in every parameter. The contacts are detached split points
+    (as the transit's), so a gradient is that of the quadrature with its
+    split held, which converges to the exposure average's with n_gl: fp64
+    at n_gl = 40 against central differences of itself, at n_gl = 7 within
+    2e-3 of them; fp32 against fp64 at n_gl = 7. A positive bump over the
+    eclipse as cotangent, so no gradient cancels to nothing."""
+    if dtype == mx.float32 and not el.metal_available():
+        pytest.skip("the fp32 route needs a GPU")
+    x = np.linspace(-0.15, 0.15, 4001)
+    tau = _around_eclipse(ecc, w, n=4001)
+    bump = np.exp(-0.5 * (x / 0.06) ** 2)
+    names = ["per", "a", "b", "r", "fp"] + (["secosw", "sesinw"] if ecc else [])
+    v0 = dict(per=PER, a=A, b=_b(ecc, w), r=R, fp=FP, **_kw(ecc, w, False))
+
+    def total(dt, n_gl, *vals):
+        d = dict(zip(names, vals))
+        out = el.flux_dev_from_tau(mx.array(tau, dtype=dt), d.pop("per"), d.pop("a"),
+                                   d.pop("b"), d.pop("r"), transittype="secondary",
+                                   exp_time=EXP, n_gl=n_gl, **d)
+        return mx.sum(mx.array(bump, dtype=dt) * out)
+
+    def grads(dt, n_gl):
+        args = [mx.array(v0[k], dtype=dt) for k in names]
+        g = mx.grad(lambda *a: total(dt, n_gl, *a), argnums=tuple(range(len(names))))(*args)
+        return np.array([float(x) for x in g])
+
+    with mx.stream(mx.cpu):
+        g64 = grads(mx.float64, 7)
+        if dtype == mx.float64:
+            g40 = grads(mx.float64, 40)
+            for j, k in enumerate(names):
+                hstep = 1e-6 * max(abs(v0[k]), 1e-3)
+                hi = [v0[n] + (hstep if n == k else 0.0) for n in names]
+                lo = [v0[n] - (hstep if n == k else 0.0) for n in names]
+                fd = (float(total(mx.float64, 40, *hi))
+                      - float(total(mx.float64, 40, *lo))) / (2 * hstep)
+                assert abs(g40[j] - fd) <= 1e-5 * abs(fd) + 1e-9, k
+                assert abs(g64[j] - fd) <= 2e-3 * abs(fd) + 1e-9, k
+    if dtype == mx.float32:
+        g32 = grads(mx.float32, 7)
+        assert np.all(np.abs(g32 - g64) <= 2e-3 * np.abs(g64) + 1e-9), (names, g32, g64)
+
+
+@pytest.mark.parametrize("dtype", [mx.float64, mx.float32])
+def test_contact_rule_compiled_equals_eager(dtype):
+    if dtype == mx.float32 and not el.metal_available():
+        pytest.skip("the fp32 route needs a GPU")
+    tau = mx.array(_around_eclipse(0.3, 40.0), dtype=dtype)
+    k, h = (mx.array(v, dtype=dtype) for v in _kw(0.3, 40.0, False).values())
+
+    def f(r, fp, kk, hh):
+        return mx.sum(el.flux_dev_from_tau(tau, PER, A, _b(0.3, 40.0), r, transittype="secondary",
+                                           fp=fp, secosw=kk, sesinw=hh, exp_time=EXP))
+    args = [mx.array(R, dtype=dtype), mx.array(FP, dtype=dtype), k, h]
+    ctx = mx.stream(mx.cpu) if dtype == mx.float64 else mx.stream(mx.gpu)
+    with ctx:
+        vg = mx.value_and_grad(f, argnums=(0, 1, 2, 3))
+        e_v, e_g = vg(*args)
+        c_v, c_g = mx.compile(vg)(*args)
+        tol = 1e-12 if dtype == mx.float64 else 1e-5      # as the test above
+        assert float(mx.abs(e_v - c_v)) <= tol * max(abs(float(e_v)), 1.0)
+        for a_, b_ in zip(e_g, c_g):
+            assert np.isfinite(float(a_))
+            assert float(mx.abs(a_ - b_)) <= tol * max(abs(float(a_)), 1.0)
+
+
+def _model(ecc, w, **kw):
+    p = _params(ecc, w, False)
+    t = T0 + _around_eclipse(ecc, w)
+    return p, t, el.TransitModel(p, t, transittype="secondary", exp_time=EXP,
+                                 integration="contact", n_gl=7, **kw)
+
+
+@needs_metal
+@pytest.mark.parametrize("ecc,w", _ORBITS)
+def test_transit_model_eclipse_contact_routes(ecc, w):
+    """fp32 takes the tau kernels; fp32 without Metal the graph; both within
+    1e-4 of the depth of fp64, plus the rounding of a flux near 1 + fp
+    (two fp32 ulps of 1). An array ecc takes the (e, w) graph and agrees
+    with the (k, h) one to rounding."""
+    tol = 1e-4 * FP + 2 * float(np.finfo(np.float32).eps)
+    p, t, m64 = _model(ecc, w)
+    f64 = m64.light_curve(p)
+    _, _, m32 = _model(ecc, w, dtype=mx.float32)
+    f32 = m32.light_curve(p)
+    assert list(m32._compiled) == [("sph-tau", "circ" if ecc == 0.0 else "kh")]
+    assert np.abs(f32 - f64).max() < tol
+    _, _, mg = _model(ecc, w, dtype=mx.float32, use_metal=False)
+    assert np.abs(mg.light_curve(p) - f64).max() < tol
+    q = _params(mx.array(ecc, dtype=mx.float64), mx.array(w, dtype=mx.float64), False)
+    with mx.stream(mx.cpu):
+        ew = np.asarray(m64.light_curve_mx(q))
+    assert np.abs(ew - f64).max() < 1e-12 * FP
+
+
+@pytest.mark.parametrize("dtype", [mx.float64, mx.float32])
+@pytest.mark.parametrize("ecc,w", [(0.0, 90.0), (0.3, 40.0)])
+def test_transit_model_eclipse_contact_batches(ecc, w, dtype):
+    if dtype == mx.float32 and not el.metal_available():
+        pytest.skip("the fp32 route needs a GPU")
+    p, t, m = _model(ecc, w, dtype=dtype)
+    pa = _params(ecc, w, False)
+    pa.rp, pa.fp = np.array([0.08, 0.1, 0.12]), np.array([1e-3, 2e-3, 5e-4])
+    got = m.light_curves(pa)
+    for j in range(3):
+        q = _params(ecc, w, False)
+        q.rp, q.fp = float(pa.rp[j]), float(pa.fp[j])
+        tol = 1e-15 if dtype == mx.float64 else 4 * float(np.finfo(np.float32).eps)
+        assert np.abs(got[j] - m.light_curve(q)).max() <= tol, j
+
+
+def test_transit_model_eclipse_contact_de_at_zero():
+    """The (e, w) route's d/de at e = 0 is finite and is the one-sided
+    derivative (the occultation offset from e cos w, no sqrt(e))."""
+    p, t, m = _model(0.0, 90.0)
+    with mx.stream(mx.cpu):
+        def f(e):
+            q = _params(e, mx.array(30.0, dtype=mx.float64), False)
+            return mx.sum(m.light_curve_mx(q))
+        g = float(mx.grad(f)(mx.array(0.0, dtype=mx.float64)))
+        fd = (float(f(mx.array(1e-7, dtype=mx.float64)))
+              - float(f(mx.array(0.0, dtype=mx.float64)))) / 1e-7
+    assert np.isfinite(g) and abs(g - fd) <= 1e-4 * abs(fd)

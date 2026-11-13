@@ -15,8 +15,10 @@ clear of the star (TransitModel's rule); an oblate planet's is
 ``oblate_tau.eclipse_dev_from_tau_oblate``, imported only for one. fp32
 data on the GPU stream takes the fused Metal kernels (``metal_eclipse``,
 ``metal_oblate``), with the exposure rule in the kernel; anything else runs
-the MLX graph, fp64 on the CPU stream. The exposure rule is "none" or
-"supersample".
+the MLX graph, fp64 on the CPU stream. The exposure rule is "none",
+"supersample" or, for a spherical planet, "contact": the transit of the
+orbit turned by pi, whose contact split the transit route already does
+(``_eclipse_dev_contact``).
 
 Two orbit helpers for timing an eclipse: ``occultation_offset``, the time
 from transit to occultation in orbits, and ``light_travel_delay``, how
@@ -107,6 +109,20 @@ def occultation_offset_dev(secosw=0.0, sesinw=0.0):
     return d - mx.round(d)
 
 
+def _occultation_offset_dev_ew(e, w):
+    """``occultation_offset_dev`` from (e, w [rad]) MLX arrays, with e cos w
+    in place of secosw sqrt(e): smooth at e = 0, for TransitModel's (e, w)
+    orbit."""
+    s, c = sincos(0.5 * (0.5 * math.pi - w))
+    E_tr = 2.0 * mx.arctan2(mx.sqrt(mx.maximum(1.0 - e, 0.0)) * s,
+                            mx.sqrt(1.0 + e) * c)
+    dE = 2.0 * mx.arctan2(e * sincos(w)[1], mx.sqrt(mx.maximum(1.0 - e * e, 0.0)))
+    sn = sincos(E_tr + 0.5 * dE)[0]
+    cs = sincos(0.5 * dE)[1]
+    d = (dE + 2.0 * e * sn * cs) / _TWO_PI
+    return d - mx.round(d)
+
+
 def light_travel_delay(a, b, rstar, secosw=0.0, sesinw=0.0):
     """How much later than the orbit's geometry places it a secondary
     eclipse is seen, in days, relative to the transit: the light-travel
@@ -162,19 +178,72 @@ def _vis_dev_spherical(tau, period, a, b, r, k=None, h=None):
     return mx.where(pos, s0d / mx.where(pos, math.pi * rv * rv, 1.0), 0.0)
 
 
+@mx.compile
+def _since_mid_eclipse(tau2d, period, dev):
+    """Each point's time since its own mid-eclipse, P (1/2 + dev) after
+    mid-transit, within half a period: (n, m) from (n,) period and dev."""
+    per = mx.reshape(period, (-1, 1))
+    d = (tau2d - 0.5 * per) - per * mx.reshape(dev, (-1, 1))
+    return d - per * mx.round(d / per)
+
+
+@mx.compile
+def _eclipse_from_transit(D, r, fp):
+    """fp (1 + D / r^2) per row: the eclipse's F - 1 from the transit
+    deviation D; the visible fraction is 1 for r = 0 (a point planet)."""
+    rc, fc = mx.reshape(r, (-1, 1)), mx.reshape(fp, (-1, 1))
+    pos = rc > 0.0
+    return fc * (1.0 + mx.where(pos, D / mx.where(pos, rc * rc, 1.0), 0.0))
+
+
+def _eclipse_dev_contact(tau2d, period, a, b, r, fp, k, h, exp_time, n_gl):
+    """F - 1 of a spherical planet's eclipse under the contact rule, (n, m),
+    from (n,) parameters. The eclipse on the orbit
+    (e, w) is the transit of (e, w + pi) -- (secosw, sesinw) -> (-k, -h),
+    the impact parameter at occultation b_occ -- at the time since
+    mid-eclipse, P occultation_offset after mid-transit: the planet's sky
+    position at the one is minus its position at the other, the same
+    distance from the star. A uniform disc's overlap with the star is
+    symmetric in the two discs, so the visible fraction - 1 is the transit
+    deviation D of a star without limb darkening (u = 0) over r^2, and the
+    transit route integrates the exposure: its kernel on an fp32 GPU, its
+    graph otherwise, the contacts the flipped orbit's own. (The kernel
+    computes the limb-darkening terms that u = 0 then zeroes, about twice an
+    eclipse kernel's work per node.)"""
+    if k is None:
+        dev, b_occ, orbit = mx.zeros_like(period), b, {}
+    else:
+        e, esw, ci = M._ecc_shape(a, b, k, h)
+        dev = occultation_offset_dev(k, h)
+        b_occ = a * ci * (1.0 - e * e) / (1.0 - esw)
+        orbit = dict(secosw=-k, sesinw=-h)
+    zero = mx.zeros_like(r)
+    D = M.flux_dev_from_tau(_since_mid_eclipse(tau2d, period, dev), period, a,
+                            b_occ, r, zero, zero, exp_time=exp_time,
+                            integration="contact", n_gl=n_gl, **orbit)
+    return _eclipse_from_transit(D, r, fp)
+
+
 @fp64_on_cpu
 def eclipse_dev_from_tau(tau, period, a, b, r, fp, f=None, theta=None, k=None,
-                         h=None, exp_time=0.0, mode=None, n_sub=1):
+                         h=None, exp_time=0.0, mode=None, n_sub=1, n_gl=5):
     """F - 1 of a secondary eclipse, fp (1 + visible-fraction deviation),
     (n, m) -- or (m,) for 1-D tau and no per-chain parameters. ``f`` given:
-    an oblate planet (``theta`` defaulting to 0). ``mode``: metal._INT_NONE
-    or _INT_SUPER (``n_sub`` uniform nodes over ``exp_time``, batman's
-    rule, as the transit graph's). fp32 on the GPU stream: the Metal
-    kernels, the exposure rule in them."""
+    an oblate planet (``theta`` defaulting to 0). ``mode``: metal._INT_NONE,
+    _INT_SUPER (``n_sub`` uniform nodes over ``exp_time``, batman's rule, as
+    the transit graph's) or _INT_CONTACT (spherical planets: ``n_gl``
+    Gauss-Legendre nodes per piece of the exposure split at the contacts,
+    _eclipse_dev_contact). fp32 on the GPU stream: the Metal kernels, the
+    exposure rule in them."""
     if tau.ndim not in (1, 2):
         raise ValueError(f"tau must be (m,) or (n, m); got {tau.shape}")
     oblate = f is not None
+    contact = mode == M._INT_CONTACT and exp_time != 0.0
     if oblate:
+        if contact:
+            raise ValueError("the contact rule for an oblate planet's eclipse "
+                             "is not available yet; use "
+                             "integration='supersample'")
         from .oblate import _check_domain
         _check_domain(r, f)
     squeeze = tau.ndim == 1
@@ -192,6 +261,10 @@ def eclipse_dev_from_tau(tau, period, a, b, r, fp, f=None, theta=None, k=None,
     per_c, a_c, b_c, r_c, fp_c = pc[:5]
     kh = pc[-2:] if ecc else [None, None]
     m = tau2d.shape[1]
+    if contact:
+        out = _eclipse_dev_contact(tau2d, per_c, a_c, b_c, r_c, fp_c, *kh,
+                                   exp_time, int(n_gl))
+        return out[0] if squeeze and n == 1 else out
     if (tau2d.dtype == mx.float32 and M._gpu_stream_active()
             and M.metal_available()):
         if oblate:
