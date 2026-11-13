@@ -12,9 +12,11 @@ split the integration at the contact times and integrate each smooth
 piece separately. There the pieces are handled by adaptive Simpson; an
 adaptive depth is data-dependent control flow, which would break
 batching and mx.compile, so here each piece gets a *fixed-order*
-Gauss-Legendre rule instead. On a smooth piece an n-point rule is exact
-for polynomials of degree 2n-1 and converges geometrically, so a handful
-of nodes beats hundreds of uniform samples.
+Gauss-Legendre rule instead. The integrand still goes as a fractional
+power (3/2 for the uniform term) of the time past a contact at a piece's
+end, so an n-point rule converges algebraically, as about n^-5, not
+geometrically; still, a handful of nodes beats hundreds of uniform
+samples.
 
 The split is done branchlessly: the window always has five
 sub-intervals, with edges

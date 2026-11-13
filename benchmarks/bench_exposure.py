@@ -2,8 +2,9 @@
 
 Uniform supersampling converges as O(1/N) because the light curve's
 derivative jumps at each contact. Splitting the exposure window at the
-contacts and applying a fixed-order Gauss-Legendre rule to each smooth
-piece converges geometrically. Writes exposure.json.
+contacts and applying a fixed-order Gauss-Legendre rule to each piece
+converges as about n_gl^-5 (the flux still goes as a fractional power
+of the time past a contact, at the pieces' ends). Writes exposure.json.
 """
 import json
 import os

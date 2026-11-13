@@ -226,8 +226,9 @@ Two ways to handle it:
 The second converges dramatically faster, and the reason is worth
 understanding: the light curve's derivative *jumps* where the planet's limb
 crosses the star's, so uniform sampling converges only as O(1/N) — ten times
-the work buys one digit. Splitting at the contacts makes each piece smooth,
-and Gauss-Legendre on a smooth piece converges geometrically.
+the work buys one digit. Splitting at the contacts moves the kinks to the ends
+of the pieces, where Gauss-Legendre copes with them: its error falls as about
+the fifth power of the number of nodes.
 """)
 
 code("""

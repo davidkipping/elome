@@ -25,8 +25,10 @@ only as $O(1/N)$.
 
 `integration="contact"` splits each exposure at the contact times that
 fall inside it and integrates each smooth piece with Gauss-Legendre
-quadrature. With the kinks at the split points, every piece converges
-geometrically:
+quadrature. With the kinks at the ends of the pieces, the error falls
+as about the fifth power of `n_gl`, against supersampling's first power
+of N. (It is not geometric convergence: near a contact the flux still
+changes as a fractional power of the time past it.)
 
 ```python
 m = elome.TransitModel(params, t, exp_time=29.4 / 60 / 24,
