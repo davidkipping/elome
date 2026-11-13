@@ -109,8 +109,8 @@ a spherical planet.
   planet clears the star at periastron, $a(1-e) > 1 + r_p$ (for $a = 10$
   and $r_p = 0.1$, $e < 0.89$). The `anvil` fitting targets add that
   condition as a barrier.
-- **Finite exposures**: supersampling or the contact rule; secondary
-  eclipses take supersampling only. See {doc}`guides/exposures`.
+- **Finite exposures**: supersampling or the contact rule, for transits
+  and secondary eclipses alike. See {doc}`guides/exposures`.
 - **Secondary eclipses**: in `TransitModel` and in
   {doc}`guides/sampler-api`, with the planet a uniform disc; the `anvil`
   fitting target takes them for a spherical planet.

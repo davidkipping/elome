@@ -52,32 +52,36 @@ def _times(ecc, w, rstar=None, n=300, seed=1, transit=True):
 
 
 def _frontend(t, ecc, w, transittype, law="quadratic", rstar=None,
-              exp_time=0.0, n_sub=1):
+              exp_time=0.0, n_sub=1, integration="contact"):
     """(transit + eclipse - fp) / (1 + fp) from TransitModel, the eclipse
     seen the light-travel delay late."""
     p = elome.TransitParams()
     p.t0, p.per, p.rp, p.a, p.inc, p.ecc, p.w = T0, PER, RP, A, INC, ecc, w
     p.limb_dark, p.u, p.fp = law, (U if law == "quadratic" else W4), FP
-    ekw = dict(exp_time=exp_time, supersample_factor=n_sub) if exp_time else {}
+    ekw = ({} if not exp_time else
+           dict(exp_time=exp_time, integration="contact", n_gl=5)
+           if integration == "contact" else
+           dict(exp_time=exp_time, integration=integration, supersample_factor=n_sub))
     sec = elome.TransitModel(p, t - _delay(ecc, w, rstar), transittype="secondary",
                              **ekw).light_curve(p)
     dev = sec - 1.0 - FP
     if transittype == "both":
-        tkw = dict(exp_time=exp_time, integration="contact", n_gl=5) if exp_time else {}
-        dev = dev + elome.TransitModel(p, t, **tkw).light_curve(p) - 1.0
+        dev = dev + elome.TransitModel(p, t, **ekw).light_curve(p) - 1.0
     return dev / (1.0 + FP)
 
 
 def _target(transittype, orbit="circular", ecc=0.0, w=90.0, timing="transit",
-            law="quadratic", rstar=None, exp_time=0.0, n_sub=1, seed=1):
+            law="quadratic", rstar=None, exp_time=0.0, n_sub=1, seed=1,
+            integration="contact"):
     t = _times(ecc, w, rstar, seed=seed, transit=transittype == "both")
-    flux = _frontend(t, ecc, w, transittype, law, rstar, exp_time, n_sub)
+    flux = _frontend(t, ecc, w, transittype, law, rstar, exp_time, n_sub,
+                     integration)
     y = 1.0 + flux + 1e-4 * np.random.default_rng(seed).standard_normal(t.size)
     guess = (T0 if timing == "transit" else _t_occ(ecc, w, rstar)) + 0.003
     kw = dict(eccentric=True) if orbit == "sampled" else (
         dict(ecc=ecc, w=w) if orbit == "fixed" else {})
     if exp_time:
-        kw.update(exp_time=exp_time, n_sub=n_sub)
+        kw.update(exp_time=exp_time, n_sub=n_sub, integration=integration)
     tt = make_transit_target(t, y, 1e-4, guess, PER - 0.0005,
                              transittype=transittype, timing=timing,
                              limb_dark=law, rstar=rstar, **kw)
@@ -164,11 +168,19 @@ class TestModel:
         far = np.abs(np.abs(tt.x64[0]) - 0.5 * PER) > 0.2
         assert far.any() and np.max(np.abs(m[far])) == 0.0
 
-    def test_exposures(self):
-        """The transit by the contact rule, the eclipse supersampled."""
+    @pytest.mark.parametrize("integration", ["contact", "supersample"])
+    @pytest.mark.parametrize("timing,rstar", [("transit", None),
+                                              ("occultation", RSTAR)])
+    def test_exposures(self, integration, timing, rstar):
+        """The transit and the eclipse by one rule, as TransitModel's."""
         exp = 29.4 / 1440.0
-        tt, flux = _target("both", "sampled", 0.3, 63.0, exp_time=exp, n_sub=9)
-        assert np.max(np.abs(_model64(tt, _truth(tt, 0.3, 63.0)) - flux)) < 1e-12
+        tt, flux = _target("both", "sampled", 0.3, 63.0, timing, rstar=rstar,
+                           exp_time=exp, n_sub=9, integration=integration)
+        v = _truth(tt, 0.3, 63.0, rstar)
+        assert np.max(np.abs(_model64(tt, v) - flux)) < 1e-12
+        # and the rule matters: an instantaneous model is far off
+        tt0, _ = _target("both", "sampled", 0.3, 63.0, timing, rstar=rstar)
+        assert np.max(np.abs(_model64(tt0, v) - flux)) > 1e-4
 
     def test_light_travel_moves_only_the_eclipse(self):
         tt, _ = _target("both", rstar=RSTAR)
@@ -305,6 +317,23 @@ class TestTarget:
         lpc = np.array(mx.compile(tt.target.log_prob)(u))
         assert np.max(np.abs(lp - lpc)) < 1e-3 * np.max(np.abs(lp))
 
+    @pytest.mark.parametrize("integration", ["contact", "supersample"])
+    @pytest.mark.parametrize("tt_type", ["secondary", "both"])
+    def test_exposures_in_float32(self, integration, tt_type):
+        """Exposures on the float32 kernels: the log-likelihood as float64's,
+        a gradient in every parameter, compiled as eager."""
+        tt, _ = _target(tt_type, "sampled", 0.3, 63.0, rstar=RSTAR,
+                        exp_time=29.4 / 1440.0, n_sub=9, integration=integration)
+        u0 = tt.transform.from_model_np(_truth(tt, 0.3, 63.0, RSTAR))
+        rng = np.random.default_rng(0)
+        u = mx.array((u0 + 0.003 * rng.standard_normal((16, u0.size))).astype(np.float32))
+        assert engine.validate_precision(tt.target, u).max_abs_err < 0.1
+        g = np.array(mx.grad(lambda uu: mx.sum(tt.target.log_prob(uu)))(u))
+        assert np.isfinite(g).all() and (np.abs(g).max(0) > 0).all()
+        lp = np.array(tt.target.log_prob(u))
+        lpc = np.array(mx.compile(tt.target.log_prob)(u))
+        assert np.max(np.abs(lp - lpc)) < 1e-3 * np.max(np.abs(lp))
+
     def test_eclipse_alone_gradient(self):
         tt, _ = _target("secondary", "circular")
         u0 = tt.transform.from_model_np(_truth(tt))
@@ -338,7 +367,8 @@ class TestTarget:
             (dict(transittype="both", ecc=1.2, w=0.0), "ecc must be in"),
             (dict(transittype="both", ecc=0.3, w=1.0, eccentric=True), "one or the other"),
             (dict(transittype="both", rstar=-1.0), "rstar"),
-            (dict(transittype="both", exp_time=0.02), "n_sub > 1"),
+            (dict(transittype="both", exp_time=0.02, integration="trapezoid"),
+             "integration must be"),
             (dict(transittype="secondary", core="graph"), "core selects"),
             (dict(transittype="secondary", limb_dark="hybrid4"), "no limb darkening"),
             (dict(timing="occultation"), "times a secondary eclipse"),

@@ -593,9 +593,9 @@ time and duration either way.
 ``eclipse.light_travel_delay`` (about 2 a / c), to the occultation
 time; None leaves it out (TransitModel's geometry). Times in days.
 
-Exposures: ``exp_time`` (days) > 0 integrates the transit by
-``integration`` (``n_gl``, ``n_sub``) and the eclipse by supersampling
-with ``n_sub`` nodes, which must then be > 1.
+Exposures: ``exp_time`` (days) > 0 integrates the transit and the
+eclipse alike by ``integration`` (``n_gl``, ``n_sub``): the contact
+rule splits the eclipse at its own contacts.
 ```
 
 ### `anvil.transit_param_names`
@@ -691,9 +691,9 @@ Args:
         Run anvil with ``compile_step=target.compile_step`` (False): a
         spotted model is evaluated eagerly.
     exp_time, integration, n_gl, n_sub: an exposure time (in t's
-        units) and its rule, for hybrid laws: ``n_gl`` nodes per piece
-        for "contact", ``n_sub`` for "supersample"
-        (``make_hybrid_transit_flux``).
+        units) and its rule, for hybrid laws and eclipses: ``n_gl``
+        nodes per piece for "contact", ``n_sub`` for "supersample"
+        (``make_hybrid_transit_flux``, ``make_eclipse_flux``).
     spot_epoch: when the spots' longitudes are measured (t's system);
         default the predicted mid-transit nearest the data's middle,
         which keeps the star's float32 phase accurate.

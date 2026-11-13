@@ -52,8 +52,10 @@ every release is tagged `vX.Y.Z` in git.
   (`eccentric=True`) or fixed (`ecc=`, `w=`); `rstar=` adds the
   light-travel time across the orbit to the occultation. Times for an
   occultation-timed model are centred on each point's nearer event,
-  `elome.orbit.occultation_center_times`. The sampler guide's
-  hand-written joint example is replaced by it.
+  `elome.orbit.occultation_center_times`. Exposures integrate the transit
+  and the eclipse by one rule, `integration` (the contact rule by
+  default). The sampler guide's hand-written joint example is replaced by
+  it.
 - **The contact rule for secondary eclipses**, of spherical and oblate
   planets. `TransitModel(transittype="secondary", integration="contact")`
   and `flux_dev_from_tau(transittype="secondary")`, whose default rule it
@@ -72,9 +74,9 @@ every release is tagged `vX.Y.Z` in git.
   1e-4, against 1-4% for 15 samples.
 - **Secondary eclipses in `make_transit_target`**, with the same
   `transittype`, `timing`, `ecc`, `w` and `rstar` options, for a spherical
-  planet on an unspotted star. `fp` and `tocc_off` join
-  `DEFAULT_BOUNDS`; a fixed eccentric orbit gets the periastron and
-  inclination barrier.
+  planet on an unspotted star, and the same exposure rules. `fp` and
+  `tocc_off` join `DEFAULT_BOUNDS`; a fixed eccentric orbit gets the
+  periastron and inclination barrier.
 - **Orbit functions for timing eclipses**: `elome.occultation_offset`,
   the time from transit to occultation in orbits;
   `elome.eclipse.occultation_offset_dev`, that minus one half without

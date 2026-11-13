@@ -125,8 +125,9 @@ tt = make_transit_target(t, y, yerr, t0_guess=..., period_guess=...,
   light-travel time across the orbit to the occultation, about $2a/c$:
   tens of seconds for a hot Jupiter. Without it the eclipse is at the
   geometric conjunction, as in `TransitModel`.
-- **Exposures.** `exp_time=` integrates the transit by `integration` and
-  the eclipse by supersampling with `n_sub` (> 1) nodes.
+- **Exposures.** `exp_time=` integrates the transit and the eclipse by
+  one rule, `integration`: the contact rule (the default, `n_gl`) splits
+  the eclipse at its own contacts; `"supersample"` takes `n_sub` nodes.
 
 A spherical planet on an unspotted star.
 

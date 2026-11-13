@@ -396,12 +396,15 @@ def make_eclipse_flux(period_ref: float, transittype: str = "secondary",
     ``eclipse.light_travel_delay`` (about 2 a / c), to the occultation
     time; None leaves it out (TransitModel's geometry). Times in days.
 
-    Exposures: ``exp_time`` (days) > 0 integrates the transit by
-    ``integration`` (``n_gl``, ``n_sub``) and the eclipse by supersampling
-    with ``n_sub`` nodes, which must then be > 1.
+    Exposures: ``exp_time`` (days) > 0 integrates the transit and the
+    eclipse alike by ``integration`` (``n_gl``, ``n_sub``): the contact
+    rule splits the eclipse at its own contacts.
     """
-    from .metal import flux_dev_from_tau
+    from .metal import _INT_MODES, flux_dev_from_tau
     period_ref = float(period_ref)
+    if integration not in _INT_MODES:
+        raise ValueError(f"integration must be one of {sorted(_INT_MODES)}; "
+                         f"got {integration!r}")
     if transittype not in ("secondary", "both"):
         raise ValueError("make_eclipse_flux models a secondary eclipse: "
                          "transittype='secondary' or 'both'")
@@ -421,14 +424,12 @@ def make_eclipse_flux(period_ref: float, transittype: str = "secondary",
     if rstar is not None and not float(rstar) > 0.0:
         raise ValueError("rstar (solar radii) must be > 0")
     exp_time = float(exp_time)
-    if exp_time > 0.0 and int(n_sub) < 2:
-        raise ValueError("an eclipse with exp_time > 0 is supersampled: pass "
-                         "n_sub > 1")
     both = transittype == "both"
     if both:
         iq = col["q1"]
         n_q = sum(n[0] == "q" and n[1:].isdigit() for n in names)
-    exp_kw = dict(exp_time=exp_time, n_sub=n_sub)
+    exp_kw = dict(exp_time=exp_time, n_gl=n_gl, n_sub=n_sub,
+                  integration=integration if exp_time > 0.0 else "none")
 
     def flux_dev_fn(v: mx.array, x: mx.array) -> mx.array:
         period = period_ref + v[:, 1]
@@ -461,9 +462,7 @@ def make_eclipse_flux(period_ref: float, transittype: str = "secondary",
             tau = tau - per * mx.round(tau / per)
         ecl = flux_dev_from_tau(
             tau if delay is None else tau - delay, period, a, b, r,
-            transittype="secondary", fp=fp,
-            integration="supersample" if exp_time > 0.0 else "none",
-            **exp_kw, **orb)
+            transittype="secondary", fp=fp, **exp_kw, **orb)
         dev = ecl - fp[:, None]
         if both:
             q = v[:, iq:iq + n_q]
@@ -472,10 +471,8 @@ def make_eclipse_flux(period_ref: float, transittype: str = "secondary",
                 ld = dict(u1=u1, u2=u2)
             else:
                 ld = dict(limb_dark=limb_dark, u=_w_from_q(limb_dark, q))
-            dev = dev + flux_dev_from_tau(
-                tau, period, a, b, r, n_gl=n_gl,
-                integration=integration if exp_time > 0.0 else "none",
-                **exp_kw, **ld, **orb)
+            dev = dev + flux_dev_from_tau(tau, period, a, b, r, **exp_kw,
+                                          **ld, **orb)
         return v[:, -1:] + dev / (1.0 + fp[:, None])
 
     return flux_dev_fn
@@ -704,9 +701,9 @@ def make_transit_target(t, y, yerr, t0_guess, period_guess,
             Run anvil with ``compile_step=target.compile_step`` (False): a
             spotted model is evaluated eagerly.
         exp_time, integration, n_gl, n_sub: an exposure time (in t's
-            units) and its rule, for hybrid laws: ``n_gl`` nodes per piece
-            for "contact", ``n_sub`` for "supersample"
-            (``make_hybrid_transit_flux``).
+            units) and its rule, for hybrid laws and eclipses: ``n_gl``
+            nodes per piece for "contact", ``n_sub`` for "supersample"
+            (``make_hybrid_transit_flux``, ``make_eclipse_flux``).
         spot_epoch: when the spots' longitudes are measured (t's system);
             default the predicted mid-transit nearest the data's middle,
             which keeps the star's float32 phase accurate.

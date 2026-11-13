@@ -275,8 +275,9 @@ dev = model_fn(v, x)                           # v: (n_chains, 11)
 - **Light travel.** `rstar=` (solar radii) adds
   `elome.light_travel_delay`, the light-travel time across the orbit, to
   the occultation.
-- **Exposures.** `exp_time=` integrates the transit by `integration` and
-  the eclipse by supersampling with `n_sub` (> 1) nodes.
+- **Exposures.** `exp_time=` integrates the transit and the eclipse by
+  one rule, `integration`: the contact rule (the default, `n_gl`) splits
+  the eclipse at its own contacts; `"supersample"` takes `n_sub` nodes.
 
 In float32, an occultation-timed model on a sampled eccentric orbit
 places the transit through `occultation_offset_dev` evaluated in float32,
