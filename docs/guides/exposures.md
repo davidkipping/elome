@@ -8,8 +8,9 @@ over the exposure, for spherical and oblate planets alike.
 
 ## Supersampling
 
-batman's rule: average `supersample_factor` evenly spaced samples across
-each exposure, endpoints included.
+The rule of Kipping (2010), as batman implements it: average
+`supersample_factor` evenly spaced samples across each exposure,
+endpoints included.
 
 ```python
 m = elome.TransitModel(params, t, supersample_factor=15, exp_time=29.4 / 60 / 24)
@@ -31,6 +32,12 @@ geometrically:
 m = elome.TransitModel(params, t, exp_time=29.4 / 60 / 24,
                        integration="contact", n_gl=5)
 ```
+
+Splitting at the contacts follows Agol, Luger & Foreman-Mackey (2020),
+who integrate each piece by adaptive Simpson quadrature. Elómë uses a
+fixed Gauss-Legendre order instead: an adaptive depth depends on the
+data, which would break batching and compilation, while a fixed rule is
+branchless and keeps the nodes' positions differentiable.
 
 A 29-minute exposure of a 0.126-day transit (`benchmarks/bench_exposure.py`):
 

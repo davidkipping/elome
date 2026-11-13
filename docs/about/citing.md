@@ -27,6 +27,9 @@ oblate or ringed planet or a spotted star, please also cite:
   *AJ* 159, 123, [arXiv:1908.03222](https://arxiv.org/abs/1908.03222).
 - The limb-darkening priors for the quadratic law: Kipping (2013),
   *MNRAS* 435, 2152, [arXiv:1308.0009](https://arxiv.org/abs/1308.0009).
+- Exposure integration: supersampling, Kipping (2010), *MNRAS* 408,
+  1758, [arXiv:1004.3741](https://arxiv.org/abs/1004.3741); splitting
+  each exposure at the contacts, Agol, Luger & Foreman-Mackey (2020).
 - The eccentric Kepler solver: Markley (1995), *Celestial Mechanics and
   Dynamical Astronomy* 63, 101.
 - The frontend's design follows batman: Kreidberg (2015), *PASP* 127,
