@@ -31,10 +31,11 @@ SINGLE = [
     ("elome_fp64", [0]),          # MLX CPU stream
     ("batman", [1]),                    # probed: this build lacks OpenMP
     ("pytransit", THREADS),             # numba
+    ("roadrunner", [1, 12]),            # numba, its nthreads
     ("exoplanet", [1]),                 # single-threaded C++
     ("jaxoplanet", [0]),                # XLA CPU pool (all cores)
 ]
-BATCH = ["elome_gpu", "pytransit", "jaxoplanet", "batman",
+BATCH = ["elome_gpu", "pytransit", "roadrunner", "jaxoplanet", "batman",
          "exoplanet"]
 # eccentric sweep: same codes, each solving Kepler's equation itself, so
 # the numbers include the orbit as well as the photometry.
@@ -43,6 +44,7 @@ ECC_CODES = [
     ("elome_fp64", [0]),
     ("batman", [1]),
     ("pytransit", THREADS),
+    ("roadrunner", [1]),
     ("exoplanet", [1]),
     ("jaxoplanet", [0]),
 ]

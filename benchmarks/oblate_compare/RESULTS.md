@@ -2,7 +2,7 @@
 
 # Oblate planets: cross-code benchmark
 
-Machine: macOS-27.0.1-arm64-arm-64bit, Python 3.11.5; run 2026-10-19 00:52 (load average 1.9 at the start). See README.md here for the environment and the macOS build of GreenLantern.
+Machine: macOS-27.0.1-arm64-arm-64bit, Python 3.11.5; run 2026-11-14 13:57 (load average 5.4 at the start). See README.md here for the environment and the macOS build of GreenLantern.
 
 Scenario: the spherical benchmark's transit (P = 3.456 d, a/R* = 8.8, b = 0.45, area-equivalent Rp/R* = 0.1) with projected flattening f = 0.2 and the long axis at 30 deg to the motion. Limb darkening is the one profile every code expresses exactly: I(mu) = 1 - 0.5 (1 - mu^2), Elómë's hybrid2 with its pole weight 0, and the quadratic law (u1, u2) = (1.0, -0.5) for the others. Circular orbit, instantaneous fluxes. Every code's parameter mapping was checked against the others before timing.
 
@@ -39,26 +39,27 @@ The fp64 codes all reach rounding on these transits (JoJo's 100-step line integr
 
 | code | N = 1,000 | N = 10,000 | N = 100,000 | N = 1,000,000 | N = 10,000,000 |
 |---|---:|---:|---:|---:|---:|
-| Elómë fp64 (CPU) | 13.14 ms | 55.73 ms | 470.62 ms | 4,674.05 ms | 46.8 s |
-| Elómë fp32 (GPU, Metal) | 0.44 ms | 0.48 ms | 0.83 ms | 3.65 ms | 35.31 ms |
-| squishyplanet 0.6.0 (JAX, fp64, CPU) | 3.94 ms | 37.51 ms | 372.66 ms | 3,750.28 ms | 39.7 s |
-| JoJo 0.1.0 (numpy, fp64) | 0.64 ms | 4.81 ms | 45.04 ms | 561.60 ms | 6,206.20 ms |
-| GreenLantern 1.6 (OpenCL GPU, fp32) | 0.79 ms | 2.87 ms | 24.01 ms | 235.05 ms | 2,347.03 ms |
-| eclipsoid 0.0.2 (JAX, fp64, CPU) | 8.81 ms | 85.49 ms | 889.39 ms | 8,973.30 ms | -- |
+| Elómë fp64 (CPU) | 13.57 ms | 56.23 ms | 474.93 ms | 4,682.32 ms | 46.8 s |
+| Elómë fp32 (GPU, Metal) | 0.46 ms | 0.48 ms | 0.83 ms | 3.68 ms | 35.14 ms |
+| squishyplanet 0.6.0 (JAX, fp64, CPU) | 3.88 ms | 37.44 ms | 379.30 ms | 3,805.22 ms | 40.4 s |
+| JoJo 0.1.0 (numpy, fp64) | 0.67 ms | 4.82 ms | 44.82 ms | 567.08 ms | 7,045.38 ms |
+| GreenLantern 1.6 (OpenCL GPU, fp32) | 0.88 ms | 2.98 ms | 24.10 ms | 234.99 ms | 2,345.76 ms |
+| eclipsoid 0.0.2 (JAX, fp64, CPU) | 8.78 ms | 86.28 ms | 892.20 ms | 8,917.31 ms | 89.4 s |
 
-At N = 10^7 Elómë's fp32 kernel is 66x faster than GreenLantern 1.6 (OpenCL GPU, fp32), 176x faster than JoJo 0.1.0 (numpy, fp64), 1,125x faster than squishyplanet 0.6.0 (JAX, fp64, CPU), 1,327x faster than Elómë fp64 (CPU).
+At N = 10^7 Elómë's fp32 kernel is 67x faster than GreenLantern 1.6 (OpenCL GPU, fp32), 200x faster than JoJo 0.1.0 (numpy, fp64), 1,149x faster than squishyplanet 0.6.0 (JAX, fp64, CPU), 1,332x faster than Elómë fp64 (CPU), 2,544x faster than eclipsoid 0.0.2 (JAX, fp64, CPU).
 
-Elómë's fp32 kernel is the fastest code at every N measured; at the smallest, its 0.44 ms is mostly the GPU dispatch floor.
+Elómë's fp32 kernel is the fastest code at every N measured; at the smallest, its 0.46 ms is mostly the GPU dispatch floor.
 
 ## Many parameter sets: 512 sets x 10,000 points
 
 | code | wall | curves/s | peak memory | how |
 |---|---:|---:|---:|---|
-| Elómë fp32 (GPU, Metal) | 0.020 s | 25,249 | 90 MB | TransitModel.light_curves, one launch |
-| GreenLantern 1.6 (OpenCL GPU, fp32) | 1.205 s | 425 | 14 MB | one launch, a parameter row per set |
-| JoJo 0.1.0 (numpy, fp64) | 2.576 s | 199 | 50 MB | Python loop (no batch API) |
-| squishyplanet 0.6.0 (JAX, fp64, CPU) | 28.994 s | 18 | 691 MB | jax.jit(jax.vmap(lightcurve)) |
-| eclipsoid 0.0.2 (JAX, fp64, CPU) | 45.692 s | 11 | 4,273 MB | jax.jit(jax.vmap(light curve)) |
+| Elómë fp32 (GPU, Metal) | 0.020 s | 25,219 | 91 MB | TransitModel.light_curves, one launch |
+| GreenLantern 1.6 (OpenCL GPU, fp32) | 1.205 s | 425 | 16 MB | one launch, a parameter row per set |
+| JoJo 0.1.0 (numpy, fp64) | 2.540 s | 202 | 49 MB | Python loop (no batch API) |
+| Elómë fp64 (CPU) | 24.326 s | 21 | 946 MB | TransitModel.light_curves, one call |
+| squishyplanet 0.6.0 (JAX, fp64, CPU) | 29.649 s | 17 | 691 MB | jax.jit(jax.vmap(lightcurve)) |
+| eclipsoid 0.0.2 (JAX, fp64, CPU) | 45.648 s | 11 | 4,275 MB | jax.jit(jax.vmap(light curve)) |
 
 ## Value + gradient of a scalar loss (single light curve)
 
@@ -66,11 +67,11 @@ In every parameter each code exposes: for Elómë rp, f, theta, inc, t0, period,
 
 | code | N = 10,000 | N = 100,000 |
 |---|---:|---:|
-| Elómë fp64 (CPU) | 186.09 ms | 1,079.65 ms |
-| Elómë fp32 (GPU, Metal) | 1.32 ms | 2.70 ms |
-| squishyplanet 0.6.0 (JAX, fp64, CPU) | 232.08 ms | 2,286.57 ms |
-| GreenLantern 1.6 (OpenCL GPU, fp32) | 6.37 ms | 54.28 ms |
-| eclipsoid 0.0.2 (JAX, fp64, CPU) | 139.47 ms | 1,466.53 ms |
+| Elómë fp64 (CPU) | 182.25 ms | 1,110.15 ms |
+| Elómë fp32 (GPU, Metal) | 1.34 ms | 2.51 ms |
+| squishyplanet 0.6.0 (JAX, fp64, CPU) | 231.62 ms | 2,284.61 ms |
+| GreenLantern 1.6 (OpenCL GPU, fp32) | 6.36 ms | 54.32 ms |
+| eclipsoid 0.0.2 (JAX, fp64, CPU) | 138.02 ms | 1,507.79 ms |
 
 ## Peak memory of one light curve
 
@@ -78,10 +79,10 @@ The process's physical footprint (what Activity Monitor shows), above its level 
 
 | code | N = 1,000 | N = 10,000 | N = 100,000 | N = 1,000,000 | N = 10,000,000 |
 |---|---:|---:|---:|---:|---:|
-| Elómë fp64 (CPU) | 75 MB | 98 MB | 288 MB | 733 MB | 1,254 MB |
-| Elómë fp32 (GPU, Metal) | 10 MB | 10 MB | 13 MB | 30 MB | 239 MB |
-| squishyplanet 0.6.0 (JAX, fp64, CPU) | 120 MB | 131 MB | 127 MB | 270 MB | 1,681 MB |
-| JoJo 0.1.0 (numpy, fp64) | 2 MB | 3 MB | 31 MB | 77 MB | 9,442 MB |
-| GreenLantern 1.6 (OpenCL GPU, fp32) | 13 MB | 12 MB | 14 MB | 19 MB | 89 MB |
-| eclipsoid 0.0.2 (JAX, fp64, CPU) | 32 MB | 35 MB | 37 MB | 853 MB | -- |
+| Elómë fp64 (CPU) | 79 MB | 98 MB | 287 MB | 734 MB | 1,250 MB |
+| Elómë fp32 (GPU, Metal) | 12 MB | 12 MB | 15 MB | 30 MB | 240 MB |
+| squishyplanet 0.6.0 (JAX, fp64, CPU) | 130 MB | 120 MB | 133 MB | 272 MB | 1,688 MB |
+| JoJo 0.1.0 (numpy, fp64) | 2 MB | 3 MB | 30 MB | 85 MB | 9,442 MB |
+| GreenLantern 1.6 (OpenCL GPU, fp32) | 15 MB | 15 MB | 15 MB | 21 MB | 91 MB |
+| eclipsoid 0.0.2 (JAX, fp64, CPU) | 29 MB | 36 MB | 33 MB | 853 MB | 8,241 MB |
 

@@ -93,6 +93,7 @@ add("|---|---:|---:|---:|---|")
 notes = {
     "elome_gpu": "fp32 GPU, one broadcast graph",
     "pytransit": "native parameter arrays (numba)",
+    "roadrunner": "native parameter arrays (numba, every thread)",
     "jaxoplanet": "jax.vmap, CPU x64",
     "batman": "python loop (no native batch)",
     "exoplanet": "python loop (no native batch)",

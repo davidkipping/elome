@@ -10,6 +10,10 @@ renders RESULTS.md. Run on a quiet machine.
 
     --precision   precision only, into results_oblate.json
     --graze       the same for BENCH_SCENARIO=graze (precision_graze)
+    --fill        measure only the (code, mode, N) missing from
+                  results_oblate.json, and merge them in
+
+Every code runs at every N, however long a call takes.
 """
 import json
 import os
@@ -85,7 +89,42 @@ def _mem(m):
     return {k: m[k] for k in ("peak_mb", "mlx_peak_mb") if k in m}
 
 
+def fill():
+    """Measure what results_oblate.json lacks (a code added, or a size
+    not run) and merge it in, noting each addition's date."""
+    path = os.path.join(HERE, "results_oblate.json")
+    res = json.load(open(path))
+    added = res.setdefault("filled", [])
+
+    def keep(mode, code, n, m):
+        if mode == "batch":
+            res["batch"][code] = m["median_s"]
+            res["mem"]["batch"][code] = _mem(m)
+        else:
+            res[mode].setdefault(code, {})[str(n)] = m["median_s"]
+            res["mem"][mode].setdefault(code, {})[str(n)] = _mem(m)
+        added.append({"code": code, "mode": mode, "n": n,
+                      "date": time.strftime("%Y-%m-%d %H:%M"),
+                      "load": os.getloadavg()})
+        with open(path, "w") as f:
+            json.dump(res, f, indent=1)
+        print(f"  {mode} {code} N={n}: {m['median_s']:.3f} s")
+
+    todo = [("single", c, n) for c in A.CODES for n in N_SWEEP
+            if str(n) not in res["single"].get(c, {})]
+    todo += [("batch", c, 0) for c in A.BATCH_CODES if c not in res["batch"]]
+    todo += [("grad", c, n) for c in A.GRAD_CODES for n in GRAD_N
+             if str(n) not in res["grad"].get(c, {})]
+    for mode, code, n in todo:
+        m = measure(code, mode, n)
+        if m is not None:
+            keep(mode, code, n, m)
+
+
 def main():
+    if "--fill" in sys.argv:
+        fill()
+        return
     if "--graze" in sys.argv or "--precision" in sys.argv:
         # precision only; --graze is the stress scenario (scenario_oblate.GRAZE)
         key = "precision_graze" if "--graze" in sys.argv else "precision"
@@ -118,8 +157,6 @@ def main():
             res["single"][code][str(n)] = m["median_s"]
             res["mem"]["single"].setdefault(code, {})[str(n)] = _mem(m)
             print(f"  single {code:18s} N={n:>10,d}: {m['median_s'] * 1e3:10.2f} ms")
-            if m["median_s"] > 8.0:          # the next decade would take minutes
-                break
     res["batch"] = {}
     for code in A.BATCH_CODES:
         m = measure(code, "batch", 0)

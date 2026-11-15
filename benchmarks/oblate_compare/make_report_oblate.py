@@ -106,7 +106,8 @@ def main():
            "squishyplanet": "jax.jit(jax.vmap(lightcurve))",
            "jojo": "Python loop (no batch API)",
            "greenlantern": "one launch, a parameter row per set",
-           "eclipsoid": "jax.jit(jax.vmap(light curve))"}
+           "eclipsoid": "jax.jit(jax.vmap(light curve))",
+           "elome_fp64": "TransitModel.light_curves, one call"}
     for code, t in sorted(r["batch"].items(), key=lambda kv: kv[1]):
         L.append(f"| {NAMES[code]} | {t:.3f} s | {BATCH_NPV / t:,.0f} | "
                  f"{mem(r, 'batch', code)} | {how[code]} |")

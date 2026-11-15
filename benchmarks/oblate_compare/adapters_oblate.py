@@ -78,23 +78,34 @@ def elome_fp64_run(state):
 elome_fp32_run = elome_fp64_run
 
 
-def elome_fp32_batch_prepare():
-    import mlx.core as mx
+def _mp_batch_prepare(dtype):
     import elome
     bp = batch_params()
     p = _mp_params()
     p.rp, p.f, p.theta = bp["rp"], bp["f"], np.degrees(bp["theta"])
     p.t0, p.per, p.a = bp["t0"], bp["per"], bp["a"]
     p.inc = np.degrees(np.arccos(bp["b"] / bp["a"]))
-    m = elome.TransitModel(_mp_params(), time_grid(BATCH_NPT),
-                                 dtype=mx.float32)
+    m = elome.TransitModel(_mp_params(), time_grid(BATCH_NPT), dtype=dtype)
     m.light_curves(p)
     return m, p
+
+
+def elome_fp32_batch_prepare():
+    import mlx.core as mx
+    return _mp_batch_prepare(mx.float32)
+
+
+def elome_fp64_batch_prepare():
+    import mlx.core as mx
+    return _mp_batch_prepare(mx.float64)
 
 
 def elome_fp32_batch_run(state):
     m, p = state
     return m.light_curves(p)
+
+
+elome_fp64_batch_run = elome_fp32_batch_run
 
 
 def _mp_grad_prepare(n, dtype):
@@ -419,6 +430,6 @@ PYTHON = {"eclipsoid": os.path.join(os.path.dirname(os.path.abspath(__file__)),
 CODES = ["elome_fp64", "elome_fp32", "squishyplanet", "jojo",
          "greenlantern", "eclipsoid"]
 BATCH_CODES = ["elome_fp32", "squishyplanet", "jojo", "greenlantern",
-               "eclipsoid"]
+               "eclipsoid", "elome_fp64"]
 GRAD_CODES = ["elome_fp64", "elome_fp32", "squishyplanet",
               "greenlantern", "eclipsoid"]

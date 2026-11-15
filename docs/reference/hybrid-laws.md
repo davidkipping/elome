@@ -175,8 +175,9 @@ already computes. The even powers $\mu^0$, $\mu^2$, $\mu^4$ come from its
 even recursion. A pole term is an arc term plus an arctangent or
 logarithm of rational functions of the separation $z$ and radius $r$,
 switching to a short series where the two forms meet. Neither needs an
-elliptic integral, which is why the hybrid laws are cheaper than the
-quadratic law, whose $\mu^1$ term does. The closed forms are checked
+elliptic integral, which is why `hybrid2` and `hybrid4` are cheaper than
+the quadratic law, whose $\mu^1$ term does, and `hybrid5`, with three
+poles, costs about the same (see {ref}`law-cost`). The closed forms are checked
 against a 40-digit direct integral to $10^{-13}$.
 
 For an oblate planet the boundary of the overlap is an elliptical arc,

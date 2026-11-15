@@ -81,19 +81,19 @@ $I(\mu) = 1 - 0.5\,(1 - \mu^2)$ (`benchmarks/oblate_compare/`):
 
 | | Elómë float32 (GPU) | GreenLantern (GPU) | JoJo | squishyplanet | eclipsoid | Elómë float64 (CPU) |
 |---|---:|---:|---:|---:|---:|---:|
-| error vs 30-digit integral | $7\times10^{-8}$ | $4.5\times10^{-6}$ | $2\times10^{-15}$ | $1.3\times10^{-15}$ | $1.6\times10^{-9}$ | $1\times10^{-16}$ |
-| one light curve, $N = 10^3$ | 0.44 ms | 0.79 ms | 0.64 ms | 3.9 ms | 8.8 ms | 13 ms |
-| one light curve, $N = 10^5$ | 0.83 ms | 24 ms | 45 ms | 373 ms | 889 ms | 471 ms |
-| one light curve, $N = 10^7$ | 35 ms | 2.3 s | 6.2 s | 40 s | | 47 s |
-| 512 sets × $10^4$ points | 0.020 s | 1.2 s | 2.6 s | 29 s | 46 s | |
-| value + gradient, $N = 10^5$ | 2.7 ms | 54 ms | no gradients | 2.3 s | 1.5 s | 1.1 s |
-| memory, $N = 10^5$ | 13 MB | 14 MB | 31 MB | 127 MB | 37 MB | 288 MB |
-| memory, $N = 10^7$ | 239 MB | 89 MB | 9.4 GB | 1.7 GB | | 1.3 GB |
-| memory, 512 sets × $10^4$ | 90 MB | 14 MB | 50 MB | 691 MB | 4.3 GB | |
+| error vs 30-digit integral | $6.6\times10^{-8}$ | $4.5\times10^{-6}$ | $1.8\times10^{-15}$ | $1.3\times10^{-15}$ | $1.6\times10^{-9}$ | $1.1\times10^{-16}$ |
+| one light curve, $N = 10^3$ | 0.46 ms | 0.88 ms | 0.67 ms | 3.9 ms | 8.8 ms | 14 ms |
+| one light curve, $N = 10^5$ | 0.83 ms | 24 ms | 45 ms | 379 ms | 892 ms | 470 ms |
+| one light curve, $N = 10^7$ | 35 ms | 2.3 s | 7.0 s | 40 s | 90 s | 47 s |
+| 512 sets × $10^4$ points | 0.020 s | 1.2 s | 2.5 s | 30 s | 46 s | 24 s |
+| value + gradient, $N = 10^5$ | 2.5 ms | 54 ms | no gradients | 2.3 s | 1.5 s | 1.1 s |
+| memory, $N = 10^5$ | 15 MB | 15 MB | 30 MB | 133 MB | 33 MB | 287 MB |
+| memory, $N = 10^7$ | 240 MB | 91 MB | 9.4 GB | 1.7 GB | 8.2 GB | 1.3 GB |
+| memory, 512 sets × $10^4$ | 91 MB | 16 MB | 49 MB | 691 MB | 4.3 GB | 946 MB |
 
-eclipsoid was timed up to $10^6$ points (9.0 s, 853 MB). Its largest
-error is near second and third contact; elsewhere it is exact to
-rounding.
+Every code is timed at every size and in every mode it supports.
+eclipsoid's largest error is near second and third contact; elsewhere
+it is exact to rounding.
 
 Memory is the peak of the process's physical footprint (what Activity
 Monitor shows) during a call, above its level after importing the code:

@@ -27,8 +27,8 @@ dominates and the fastest CPU codes win. For a planet crossing
 starspots they are faster than jaxoplanet and spotter at every
 resolution measured, and Elómë is the one of the three whose accuracy
 is not set by a resolution. For batches of parameter sets the margin is
-from about 20 times (spherical, against PyTransit) to about 1,700 times
-(ringed). A float32 light curve of $10^7$ points holds
+from about 11 times (spherical, against PyTransit's RoadRunner) to
+about 1,700 times (ringed). A float32 light curve of $10^7$ points holds
 under 300 MB of memory for each planet type. The float64 path is exact
 to rounding.
 

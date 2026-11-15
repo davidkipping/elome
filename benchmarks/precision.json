@@ -6,7 +6,7 @@
  },
  {
   "code": "elome fp32(GPU)",
-  "max_err": 1.7507691296714256e-07,
+  "max_err": 1.1861827553527604e-07,
   "median_err": 5.2401073480368154e-09
  },
  {
@@ -23,6 +23,11 @@
   "code": "pytransit (interp)",
   "max_err": 6.2622466692197065e-06,
   "median_err": 1.171353677387188e-07
+ },
+ {
+  "code": "roadrunner",
+  "max_err": 4.57584240431963e-06,
+  "median_err": 6.560619950635171e-07
  },
  {
   "code": "exoplanet-core",

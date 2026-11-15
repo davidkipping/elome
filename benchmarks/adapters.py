@@ -11,6 +11,7 @@ process imports the code (numba/OpenMP read them at import/first-call).
 Capability notes (measured on this machine, macOS/arm64):
     batman        : nthreads > 1 needs OpenMP-built extension (probe)
     pytransit     : numba threading (NUMBA_NUM_THREADS)
+    roadrunner    : PyTransit's RoadRunnerModel; its nthreads (numba)
     exoplanet-core: single-threaded C++ ops loop
     jaxoplanet    : XLA CPU thread pool (not user-partitionable cleanly)
     elome   : MLX — one GPU (all cores; not partitionable) or CPU
@@ -24,7 +25,8 @@ import numpy as np
 
 # what each code imports, loaded before the memory baseline (memwatch.py)
 IMPORTS = {"elome": ["mlx.core", "elome"], "batman": ["batman"],
-           "pytransit": ["pytransit"], "exoplanet": ["exoplanet_core"],
+           "pytransit": ["pytransit"], "roadrunner": ["pytransit"],
+           "exoplanet": ["exoplanet_core"],
            "jaxoplanet": ["jax", "jaxoplanet.core.limb_dark"]}
 
 from scenario import (A_RS, B_IMPACT, ECC, INC_DEG, INC_ECC_DEG,
@@ -183,6 +185,50 @@ def pytransit_batch_prepare(_n=None):
 def pytransit_batch_run(state):
     tm, kw = state
     return np.asarray(tm.evaluate(**kw))
+
+
+# ---------------------------------------------------------------------------
+# RoadRunner (PyTransit's RoadRunnerModel, Parviainen 2020): its default
+# grids, on BENCH_NTHREADS threads for one light curve and on every numba
+# thread for a batch, as PyTransit's batch above
+# ---------------------------------------------------------------------------
+
+def _rr_model(ld="quadratic", nthreads=1):
+    from pytransit import RoadRunnerModel
+    return RoadRunnerModel(ld, nthreads=nthreads)
+
+
+def roadrunner_prepare(n, ld="quadratic", ldc=(U1, U2), t=None):
+    import os
+    tm = _rr_model(ld, int(os.environ.get("BENCH_NTHREADS", "1")))
+    tm.set_data(time_grid(n) if t is None else t)
+    kw = dict(k=RP, ldc=np.asarray(ldc, dtype=np.float64), t0=T0, p=PER,
+              a=A_RS, i=math.radians(INC_DEG))
+    tm.evaluate(**kw)  # trigger numba compile
+    return (tm, kw)
+
+
+def roadrunner_run(state):
+    tm, kw = state
+    return np.asarray(tm.evaluate(**kw))
+
+
+def roadrunner_batch_prepare(_n=None):
+    import os
+    from scenario import BATCH_NPT
+    bp = batch_params()
+    tm = _rr_model(nthreads=int(os.environ.get("NUMBA_NUM_THREADS", "1")))
+    tm.set_data(time_grid(BATCH_NPT))
+    # k and t0 as (npv, 1): 1-D they are one radius per passband and one
+    # mid-time per epoch, of ONE light curve
+    kw = dict(k=bp["rp"][:, None], ldc=np.stack([bp["u1"], bp["u2"]], axis=1),
+              t0=bp["t0"][:, None], p=bp["per"], a=bp["a"],
+              i=np.arccos(bp["b"] / bp["a"]))
+    tm.evaluate(**kw)
+    return (tm, kw)
+
+
+roadrunner_batch_run = roadrunner_run
 
 
 # ---------------------------------------------------------------------------
@@ -444,6 +490,19 @@ def pytransit_ecc_prepare(n, interpolate=False):
 def pytransit_ecc_run(state):
     tm, kw = state
     return np.asarray(tm.evaluate(**kw))
+
+
+def roadrunner_ecc_prepare(n):
+    import os
+    tm = _rr_model(nthreads=int(os.environ.get("BENCH_NTHREADS", "1")))
+    tm.set_data(time_grid_ecc(n))
+    kw = dict(k=RP, ldc=np.array([U1, U2]), t0=T0, p=PER, a=A_RS,
+              i=math.radians(INC_ECC_DEG), e=ECC, w=_W_RAD)
+    tm.evaluate(**kw)
+    return (tm, kw)
+
+
+roadrunner_ecc_run = roadrunner_run
 
 
 def _xo_z_ecc(t):

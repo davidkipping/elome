@@ -42,6 +42,8 @@ check("pytransit (exact)", adapters.pytransit_run(
     adapters.pytransit_prepare(N, interpolate=False)))
 check("pytransit (interp)", adapters.pytransit_run(
     adapters.pytransit_prepare(N, interpolate=True)))
+check("roadrunner", adapters.roadrunner_run(
+    adapters.roadrunner_prepare(N)))
 check("exoplanet-core", adapters.exoplanet_run(
     adapters.exoplanet_prepare(N)))
 check("jaxoplanet (order=10)", adapters.jaxoplanet_run(
@@ -79,6 +81,8 @@ check_ecc("batman", adapters.batman_ecc_run(
     adapters.batman_ecc_prepare(N)))
 check_ecc("pytransit (exact)", adapters.pytransit_ecc_run(
     adapters.pytransit_ecc_prepare(N, interpolate=False)))
+check_ecc("roadrunner", adapters.roadrunner_ecc_run(
+    adapters.roadrunner_ecc_prepare(N)))
 check_ecc("exoplanet-core", adapters.exoplanet_ecc_run(
     adapters.exoplanet_ecc_prepare(N)))
 check_ecc("jaxoplanet (order=10)", adapters.jaxoplanet_ecc_run(

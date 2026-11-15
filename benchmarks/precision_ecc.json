@@ -20,6 +20,11 @@
   "median_err": 5.38803113236952e-10
  },
  {
+  "code": "roadrunner",
+  "max_err": 6.461745397423613e-06,
+  "median_err": 6.302669715019249e-07
+ },
+ {
   "code": "exoplanet-core",
   "max_err": 5.551115123125783e-16,
   "median_err": 0.0

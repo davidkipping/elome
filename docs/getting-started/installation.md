@@ -2,8 +2,9 @@
 
 ## Requirements
 
-- **A Mac with Apple Silicon** (M1 or later) for the GPU kernels. The
-  float64 path runs on the CPU and does not need the GPU. Without a
+- **A Mac with Apple Silicon** (M1 or later). The float64 path runs on
+  the CPU and does not need the GPU, but like everything in Elómë it runs
+  on MLX, so it too needs an Apple Silicon Mac. Without a
   usable Metal device, `metal_available()` returns `False` with a warning,
   and float32 calls run an MLX graph of the same model instead of the
   fused kernels. The results agree to float32 rounding, but a forward

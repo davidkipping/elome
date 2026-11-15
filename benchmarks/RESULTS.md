@@ -17,7 +17,8 @@ Scenario: quadratic limb-darkened primary transit (P=3.456 d, a/R*=8.8, b=0.45, 
 | jaxoplanet (order=10) | 4.58e-09 | 0.00e+00 |
 | batman | 6.04e-09 | 2.10e-10 |
 | pytransit (exact) | 4.04e-08 | 7.96e-10 |
-| elome fp32(GPU) | 1.75e-07 | 5.24e-09 |
+| elome fp32(GPU) | 1.19e-07 | 5.24e-09 |
+| roadrunner | 4.58e-06 | 6.56e-07 |
 | pytransit (interp) | 6.26e-06 | 1.17e-07 |
 
 `ellc` excluded: its PyPI wheel ships an x86_64-only binary (incompatible with arm64) and source builds need gfortran.
@@ -35,20 +36,23 @@ Every code solves Kepler's equation itself; the oracle's separation comes from a
 | batman | 5.40e-08 | 6.29e-10 |
 | elome fp32(GPU) | 1.26e-07 | 1.08e-09 |
 | pytransit (exact) | 2.86e-07 | 5.39e-10 |
+| roadrunner | 6.46e-06 | 6.30e-07 |
 
 ## Single light curve: wall time vs N (median)
 
 | code (threads) | N=1,000 | N=10,000 | N=100,000 | N=1,000,000 | N=10,000,000 |
 |---|---:|---:|---:|---:|---:|
-| batman (1) | 0.02 ms | 0.19 ms | 1.86 ms | 19.11 ms | 189.79 ms |
-| elome_fp32 (all) | 0.32 ms | 0.33 ms | 0.38 ms | 1.13 ms | 9.65 ms |
-| elome_fp64 (all) | 0.64 ms | 1.60 ms | 14.46 ms | 131.09 ms | 1,319.29 ms |
-| exoplanet (1) | 0.04 ms | 0.28 ms | 2.79 ms | 29.24 ms | 310.47 ms |
-| jaxoplanet (all) | 0.09 ms | 0.55 ms | 2.05 ms | 19.62 ms | 179.16 ms |
-| pytransit (1) | 0.04 ms | 0.36 ms | 3.55 ms | 35.76 ms | 360.20 ms |
-| pytransit (4) | 0.04 ms | 0.36 ms | 3.57 ms | 35.92 ms | 360.29 ms |
-| pytransit (8) | 0.04 ms | 0.36 ms | 3.55 ms | 35.97 ms | 360.27 ms |
-| pytransit (12) | 0.04 ms | 0.36 ms | 3.55 ms | 35.96 ms | 364.23 ms |
+| batman (1) | 0.02 ms | 0.19 ms | 1.91 ms | 19.35 ms | 193.36 ms |
+| elome_fp32 (all) | 0.35 ms | 0.40 ms | 0.39 ms | 1.20 ms | 9.60 ms |
+| elome_fp64 (all) | 0.48 ms | 1.61 ms | 14.73 ms | 133.72 ms | 1,346.54 ms |
+| exoplanet (1) | 0.04 ms | 0.28 ms | 2.79 ms | 29.19 ms | 312.25 ms |
+| jaxoplanet (all) | 0.12 ms | 0.58 ms | 2.08 ms | 20.54 ms | 190.07 ms |
+| pytransit (1) | 0.04 ms | 0.36 ms | 3.61 ms | 35.95 ms | 367.57 ms |
+| pytransit (4) | 0.04 ms | 0.36 ms | 3.62 ms | 36.46 ms | 359.79 ms |
+| pytransit (8) | 0.04 ms | 0.36 ms | 3.56 ms | 35.86 ms | 360.86 ms |
+| pytransit (12) | 0.04 ms | 0.36 ms | 3.56 ms | 35.87 ms | 359.12 ms |
+| roadrunner (1) | 0.03 ms | 0.12 ms | 0.99 ms | 10.19 ms | 102.62 ms |
+| roadrunner (12) | 0.21 ms | 0.24 ms | 0.43 ms | 2.70 ms | 25.04 ms |
 
 ## Eccentric light curve: wall time vs N (median)
 
@@ -56,25 +60,27 @@ Orbit-inclusive: each code's own Kepler solver is inside the timed region.
 
 | code (threads) | N=1,000 | N=10,000 | N=100,000 | N=1,000,000 | N=10,000,000 |
 |---|---:|---:|---:|---:|---:|
-| batman (1) | 0.02 ms | 0.19 ms | 1.86 ms | 19.00 ms | 190.33 ms |
-| elome_fp32 (all) | 0.33 ms | 0.33 ms | 0.37 ms | 1.27 ms | 10.19 ms |
-| elome_fp64 (all) | 0.62 ms | 2.00 ms | 17.66 ms | 161.56 ms | 1,600.62 ms |
-| exoplanet (1) | 0.06 ms | 0.51 ms | 5.05 ms | 54.00 ms | 564.53 ms |
-| jaxoplanet (all) | 0.18 ms | 0.88 ms | 3.42 ms | 33.04 ms | 314.53 ms |
-| pytransit (1) | 0.04 ms | 0.36 ms | 3.64 ms | 36.54 ms | 365.91 ms |
-| pytransit (4) | 0.04 ms | 0.36 ms | 3.63 ms | 36.47 ms | 365.93 ms |
-| pytransit (8) | 0.04 ms | 0.36 ms | 3.61 ms | 36.48 ms | 365.98 ms |
-| pytransit (12) | 0.04 ms | 0.37 ms | 3.61 ms | 36.53 ms | 366.28 ms |
+| batman (1) | 0.02 ms | 0.19 ms | 1.86 ms | 18.97 ms | 190.62 ms |
+| elome_fp32 (all) | 0.36 ms | 0.36 ms | 0.41 ms | 1.26 ms | 10.15 ms |
+| elome_fp64 (all) | 0.65 ms | 2.05 ms | 17.69 ms | 162.81 ms | 1,598.92 ms |
+| exoplanet (1) | 0.06 ms | 0.49 ms | 5.02 ms | 53.93 ms | 563.00 ms |
+| jaxoplanet (all) | 0.19 ms | 0.88 ms | 3.44 ms | 33.23 ms | 325.18 ms |
+| pytransit (1) | 0.04 ms | 0.36 ms | 3.61 ms | 36.45 ms | 365.51 ms |
+| pytransit (4) | 0.04 ms | 0.36 ms | 3.62 ms | 36.45 ms | 365.31 ms |
+| pytransit (8) | 0.04 ms | 0.36 ms | 3.61 ms | 36.52 ms | 367.03 ms |
+| pytransit (12) | 0.04 ms | 0.36 ms | 3.62 ms | 36.54 ms | 366.40 ms |
+| roadrunner (1) | 0.03 ms | 0.12 ms | 1.00 ms | 10.10 ms | 102.76 ms |
 
 ## Native batch: 512 parameter sets x 100,000 points
 
 | code | wall | curves/s | peak memory | notes |
 |---|---:|---:|---:|---|
-| elome_gpu | 0.010 s | 49,092 | 208 MB | fp32 GPU, one broadcast graph |
-| pytransit | 0.235 s | 2,183 | 75 MB | native parameter arrays (numba) |
-| jaxoplanet | 0.879 s | 582 | 5,907 MB | jax.vmap, CPU x64 |
-| batman | 1.770 s | 289 | 255 MB | python loop (no native batch) |
-| exoplanet | 1.525 s | 336 | 27 MB | python loop (no native batch) |
+| elome_gpu | 0.010 s | 52,259 | 210 MB | fp32 GPU, one broadcast graph |
+| pytransit | 0.245 s | 2,089 | 79 MB | native parameter arrays (numba) |
+| roadrunner | 0.110 s | 4,667 | 122 MB | native parameter arrays (numba, every thread) |
+| jaxoplanet | 0.915 s | 560 | 5,909 MB | jax.vmap, CPU x64 |
+| batman | 1.777 s | 288 | 247 MB | python loop (no native batch) |
+| exoplanet | 1.537 s | 333 | 87 MB | python loop (no native batch) |
 
 ## Value + gradient of a scalar loss (single light curve)
 
@@ -82,9 +88,9 @@ sum(c * flux) for fixed random c, differentiated in rp, t0, period, a, b, u1 and
 
 | code | N=10,000 | N=100,000 |
 |---|---:|---:|
-| elome_fp32 | 0.87 ms | 0.91 ms |
-| elome_fp64 | 7.34 ms | 45.55 ms |
-| jaxoplanet | 1.90 ms | 12.29 ms |
+| elome_fp32 | 0.91 ms | 0.95 ms |
+| elome_fp64 | 7.35 ms | 45.29 ms |
+| jaxoplanet | 1.95 ms | 12.32 ms |
 
 ## Peak memory of one light curve
 
@@ -92,25 +98,26 @@ The process's physical footprint (what Activity Monitor shows), above its level 
 
 | code | N=1,000 | N=10,000 | N=100,000 | N=1,000,000 | N=10,000,000 |
 |---|---:|---:|---:|---:|---:|
-| batman | 1.2 MB | 1.4 MB | 3.3 MB | 16.7 MB | 153.8 MB |
-| elome_fp32 | 11.4 MB | 12.2 MB | 14.4 MB | 33.5 MB | 278.7 MB |
-| elome_fp64 | 4.2 MB | 11.2 MB | 84.2 MB | 790.7 MB | 7,856.7 MB |
-| exoplanet | 1.8 MB | 1.8 MB | 2.4 MB | 32.1 MB | 88.0 MB |
-| jaxoplanet | 41.5 MB | 40.0 MB | 56.5 MB | 48.6 MB | 1,261.1 MB |
-| pytransit | 46.0 MB | 47.2 MB | 48.7 MB | 67.8 MB | 202.9 MB |
+| batman | 1.7 MB | 1.4 MB | 3.7 MB | 16.6 MB | 154.1 MB |
+| elome_fp32 | 15.1 MB | 13.5 MB | 16.0 MB | 37.7 MB | 281.7 MB |
+| elome_fp64 | 4.0 MB | 10.9 MB | 84.3 MB | 790.0 MB | 7,856.9 MB |
+| exoplanet | 2.4 MB | 1.9 MB | 2.4 MB | 32.2 MB | 87.9 MB |
+| jaxoplanet | 39.5 MB | 38.5 MB | 57.4 MB | 49.8 MB | 1,259.4 MB |
+| pytransit | 49.0 MB | 46.9 MB | 48.8 MB | 62.4 MB | 199.3 MB |
+| roadrunner | 88.3 MB | 88.6 MB | 87.9 MB | 98.2 MB | 240.6 MB |
 
 ## Batch-size scaling (npv x 100,000 points): GPU vs its strongest CPU rival
 
 | npv | Elómë GPU [curves/s] | PyTransit 12-core [curves/s] |
 |---:|---:|---:|
-| 64 | 42,850 | 1,873 |
-| 256 | 47,756 | 1,998 |
-| 512 | 49,255 | 2,023 |
-| 1024 | 50,353 | 1,901 |
-| 2048 | 50,605 | 1,953 |
-| 4096 | 50,756 | 1,951 |
+| 64 | 37,701 | 1,973 |
+| 256 | 50,503 | 2,084 |
+| 512 | 52,421 | 2,129 |
+| 1024 | 53,483 | 1,933 |
+| 2048 | 53,884 | 1,982 |
+| 4096 | 54,109 | 1,995 |
 
-With the fused model-level Metal kernel (orbit + photometry in one register-resident pass, ~12 B/pt of memory traffic) the GPU streams 47,756-50,756 curves/s from npv = 256 to 4096 with no memory cliff. PyTransit's numba batch streams 1,901-2,023 curves/s on 12 cores.
+With the fused model-level Metal kernel (orbit + photometry in one register-resident pass, ~12 B/pt of memory traffic) the GPU streams 50,503-54,109 curves/s from npv = 256 to 4096 with no memory cliff. PyTransit's numba batch streams 1,933-2,129 curves/s on 12 cores.
 
 
 ## The eccentric comparison in one line
@@ -118,8 +125,8 @@ With the fused model-level Metal kernel (orbit + photometry in one register-resi
 Every code above solves Kepler's equation inside the timed region. At
 float64 Elómë ties exoplanet-core for the most accurate eccentric
 light curve (4e-16 vs the independent mpmath oracle); at float32 on the
-GPU it is the fastest past N ~ 1e5, reaching 10.2 ms at 10^7 points
-against 190 ms for the fastest CPU code. Below ~10^4 points the
+GPU it is the fastest past N ~ 1e5, reaching 10.1 ms at 10^7 points
+against 103 ms for the fastest CPU code. Below ~10^4 points the
 GPU dispatch floor dominates and the CPU codes win — the same crossover
 documented for the circular case.
 

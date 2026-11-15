@@ -36,8 +36,9 @@ model, and they can be sampled.
   MPS-ATLAS), the median light-curve error is 1.8 ppm for `hybrid4` and
   1.1 ppm for `hybrid5`, against 2.0 ppm for the four-parameter Claret
   law.[^coeffs] For a spherical
-  planet they are also *cheaper* than the quadratic law: no term needs an
-  elliptic integral. They are also the only laws available for an
+  planet `hybrid2` and `hybrid4` are also *cheaper* than the quadratic
+  law, and `hybrid5` costs about the same: no term needs an elliptic
+  integral (see {ref}`law-cost`). They are also the only laws available for an
   {doc}`oblate planet <../oblate/index>`.
 
 The definitions of the hybrid laws are in {doc}`../reference/hybrid-laws`.

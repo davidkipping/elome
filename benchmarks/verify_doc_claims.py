@@ -326,10 +326,12 @@ def check_comparisons():
     rg = load("ring_compare", "results_ring.json")
     spc = load("spot_compare", "results_spot.json")
 
-    thr = {"batman": 1, "pytransit": 1, "exoplanet": 1}
+    thr = {"batman": 1, "pytransit": 1, "exoplanet": 1, "roadrunner": 1}
 
     def sp(code, mode, n=0, key="median_s"):
-        threads = 0 if mode == "batch" else thr.get(code, 0)
+        # code "name@k" is name on k threads
+        code, _, k = code.partition("@")
+        threads = 0 if mode == "batch" else int(k) if k else thr.get(code, 0)
         rec = next(r for r in speed if r["code"] == code and r["mode"] == mode
                    and r["n"] == n and r["threads"] == threads)
         return rec[key]
@@ -339,9 +341,13 @@ def check_comparisons():
 
     sph_codes = {"Elómë, float32 (GPU)": "elome_fp32", "Elómë, float64 (CPU)": "elome_fp64",
                  "batman": "batman", "jaxoplanet": "jaxoplanet",
-                 "exoplanet-core": "exoplanet", "PyTransit": "pytransit"}
+                 "exoplanet-core": "exoplanet",
+                 "PyTransit (quadratic model)": "pytransit",
+                 "PyTransit (RoadRunner)": "roadrunner",
+                 "PyTransit (RoadRunner), 12 threads": "roadrunner@12"}
     sph_batch = {"Elómë, float32 (GPU), one call": "elome_gpu",
-                 "PyTransit (native arrays)": "pytransit",
+                 "PyTransit (RoadRunner), native arrays": "roadrunner",
+                 "PyTransit (quadratic model), native arrays": "pytransit",
                  "jaxoplanet (`jax.vmap`, CPU)": "jaxoplanet",
                  "exoplanet-core (loop)": "exoplanet", "batman (loop)": "batman"}
     sph_tables = {
@@ -350,8 +356,9 @@ def check_comparisons():
             "exoplanet-core": [circ["exoplanet-core"], ecc["exoplanet-core"]],
             "jaxoplanet": [circ["jaxoplanet (order=50)"], ecc["jaxoplanet (order=10)"]],
             "batman": [circ["batman"], ecc["batman"]],
-            "PyTransit (exact)": [circ["pytransit (exact)"], ecc["pytransit (exact)"]],
-            "Elómë, float32 (GPU)": [circ["elome fp32(GPU)"], ecc["elome fp32(GPU)"]]},
+            "PyTransit (quadratic model)": [circ["pytransit (exact)"], ecc["pytransit (exact)"]],
+            "Elómë, float32 (GPU)": [circ["elome fp32(GPU)"], ecc["elome fp32(GPU)"]],
+            "PyTransit (RoadRunner)": [circ["roadrunner"], ecc["roadrunner"]]},
         "**One light curve**": {
             label: [sp(c, "single", n) for n in (10**3, 10**5, 10**6, 10**7)]
             for label, c in sph_codes.items()},
@@ -367,7 +374,8 @@ def check_comparisons():
             label: [sp(c, "single", n, "peak_mb") for n in (10**5, 10**7)]
             for label, c in sph_codes.items()},
     }
-    sph_cpu_e7 = min(sp(c, "ecc", 10**7) for c in sph_codes.values() if not c.startswith("elome"))
+    sph_cpu_e7 = min(sp(c, "ecc", 10**7) for c in sph_codes.values()
+                     if not c.startswith("elome") and "@" not in c)
     sph_prose = [
         (r"take Elómë's GPU path to (\S+ ms) at \$10\^7\$ points", sp("elome_fp32", "ecc", 10**7)),
         (r"against (\S+ ms) for the fastest CPU code", sph_cpu_e7),
@@ -375,6 +383,33 @@ def check_comparisons():
         (r"stays at (about \S+) light curves per second", max(scaling)),
         (r"(about \S+ KB) per point", sp("elome_fp64", "single", 10**7, "peak_mb") / 1e7),
     ]
+    # the cost of the law (law_cost.json, bench_law_cost.py): each code's
+    # time against its own quadratic law at the largest N, and its error
+    lc = load("law_cost.json")
+    big = str(max(lc["n_sweep"]))
+    cols = ("power2", "hybrid2", "nonlinear", "hybrid4", "hybrid5")
+    law_rows = {"Elómë, float64 (CPU)": "elome_fp64", "Elómë, float32 (GPU)": "elome_fp32",
+                "batman": "batman"}
+
+    def rel(code, law):
+        s = lc["speed"][code]
+        return s[law][big] / s["quadratic"][big] if law in s else None
+
+    sph_tables["(`benchmarks/bench_law_cost.py`"] = {
+        label: [rel(c, law) for law in cols] for label, c in law_rows.items()}
+    sph_tables["against a 30-digit integral of the same law"] = {
+        label: [lc["accuracy"][c].get(law) for law in ("quadratic",) + cols]
+        for label, c in law_rows.items()}
+    sph_prose += [
+        (r"float64 hybrid2 takes (\S+ s) at", lc["speed"]["elome_fp64"]["hybrid2"][big]),
+        (r"against batman's quadratic law at (\S+ s)", lc["speed"]["batman"]["quadratic"][big]),
+    ]
+    cpu1 = [c for c in sph_codes.values() if not c.startswith("elome") and "@" not in c]
+    sph_claims = [(
+        "spherical/accuracy-and-cost.md",
+        "RoadRunner is the fastest CPU code from 10^4 points up",
+        all(min(cpu1, key=lambda c: sp(c, "single", n)) == "roadrunner"
+            for n in (10**4, 10**5, 10**6, 10**7)))]
 
     def compare_table(r, cols, rows):
         """rows: label -> (results key path below each code, or a callable)."""
@@ -444,10 +479,7 @@ def check_comparisons():
         "spherical/accuracy-and-cost.md": (sph_tables, sph_prose),
         "oblate/accuracy-and-cost.md": (
             {"The benchmark is the spherical one's transit": compare_table(ob, ob_cols, ob_rows)},
-            [(r"timed up to \$10\^6\$ points \((\S+ s),", ob["single"]["eclipsoid"]["1000000"]),
-             (r"timed up to \$10\^6\$ points \(\S+ s, (\S+ MB)\)",
-              ob["mem"]["single"]["eclipsoid"]["1000000"]["peak_mb"]),
-             (r"which caps it near (\S+ GB)",
+            [(r"which caps it near (\S+ GB)",
               max(v["peak_mb"] for v in ob["mem"]["single"]["elome_fp64"].values()))]),
         "rings/accuracy-and-fitting.md": (
             {"The reference is an independent float64": compare_table(rg, rg_cols, rg_rows)},
@@ -465,7 +497,7 @@ def check_comparisons():
             [(r"signal peaks at (\$[^$]+\$)", min(sp_signal)),
              (r"signal peaks at \$[^$]+\$ to (\$[^$]+\$)", max(sp_signal))]),
         "reference/performance.md": ({}, [
-            (r"from (about \S+) times \(spherical, against PyTransit\)",
+            (r"from (about \S+) times \(spherical, against PyTransit's RoadRunner\)",
              batch_ratio({c: sp(c, "batch") for c in sph_batch.values()}, "elome_gpu")),
             (r"to (about \S+) times \(ringed\)", batch_ratio(rg["batch"], "elome_fp32"))]),
         "index.md": ({}, [
@@ -483,7 +515,7 @@ def check_comparisons():
          sp_fastest()),
         ("reference/performance.md", "float32, 10^7 points, under 300 MB for each planet type",
          max(fp32_e7) < 300),
-    ]
+    ] + sph_claims
 
     n, bad = _check_pages(pages, claims)
     return n, bad, set(pages)

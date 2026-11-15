@@ -122,6 +122,25 @@ every release is tagged `vX.Y.Z` in git.
   about 2e-7, in the float64 path; it now uses Elómë's full-precision
   `sincos`.
 
+### Documentation
+- **The cost of the limb-darkening law** (spherical accuracy-and-cost
+  page, `benchmarks/bench_law_cost.py`): each code runs each of its laws
+  as released, timed against its own quadratic law, which cancels the
+  implementation, and each is checked against a 30-digit integral of the
+  same law. In Elómë hybrid2 and hybrid4 cost 0.60 and 0.66 times the
+  quadratic law in float64, and hybrid5 the same; batman's numerically
+  integrated power-2 and four-parameter laws cost 15 and 30 times its
+  quadratic law. The limb-darkening pages no longer call every hybrid
+  law cheaper than the quadratic: hybrid5 costs about the same.
+- **RoadRunner in the spherical comparison**, PyTransit's model for any
+  limb-darkening law, on one thread and on 12: the fastest CPU code from
+  10,000 points up, at a few parts per million of accuracy.
+- The cross-code comparisons were re-run on the current code. eclipsoid
+  is now timed to 10 million points and Elómë's float64 path on the 512-set
+  batch, so every code runs at every size in every mode it supports.
+- The installation page says plainly that the float64 path, like all of
+  Elómë, needs an Apple Silicon Mac.
+
 ## [0.22.1] — 2026-10-23
 
 ### Changed

@@ -52,6 +52,58 @@ def flux_direct(r, z, u1, u2, dps=30):
         return float(1 - occ / total)
 
 
+def flux_direct_law(r, z, intensity, dps=30):
+    """flux_direct for any law: ``intensity(mu, mp)`` returns I(mu) in
+    mpmath, and the disc's total is integrated as well, at the same
+    precision. Laws with a sqrt(mu) term (power-2, nonlinear) have an
+    infinite slope at the limb, which mpmath's tanh-sinh rule handles."""
+    import mpmath as mp
+    with mp.workdps(dps):
+        r_, z_ = mp.mpf(float(r)), mp.mpf(float(z))
+
+        def inten(rho):
+            return intensity(mp.sqrt(1 - rho * rho), mp)
+
+        if z_ >= 1 + r_:
+            return 1.0
+        lo = max(z_ - r_, mp.mpf(0))
+        hi = min(z_ + r_, mp.mpf(1))
+
+        def occ_ring(rho):
+            if rho == 0:
+                return mp.mpf(0)
+            c = (z_ * z_ + rho * rho - r_ * r_) / (2 * z_ * rho) \
+                if z_ > 0 else mp.mpf(-1)
+            phi = mp.pi if c <= -1 else mp.mpf(0) if c >= 1 else mp.acos(c)
+            return 2 * phi * rho * inten(rho)
+
+        pieces = [lo, hi]
+        kink = abs(z_ - r_)
+        if lo < kink < hi:
+            pieces = [lo, kink, hi]
+        occ = mp.quad(occ_ring, pieces)
+        if z_ == 0:
+            occ = mp.quad(lambda rho: 2 * mp.pi * rho * inten(rho), [0, hi])
+        total = mp.quad(lambda rho: 2 * mp.pi * rho * inten(rho), [0, 1])
+        return float(1 - occ / total)
+
+
+def oracle_lightcurve_law(t, r, intensity, z_of_t, tag):
+    """oracle_lightcurve for any law (flux_direct_law), cached by tag."""
+    t = np.asarray(t, dtype=np.float64)
+    cache = {}
+    if os.path.exists(_CACHE):
+        with open(_CACHE) as f:
+            cache = json.load(f)
+    if tag in cache and len(cache[tag]["flux"]) == t.size:
+        return np.array(cache[tag]["flux"])
+    flux = np.array([flux_direct_law(r, zz, intensity) for zz in z_of_t(t)])
+    cache[tag] = {"t": t.tolist(), "flux": flux.tolist()}
+    with open(_CACHE, "w") as f:
+        json.dump(cache, f)
+    return flux
+
+
 def oracle_lightcurve(t, r, u1, u2, z_of_t, tag):
     """Cached oracle flux at times t (keyed by tag)."""
     t = np.asarray(t, dtype=np.float64)
