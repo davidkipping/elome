@@ -138,8 +138,14 @@ every release is tagged `vX.Y.Z` in git.
 - The cross-code comparisons were re-run on the current code. eclipsoid
   is now timed to 10 million points and Elómë's float64 path on the 512-set
   batch, so every code runs at every size in every mode it supports.
-- The installation page says plainly that the float64 path, like all of
-  Elómë, needs an Apple Silicon Mac.
+- **The float64 path on Linux.** It runs on MLX's CPU stream wherever
+  MLX runs, and the test suite passes on Linux (ARM, MLX's CPU backend),
+  where the tests of the Metal kernels skip. A new `cpu` extra,
+  `pip install "elome[cpu]"`, installs MLX's CPU backend, which MLX
+  needs alongside it on Linux. The installation page and README say
+  which path needs what. The float32 tests run on the default device
+  instead of naming the GPU, and without the kernels hold the MLX
+  graph's compiled result to its own float32 error against float64.
 
 ## [0.22.1] — 2026-10-23
 

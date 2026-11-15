@@ -42,7 +42,7 @@ def cpu_np(fn):
 
 
 def generators(x0, y0, r, f, dtype=mx.float64):
-    stream = mx.cpu if dtype == mx.float64 else mx.gpu
+    stream = mx.cpu if dtype == mx.float64 else mx.default_device()
     with mx.stream(stream):
         g = O.generator_cols_oblate(*(mx.array(np.asarray(v, np.float64), dtype=dtype)
                                       for v in (x0, y0, r, f)), ALLPOLES)
@@ -281,7 +281,7 @@ def test_gradients_finite_on_a_boundary_sweep(dtype):
     cfgs += [(0.0, 0.0, 0.1, 0.2), (0.3, 0.0, 0.1, 0.0), (0.3, 0.0, 0.1, 0.99 * sw),
              (0.3, 0.0, 0.1, 1.01 * sw), (1.2, 0.1, 0.1, 0.2),
              (1.0 - 0.1 / math.sqrt(0.8), 0.0, 0.1, 0.2)]
-    stream = mx.cpu if dtype == mx.float64 else mx.gpu
+    stream = mx.cpu if dtype == mx.float64 else mx.default_device()
     with mx.stream(stream):
         for c in cfgs:
             def fn(x, y, r, f):
@@ -347,7 +347,7 @@ def test_theta_gradient_through_the_sky_frame(dtype):
     """theta enters through principal_frame: autodiff vs central FD (fp64),
     and finite at theta = 0 and pi/2 along a whole chord (both dtypes)."""
     X = np.linspace(-1.15, 1.15, 81)
-    stream = mx.cpu if dtype == mx.float64 else mx.gpu
+    stream = mx.cpu if dtype == mx.float64 else mx.default_device()
 
     def fn(th, b):
         x0, y0 = O.principal_frame(mx.array(X, dtype=dtype), b, th)

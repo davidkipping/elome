@@ -181,7 +181,7 @@ def test_gradients_match_finite_differences(oblate):
 def test_compiled_value_and_grad_equal_eager(oblate, dtype):
     """As a sampler runs it: value and gradient under mx.compile, per-chain
     parameters, equal to the eager call."""
-    stream = mx.cpu if dtype == mx.float64 else mx.gpu
+    stream = mx.cpu if dtype == mx.float64 else mx.default_device()
     with mx.stream(stream):
         tau = mx.array(np.linspace(-0.5 * PER, 0.5 * PER, 1001), dtype=dtype)
         ct = mx.array(np.random.default_rng(4).normal(size=1001), dtype=dtype)

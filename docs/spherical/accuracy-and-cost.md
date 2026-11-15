@@ -21,7 +21,7 @@ each configuration in its own process on a quiet machine
 | hardware, precision | Apple GPU (float32), CPU (float64) | CPU, float64 | CPU (float64), OpenCL GPU (float32) | CPU or GPU (JAX), float32 or float64 | CPU, float64 |
 | many parameter sets | native batch | loop | native batch | `jax.vmap` | loop |
 | also | secondary eclipses, oblate and ringed planets | secondary eclipses | eclipses, phase curves, timing variations, gravity darkening | several planets, timing variations, radial velocities, stellar maps | the backend of exoplanet |
-| platforms | macOS on Apple silicon | any | any | any | any |
+| platforms | macOS on Apple silicon; float64 also Linux | any | any | any | any |
 
 The hybrid laws, which match real stars' limb darkening as well as the
 four-parameter law or better (see {doc}`limb-darkening`), can be added to

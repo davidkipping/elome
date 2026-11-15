@@ -215,7 +215,7 @@ def test_array_ecc_gradient_at_zero_is_the_one_sided_derivative(dtype):
     sqrt(e) and would return -0.06 against the true +1.02 here)."""
     with mx.stream(mx.cpu):
         ref = _one_sided_fd_ecc(el.TransitModel(P(w=40.0), T), 40.0)
-    stream = mx.cpu if dtype == mx.float64 else mx.gpu
+    stream = mx.cpu if dtype == mx.float64 else mx.default_device()
     with mx.stream(stream):
         m = el.TransitModel(P(w=40.0), T, dtype=dtype)
         g = float(mx.grad(lambda e: mx.sum(m.light_curve_mx(P(ecc=e, w=40.0))))(
@@ -526,7 +526,7 @@ def test_secondary_gradients_finite_through_the_contacts(dtype):
     """Dense times through every contact, a sphere-like f = 0 among them:
     no NaN or inf in any gradient."""
     t = _eclipse_times(0.0, 90.0, half=0.12, n=961)
-    stream = mx.cpu if dtype == mx.float64 else mx.gpu
+    stream = mx.cpu if dtype == mx.float64 else mx.default_device()
     with mx.stream(stream):
         m = el.TransitModel(P(fp=FP), t, transittype="secondary", dtype=dtype)
         for f in (0.0, 0.3):

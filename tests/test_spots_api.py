@@ -577,7 +577,7 @@ def _sampler(p, t, dtype=mx.float64, **kw):
         e, w = p.ecc, D(p.w)
         b = b * (1 - e * e) / (1 + e * math.sin(w))
         ecc = dict(secosw=math.sqrt(e) * math.cos(w), sesinw=math.sqrt(e) * math.sin(w))
-    stream = mx.cpu if dtype == mx.float64 else mx.gpu
+    stream = mx.cpu if dtype == mx.float64 else mx.default_device()
     with mx.stream(stream):
         out = el.flux_dev_from_tau(
             mx.array(tau, dtype=dtype), p.per, p.a, b, p.rp, limb_dark=p.limb_dark, u=p.u,

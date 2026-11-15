@@ -22,8 +22,9 @@ with the hybrid laws, which keep their light curves elementary. The frontend fol
 pip install elome
 ```
 
-Elómë needs a Mac with Apple Silicon for its GPU kernels, Python 3.10 or
-later, MLX and NumPy.
+Elómë needs Python 3.10 or later, MLX and NumPy. Its GPU kernels need a
+Mac with Apple Silicon; the float64 path runs wherever MLX runs. On
+Linux, `pip install "elome[cpu]"` adds MLX's CPU backend.
 
 ## Example
 

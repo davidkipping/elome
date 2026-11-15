@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "elome"
 version = "0.22.1"
-description = "Elómë: analytic, differentiable transit light curves on Apple Silicon (MLX), with a batman-style frontend"
+description = "Elómë: analytic, differentiable transit light curves in MLX, with fused Metal kernels on Apple Silicon and a batman-style frontend"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -17,6 +17,7 @@ keywords = ["exoplanets", "transits", "light curves", "limb darkening",
 classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
     "Intended Audience :: Science/Research",
     "Topic :: Scientific/Engineering :: Astronomy",
 ]
@@ -27,6 +28,8 @@ Source = "https://github.com/davidkipping/elome"
 Issues = "https://github.com/davidkipping/elome/issues"
 
 [project.optional-dependencies]
+# MLX's CPU backend, which MLX needs installed alongside it on Linux
+cpu = ["mlx[cpu]>=0.30"]
 test = ["pytest", "scipy", "batman-package", "mpmath"]
 # the documentation's build dependencies are pinned in docs/requirements.txt.
 # the sampling engine, anvil, is an optional integration dependency --

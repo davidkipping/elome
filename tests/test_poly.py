@@ -136,7 +136,7 @@ class TestGradients:
         """mx.where evaluates both branches, so k^2 = onembmr2/(4zr) must
         stay finite where 4zr -> 0 and 1/k^2 where onembmr2 is floored."""
         u = [0.05] * n
-        stream = mx.cpu if dtype == mx.float64 else mx.gpu
+        stream = mx.cpu if dtype == mx.float64 else mx.default_device()
         with mx.stream(stream):
             z = mx.array(self.BOUND.astype(
                 np.float64 if dtype == mx.float64 else np.float32),

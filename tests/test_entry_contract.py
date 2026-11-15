@@ -380,7 +380,10 @@ def test_grad_fp32_on_the_default_stream_and_fp64_on_the_cpu_stream(entry):
         mx.eval(g64)
     a, b = float(g32.item()), float(g64.item())
     assert np.isfinite(a) and np.isfinite(b)
-    assert abs(a - b) <= 2e-3 * max(abs(b), 1.0)
+    # without the kernels fp32 runs the MLX graph, whose cancellation at
+    # r > 1 costs more (2.8e-3 measured for tau/hybrid_ecc on Linux)
+    rtol = 2e-3 if KERNEL or _r0(entry) < 1.0 else 5e-3
+    assert abs(a - b) <= rtol * max(abs(b), 1.0)
 
 
 @pytest.mark.parametrize("entry", list(KERNEL_ENTRIES))
@@ -406,8 +409,17 @@ def test_compile_equals_eager(entry):
     eager = _np(_call(entry, d))
     comp = mx.compile(lambda r: _first(_call(entry, d, _with(entry, r=r))))
     got = _np(comp(mx.array(_r0(entry), dtype=mx.float32)))
-    assert np.abs(got.astype(np.float64)
-                  - eager.astype(np.float64)).max() <= _fp32_tol(entry)
+    if KERNEL:
+        assert np.abs(got.astype(np.float64)
+                      - eager.astype(np.float64)).max() <= _fp32_tol(entry)
+        return
+    # the MLX graph: compiling fuses its ops and rounds differently, so the
+    # two agree only to their fp32 error. The compiled result is held to
+    # three times the eager one's error against fp64 on the same inputs.
+    with mx.stream(mx.cpu):
+        ref = _np(_call(entry, d.astype(mx.float64)))
+    err = np.abs(eager.astype(np.float64) - ref).max()
+    assert np.abs(got.astype(np.float64) - ref).max() <= max(_fp32_tol(entry), 3 * err)
 
 
 # ---------------------------------------------------------------------------

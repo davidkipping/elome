@@ -221,7 +221,7 @@ def _contact_cases():
 def test_contacts_match_a_dense_reference(dtype):
     b, r, f, th, e, w = _contact_cases()
     k, h = np.sqrt(e) * np.cos(w), np.sqrt(e) * np.sin(w)
-    stream = mx.cpu if dtype == mx.float64 else mx.gpu
+    stream = mx.cpu if dtype == mx.float64 else mx.default_device()
     with mx.stream(stream):
         arr = lambda v: mx.array(np.broadcast_to(v, b.shape).copy(), dtype=dtype)
         ci = _ecc_shape(arr(A_RS), arr(b), arr(k), arr(h))[2]
@@ -383,7 +383,7 @@ def test_gradients_match_finite_differences(integration, extra, tol):
 def test_gradients_finite_on_a_sweep(dtype):
     """Centre crossings (b = 0), f = 0, theta at 0 and pi/2, grazes, an
     exposure across every contact: every gradient finite."""
-    stream = mx.cpu if dtype == mx.float64 else mx.gpu
+    stream = mx.cpu if dtype == mx.float64 else mx.default_device()
     tau = np.linspace(-0.13, 0.13, 257)
     cases = [(0.0, 0.1, 0.3, 0.0), (0.0, 0.1, 0.0, 0.5), (0.4, 0.1, 0.3, math.pi / 2),
              (1.05, 0.15, 0.5, 0.6), (0.9, 0.12, 0.2, 1.3), (0.3, 0.1, 1e-5, 0.2)]
@@ -447,7 +447,7 @@ def test_contact_offsets_oblate_takes_any_input():
         with mx.stream(mx.cpu):
             assert np.allclose([float(np.asarray(c).ravel()[0]) for c in got], ref,
                                rtol=0, atol=1e-15)
-    with mx.stream(mx.gpu):
+    with mx.stream(mx.default_device()):
         got = el.contact_offsets_oblate(mx.array([10.0], dtype=mx.float64), 0.3, 0.1, 0.2, 0.5)
     assert got[0].dtype == mx.float64
     k, h = 0.3, 0.2

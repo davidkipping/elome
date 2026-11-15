@@ -63,7 +63,7 @@ def check():
             f"{fm:.1f} ms at 1024 chains", f"pays {gm:.1f} ms", f"about {x_ad} times cheaper",
             f"about {le / lc:.1f} times as slow", f"({le:.1f} against {lc:.1f} ms"],
         "getting-started/installation.md": [
-            f"about {round(fv / fm)} times slower", f"about\n  {round(gv / gm)} times slower"],
+            f"about {round(fv / fm)} times slower", f"about {round(gv / gm)} times slower"],
         "guides/batching.md": [
             f"about {round(b['looped_ms'], -2):,.0f} ms | about {round(per_loop_us, -1):.0f} µs",
             f"about {b['batched_ms']:.1f} ms | about {round(per_batch_ns, -1):.0f} ns",
@@ -77,8 +77,10 @@ def check():
     }
     bad = []
     for page, needles in expect.items():
-        text = open(os.path.join(DOCS, page)).read()
-        bad += [f"{page}: missing {n!r}" for n in needles if n not in text]
+        # line breaks are the page's wrapping, not its claim
+        text = " ".join(open(os.path.join(DOCS, page)).read().split())
+        bad += [f"{page}: missing {n!r}" for n in needles
+                if " ".join(n.split()) not in text]
     if not 200 <= claims["lcs_vs_loop"]["speedup_arrays"] < 1000:
         bad.append("guides/batching.md: 'several hundred times' no longer holds "
                    f"({claims['lcs_vs_loop']['speedup_arrays']})")

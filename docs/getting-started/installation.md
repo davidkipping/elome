@@ -2,16 +2,20 @@
 
 ## Requirements
 
-- **A Mac with Apple Silicon** (M1 or later). The float64 path runs on
-  the CPU and does not need the GPU, but like everything in Elómë it runs
-  on MLX, so it too needs an Apple Silicon Mac. Without a
-  usable Metal device, `metal_available()` returns `False` with a warning,
-  and float32 calls run an MLX graph of the same model instead of the
-  fused kernels. The results agree to float32 rounding, but a forward
-  evaluation is about 25 times slower and a value with its gradient about
-  12 times slower.
+- **For the float32 GPU kernels, a Mac with Apple Silicon** (M1 or
+  later).
+- **For the float64 path, anywhere MLX runs.** It runs on MLX's CPU
+  stream on every platform, so it needs no GPU. It is tested on macOS and
+  on Linux (ARM, with MLX's CPU backend). MLX also publishes CUDA
+  backends for Linux and wheels for Windows, on which Elómë is untested.
 - **Python 3.10 or later**, with [MLX](https://github.com/ml-explore/mlx)
   0.30 or later and NumPy. pip installs both for you.
+
+Without a usable Metal device (on Linux, say), `metal_available()`
+returns `False` with a warning, and float32 calls run an MLX graph of the
+same model instead of the fused kernels. The results agree to float32
+rounding, but on a Mac a forward evaluation is about 25 times slower and
+a value with its gradient about 12 times slower.
 
 ## Install
 
@@ -21,7 +25,10 @@ From PyPI:
 pip install elome
 ```
 
-or from a clone, for development:
+On Linux, MLX needs a backend installed with it; `pip install "elome[cpu]"`
+adds MLX's CPU backend.
+
+Or from a clone, for development:
 
 ```bash
 git clone https://github.com/davidkipping/elome
@@ -56,10 +63,12 @@ command if it is missing.
 
 ```bash
 pip install -e ".[test]"               # pytest, scipy, batman, mpmath
+                                       # (".[test,cpu]" on Linux)
 python -m pytest tests -m "not slow"   # the fast suite
 python -m pytest tests                 # everything
 ```
 
 The suite checks every path against direct numerical integration
 (30-40 digits, with [mpmath](https://mpmath.org)), against batman, and
-the float32 kernels against the float64 reference.
+the float32 kernels against the float64 reference. Without Metal, the
+tests of the kernels skip.
