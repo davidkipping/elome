@@ -223,14 +223,20 @@ class TestEccentricKernelRouting:
 def _mp(**kw):
     return _params(**kw)[0]
 
+@pytest.mark.parametrize("dtype", [mx.float64, mx.float32])
 @pytest.mark.parametrize("bad", [dict(rp=-0.1), dict(rp=float("nan")),
-                                 dict(a=0.5), dict(per=-3.0)])
-def test_invalid_geometry_raises(bad):
+                                 dict(a=0.5), dict(per=-3.0),
+                                 dict(t0=float("nan")), dict(t0=float("inf")),
+                                 dict(inc=float("nan")), dict(w=float("nan"))])
+def test_invalid_geometry_raises(bad, dtype):
+    """The fp32 kernels returned an ordinary transit for a NaN or
+    infinite t0, inc or w (on an eccentric orbit, w too), where the
+    graphs returned NaN."""
     t = np.linspace(-0.1, 0.1, 51)
-    m = elome.TransitModel(_mp(), t)
+    m = elome.TransitModel(_mp(ecc=0.3), t, dtype=dtype)
     with pytest.raises(ValueError, match="must be"):
-        m.light_curve(_mp(**bad))
-    p = _mp()
+        m.light_curve(_mp(ecc=0.3, **bad))
+    p = _mp(ecc=0.3)
     for k, v in bad.items():
         setattr(p, k, np.array([0.11 if k == "rp" else getattr(p, k), v]))
     with pytest.raises(ValueError, match="must be"):
@@ -316,8 +322,12 @@ def test_secondary_eclipse_needs_fp_at_every_call():
         m.light_curve(_mp(fp=None))
     with pytest.raises(ValueError, match="params.fp is not set"):
         m.light_curves([_mp(fp=1e-3), _mp(fp=None)])
-    # a primary transit does not read fp: None stays fine there
+    with pytest.raises(ValueError, match="fp must be finite"):
+        m.light_curve(_mp(fp=float("nan")))
+    # a primary transit does not read fp: None or NaN stays fine there
     assert np.isfinite(elome.TransitModel(_mp(), _T).light_curve(_mp())).all()
+    assert np.isfinite(elome.TransitModel(_mp(), _T).light_curve(
+        _mp(fp=float("nan")))).all()
 
 
 @pytest.mark.parametrize("dtype", [mx.float64, mx.float32])

@@ -451,6 +451,44 @@ def test_array_r_takes_the_large_form_only_when_declared(dtype):
     assert "if (r > 1.0f)" in _hyb_header("hybrid4", large=True)
 
 
+@pytest.mark.parametrize("dtype", (mx.float64, mx.float32))
+def test_host_r_decides_for_itself_off_the_kernel(dtype):
+    """A host r > 1 takes the large-occultor form on every route of the
+    z and tau entry points, the graph fallbacks included (fp64, the CPU
+    stream, a Metal-less machine): they see r only after it is cast to an
+    mx.array, which alone would read as undeclared."""
+    w = list(W["hybrid4"])
+    z = np.linspace(19.05, 20.95, 41)
+    ref = graph64(z, 20.0, "hybrid4")
+    tol = 1e-15 if dtype == mx.float64 else 2e-6
+    with mx.stream(mx.cpu):
+        zz, ww = mx.array(z, dtype=dtype), mx.array(w, dtype=dtype)
+        got = (flux_dev_metal_hybrid(zz, 20.0, "hybrid4", ww),
+               flux_dev_metal(zz, 20.0, limb_dark="hybrid4", u=ww))
+        tau = mx.array(np.linspace(-0.03, 0.03, 61), dtype=dtype)
+        tau_ref = flux_dev_from_tau(tau.astype(mx.float64), 100.0, 336.0,
+                                    19.5, 20.0, limb_dark="hybrid4",
+                                    u=f64(w), large_occultor=True)
+        tau_got = flux_dev_from_tau(tau, 100.0, 336.0, 19.5, 20.0,
+                                    limb_dark="hybrid4", u=ww)
+        mx.eval(*got, tau_ref, tau_got)
+    for g in got:
+        assert np.abs(np.asarray(g, dtype=np.float64) - ref).max() < tol
+    assert np.asarray(tau_ref).min() < -0.5          # deep in the eclipse
+    assert np.abs(np.asarray(tau_got, dtype=np.float64)
+                  - np.asarray(tau_ref)).max() < tol
+
+
+@pytest.mark.skipif(not KERNEL, reason="Metal unavailable")
+def test_flux_dev_metal_takes_large_occultor():
+    """flux_dev_metal passes large_occultor to the hybrid kernels."""
+    z = np.linspace(19.05, 20.95, 41)
+    ref = graph64(z, 20.0, "hybrid4")
+    out = flux_dev_metal(f32(z), mx.array([20.0]), limb_dark="hybrid4",
+                         u=list(W["hybrid4"]), large_occultor=True)
+    assert np.abs(np.asarray(out, dtype=np.float64) - ref).max() < 2e-6
+
+
 def test_transit_model_keeps_large_and_small_traces_apart():
     """The fp64 graph leaves out the large-occultor form when r is known
     to be <= 1 (hybrid.large_occultors): one model taken from r = 0.1 to

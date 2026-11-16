@@ -1433,7 +1433,7 @@ def _per_chain_layout(z, r, u1, u2):
 @fp64_on_cpu
 def flux_dev_metal(z: mx.array, r, u1=None, u2=None, *,
                    ld_basis: bool = False, limb_dark: str = "quadratic",
-                   u=None) -> mx.array:
+                   u=None, large_occultor=None) -> mx.array:
     """F - 1 via the fused Metal kernels (fp32, GPU stream); silently
     falls back to flux_dev_analytic for fp64, CPU streams, unsupported
     layouts, or machines where the kernel probe fails.
@@ -1454,7 +1454,8 @@ def flux_dev_metal(z: mx.array, r, u1=None, u2=None, *,
     ``u1``/``u2`` are ignored there. See ``flux_dev_from_tau``.
 
     ``limb_dark="hybrid2" | "hybrid4" | "hybrid5"`` with ``u`` the shape
-    weights selects a hybrid law, as in ``flux_dev_from_tau``.
+    weights selects a hybrid law, as in ``flux_dev_from_tau``, and so does
+    ``large_occultor`` for an array ``r`` that may exceed 1.
     """
     if limb_dark != "quadratic":
         if u1 is not None or u2 is not None:
@@ -1464,7 +1465,8 @@ def flux_dev_metal(z: mx.array, r, u1=None, u2=None, *,
             raise ValueError(f"{limb_dark} needs its weights as u= unless "
                              "ld_basis=True")
         from .metal_hybrid import flux_dev_metal_hybrid
-        return flux_dev_metal_hybrid(z, r, limb_dark, u, basis=ld_basis)
+        return flux_dev_metal_hybrid(z, r, limb_dark, u, basis=ld_basis,
+                                     large_occultor=large_occultor)
     if u is not None:
         raise ValueError("u= is for the hybrid laws; the quadratic law "
                          "takes u1, u2")
@@ -1831,8 +1833,11 @@ def flux_dev_from_tau(tau: mx.array, period, a, b, r, u1=None, u2=None, *,
             for 8.9e-8 against 101 for 1.7e-5 on a 29-minute exposure);
             ``"supersample"`` -- ``n_sub`` uniform nodes, batman's rule;
             ``"none"`` -- instantaneous.
-        n_gl: Gauss-Legendre nodes per sub-interval. The window always has
-            five sub-intervals, so the cost is 5 * n_gl evaluations.
+        n_gl: Gauss-Legendre nodes per sub-interval. The window is split
+            into five sub-intervals at the contacts, most of them empty:
+            an exposure with no contact inside takes n_gl evaluations, one
+            holding all four 5 * n_gl. The float32 kernels skip the empty
+            sub-intervals; the float64 graph evaluates all five.
         n_sub: number of nodes for ``"supersample"``.
         ld_basis: return the limb-darkening *basis* instead of one
             limb-darkened curve (off by default; see below). ``u1``/``u2``
@@ -1842,7 +1847,7 @@ def flux_dev_from_tau(tau: mx.array, period, a, b, r, u1=None, u2=None, *,
             its shape weights, ``(n_w,)`` shared or ``(n, n_w)`` per chain
             (see ``elome.hybrid``); same kernels' structure, no
             elliptic integrals. With ``ld_basis=True`` a hybrid law returns
-            its (n, m, 1 + n_w) shape-basis columns B = [E0, T_1..T_n],
+            its (n, m, 1 + n_w) shape-basis columns B = [E0, S_1..S_n],
             and ``flux - 1 == (B @ c)/(N @ c)`` with ``c = (1, -w)``,
             ``N = hybrid.hybrid_norms(law)``.
         large_occultor: a hybrid law with ``r`` that may exceed 1, given
@@ -1880,10 +1885,10 @@ def flux_dev_from_tau(tau: mx.array, period, a, b, r, u1=None, u2=None, *,
             With secosw/sesinw, even 0, q is held to the cubic's branch
             through 0: -0.131 < q < 0.470, and q (1 + 3 q)(1 - q) /
             (1 - e)^3 in (-0.09, 0.6). cos i < 1; mass_ratio finite and not
-            negative, its offset under a tenth of the periastron distance
-            (``oblate_tau._tidal_domain``). Outside, numbers raise and
-            arrays give NaN. An h_f goes through ``tidal_q_from_hf``. Primary transits, hybrid
-            laws. The same kernels and graph as f=, at about the same cost.
+            negative, its offset under a tenth of the periastron distance.
+            Outside, numbers raise and arrays give NaN. An h_f goes through
+            ``tidal_q_from_hf``. Primary transits, hybrid laws. The same
+            kernels and graph as f=, at about the same cost.
         ring_in, ring_out, ring_f, ring_tau: a ring in the planet's
             equatorial plane (``elome.rings``): inner and outer radii in
             units of ``r``, projected flattening ring_f = 1 - |cos i| of the

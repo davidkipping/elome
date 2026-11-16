@@ -151,7 +151,43 @@ def _is_tidal(params) -> bool:
 
 class TransitParams:
     """Object to store the physical parameters of the transit
-    (attribute-compatible with batman.TransitParams)."""
+    (attribute-compatible with batman.TransitParams).
+
+    Any field may be a Python number, a numpy value or an ``mx.array``
+    scalar (differentiable through ``TransitModel.light_curve_mx``), or
+    an array of one value per parameter set for ``light_curves``.
+
+    Fields (times in the units of ``t``, usually days; lengths in
+    stellar radii; angles in degrees):
+
+    - ``t0``: time of inferior conjunction (mid-transit). ``per``:
+      orbital period. ``rp``: planet radius. ``a``: semi-major axis.
+      ``inc``: orbital inclination. ``ecc``: eccentricity (default 0).
+      ``w``: the planet's argument of periastron (default 90).
+    - ``limb_dark``: the law, "uniform", "linear", "quadratic",
+      "polynomial", or a hybrid law ("hybrid2", "hybrid4", "hybrid5",
+      or a ``HybridLaw``); ``u``: its coefficients or weights.
+    - ``fp``: planet-to-star flux ratio, for secondary eclipses.
+    - ``f``, ``theta``: an oblate planet's projected flattening
+      1 - B/A (``rp`` is then the area-equivalent radius) and the sky
+      angle of its long axis from the direction of motion.
+    - ``tidal_q``, ``mass_ratio``: a tidally locked triaxial planet in
+      place of ``f`` (``rp`` the volumetric radius), and optionally the
+      planet-to-star mass ratio for its offset towards the star.
+    - ``ring_in``, ``ring_out``, ``ring_f``, ``ring_tau``: a ring's inner
+      and outer radii in units of ``rp``, its projected flattening, and
+      its normal optical depth (None: opaque).
+    - ``spots``: a (K, 4) array of longitude, latitude, angular radius
+      and contrast per spot; ``prot``: the star's rotation period;
+      ``istar``, ``lam``: its spin inclination (None: 90) and
+      sky-projected obliquity (None: 0); ``spot_epoch``: when the
+      longitudes are measured (None: ``t0``).
+    - ``t_secondary`` (unused: the eclipse time follows from the orbit)
+      and ``spot_u`` (reserved) exist for compatibility.
+
+    Unset shape, ring and spot fields (None) mean a spherical planet on
+    an unspotted star.
+    """
 
     def __init__(self):
         self.t0 = None            # time of inferior conjunction
@@ -356,16 +392,28 @@ def _check_ecc(ecc, shaped=False):
         raise ValueError(msg.format(f"{ecc[bad][:4]} (and possibly more)"))
 
 
+def _finite(v):
+    return abs(v) < math.inf     # numpy and mx alike; False for NaN
+
+
 _GEOM_RULES = (("rp", "rp must be >= 0", lambda v: v >= 0.0),
                ("a", "a must be > 1 (stellar radii)", lambda v: v > 1.0),
-               ("per", "per must be > 0", lambda v: v > 0.0))
+               ("per", "per must be > 0", lambda v: v > 0.0),
+               # the fp32 kernels return a plausible transit for a NaN or
+               # infinite t0, inc or w, where the graphs return NaN
+               ("t0", "t0 must be finite", _finite),
+               ("inc", "inc must be finite", _finite),
+               ("w", "w must be finite", _finite))
 # a spotted star's, checked with them (_geom_rules)
 _PROT_RULE = ("prot", "prot (the star's rotation period) must be > 0",
               lambda v: v > 0.0)
+# a secondary eclipse's (_geom_rules)
+_FP_RULE = ("fp", "fp must be finite", _finite)
 
 
 def _check_geometry(params, rules=_GEOM_RULES):
-    """rp >= 0, a > 1, per > 0 (and a spotted star's prot > 0), all finite,
+    """rp >= 0, a > 1, per > 0, t0, inc, w (a secondary eclipse's fp, a
+    spotted star's prot > 0), all finite,
     for the readable fields -- Python numbers, numpy values, and mx.arrays
     outside a trace; returns
     the traced mx.array fields, which cannot be read (mx.compile / vmap)
@@ -400,7 +448,8 @@ def _check_geometry_cols(cols, rules=_GEOM_RULES):
 def _geometry_mask(traced, values, dtype):
     """1.0, or NaN where a traced field breaks its rule (_check_geometry)."""
     ok = None
-    rules = {name: rule for name, _, rule in _GEOM_RULES + (_PROT_RULE,)}
+    rules = {name: rule for name, _, rule
+             in _GEOM_RULES + (_PROT_RULE, _FP_RULE)}
     for name in traced:
         v = values[name]
         c = mx.logical_and(rules[name](v), v == v)
@@ -476,7 +525,11 @@ class TransitModel:
             hundreds of orbits the float32 phase loses precision.
         integration: "supersample" (batman's rule) or "contact"
             (Gauss-Legendre on windows split at the contact times).
-        n_gl: Gauss-Legendre nodes per piece for "contact".
+        n_gl: Gauss-Legendre nodes per piece for "contact" (7 here; the
+            sampler API and the anvil models default to 5).
+        use_metal: float32 may use the fused Metal kernels (default);
+            False runs the float32 MLX graph instead, as on a machine
+            without Metal.
     """
 
     def __init__(self, params, t, transittype: str = "primary",
@@ -512,7 +565,10 @@ class TransitModel:
         self._shaped = self._oblate or self._ringed
         # the orbit rebuilt from b: e capped at 0.999 (_check_ecc)
         self._from_b = self._shaped or self._spotted
-        self._geom_rules = _GEOM_RULES + ((_PROT_RULE,) if self._spotted else ())
+        self._geom_rules = (_GEOM_RULES
+                            + ((_PROT_RULE,) if self._spotted else ())
+                            + ((_FP_RULE,) if transittype == "secondary"
+                               else ()))
         self._batch_keys = self._BATCH_KEYS + (
             ("f", "theta") + _RING_FIELDS if self._ringed
             else ("tidal_q", "theta", "mass_ratio") if self._tidal
@@ -1053,8 +1109,9 @@ class TransitModel:
             ci = cast(ci_py)
         per, a, rp = cast(params.per), cast(params.a), cast(params.rp)
         vals = {"rp": rp, "a": a, "per": per}
-        if "prot" in traced:
-            vals["prot"] = cast(params.prot)
+        for name in ("prot", "t0", "inc", "w", "fp"):
+            if name in traced:
+                vals[name] = cast(getattr(params, name))
         gmask = _geometry_mask(traced, vals, dt) if traced else None
         return t0_off, per, a, rp, ci, ci_py, gmask
 
@@ -1865,16 +1922,16 @@ class TransitModel:
         on in MLX -- differentiable in the parameters.
 
         Any ``TransitParams`` field may be an ``mx.array`` scalar (t0, per,
-        rp, a, inc, ecc, w, fp, and ``u`` or its entries), and gradients
-        flow to every such field. Python numbers stay constants, folded on
+        rp, a, inc, ecc, w, fp, ``u`` or its entries, and the shape, ring
+        and spot fields), and gradients flow to every such field. Python numbers stay constants, folded on
         the host exactly as ``light_curve`` folds them. With ``ecc`` a
         Python number the result is ``light_curve``'s bit for bit when the
         arrays are among t0, per, rp, fp, u and -- on an eccentric orbit
         -- a, which enter the graph as they are. An array ``inc`` or
         ``w``, or ``a`` on a circular orbit, is combined in-graph in the
         model dtype (b = a cos i, (k, h) = sqrt(e) (cos w, sin w)), which
-        on an fp32 model is within ~1 ulp of the host fold (see
-        ``_model_eval``). Every field must be a scalar and ``u`` a flat
+        on an fp32 model is within ~1 ulp of the host fold. Every field
+        must be a scalar and ``u`` a flat
         vector -- list, tuple, numpy or mx.array, or a list holding
         mx.array scalars; a wrong shape raises before anything is built.
 
@@ -1885,8 +1942,7 @@ class TransitModel:
 
         Differentiable details:
 
-        * an array-valued ``ecc`` enters as (e, w) directly
-          (``anchor_constants_ew``), so d/d(ecc) is finite and correct at
+        * an array-valued ``ecc`` enters as (e, w) directly, so d/d(ecc) is finite and correct at
           e = 0 -- the one-sided derivative, since e >= 0 -- and d/dw is
           exactly 0 there. Out of [0, 1) it raises ValueError whenever the
           value can be read (eagerly, or under ``mx.grad``); when it is
@@ -1896,8 +1952,8 @@ class TransitModel:
           e = 0, (k, h) above it -- so a fit that differentiates, say, only
           rp and t0 runs exactly as fast as ``light_curve``, fused kernel
           included. Only an array-valued ``ecc`` takes the (e, w) graph.
-          For the quadratic law that forgoes the fused *model* kernel (see
-          _get_compiled): measured 3-4x slower on an fp32 GPU model at
+          For the quadratic law that forgoes the fused *model* kernel:
+          measured 3-4x slower on an fp32 GPU model at
           2e6 points (3.0 vs 0.75-0.91 ms). The hybrid laws' photometry
           runs in their z-input kernel on every graph, this one included.
         * ``u`` may be a list, a numpy array, or an mx.array vector.

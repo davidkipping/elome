@@ -37,7 +37,8 @@ import numpy as np
 
 from . import metal as M
 from .hybrid import (I3_TERMS, _may_be_large, combine_cols, declared,
-                     flux_dev_hybrid, get_law, i3_series, shape_cols)
+                     flux_dev_hybrid, get_law, i3_series, large_occultors,
+                     shape_cols)
 
 __all__ = ["flux_dev_from_tau_hybrid", "flux_dev_metal_hybrid"]
 
@@ -697,6 +698,9 @@ def flux_dev_from_tau_hybrid(tau, period, a, b, r, law, u, exp_time, mode,
 def _from_tau_hybrid(tau, period, a, b, r, law, u, exp_time, mode, n_gl,
                      n_sub, basis, k, h):
     law = get_law(law)
+    # decided from the caller's r: canonicalised to an mx.array below, a
+    # host r would read as undeclared on the graph route
+    large = _may_be_large(r)
     if tau.ndim not in (1, 2):
         raise ValueError(f"tau must be (m,) or (n, m); got {tau.shape}")
     squeeze = tau.ndim == 1
@@ -724,12 +728,14 @@ def _from_tau_hybrid(tau, period, a, b, r, law, u, exp_time, mode, n_gl,
             shape, cs = b_c, M._contact_taus(r_c, a_c, b_c, per_c, n)
         core = _make_core(law, exp_time, mode, n_gl, n_sub,
                           "ecc" if ecc else "circ", basis,
-                          _may_be_large(r) is not False)
+                          large is not False)
         ws = () if basis else (w2d,)
         out = core(tau2d, per_c, a_c, shape, r_c, *ws, cs)
     else:
-        out = _tau_graph(tau2d, per_c, a_c, b_c, r_c, w2d, exp_time, mode,
-                         n_gl, n_sub, law, basis=basis, k=kh[0], h=kh[1])
+        with large_occultors(large):
+            out = _tau_graph(tau2d, per_c, a_c, b_c, r_c, w2d, exp_time,
+                             mode, n_gl, n_sub, law, basis=basis, k=kh[0],
+                             h=kh[1])
     return out[0] if squeeze and n == 1 else out
 
 
@@ -868,6 +874,7 @@ def flux_dev_metal_hybrid(z, r, law, u, basis=False, large_occultor=None):
 
 def _metal_hybrid(z, r, law, u, basis):
     law = get_law(law)
+    large = _may_be_large(r)  # from the caller's r, as in _from_tau_hybrid
     if z.ndim not in (1, 2):
         raise ValueError(f"z must be (m,) or (n, m); got {z.shape}")
     squeeze = z.ndim == 1
@@ -881,13 +888,15 @@ def _metal_hybrid(z, r, law, u, basis):
         z2d = mx.broadcast_to(z2d, (n, z2d.shape[1]))
     w2d = None if basis else _canon_w(u, n, law.n_w, z.dtype, law.name)
     if z.dtype == mx.float32 and M._gpu_stream_active() and M.metal_available():
-        core = _z_core(law, basis, _may_be_large(r) is not False)
+        core = _z_core(law, basis, large is not False)
         out = core(z2d, rc) if basis else core(z2d, rc, w2d)
     elif basis:
-        out = shape_cols(z2d, rc[:, None], law)
+        with large_occultors(large):
+            out = shape_cols(z2d, rc[:, None], law)
     else:
         # hybrid.py's graph itself, so every route to this function --
         # fp64, the CPU stream, a Metal-less machine -- is one expression,
         # bitwise (a separate dot-product contraction would be 2.4e-7 apart)
-        out = flux_dev_hybrid(z2d, rc[:, None], w2d, law)
+        with large_occultors(large):
+            out = flux_dev_hybrid(z2d, rc[:, None], w2d, law)
     return out[0] if squeeze and n == 1 else out
