@@ -154,6 +154,15 @@ every release is tagged `vX.Y.Z` in git.
   `make_hybrid_transit_flux` and `make_eclipse_flux` take it. Ringed
   planets and spotted stars do not have the new form: beyond `rp = 1`
   they need float64.
+- **Gradients of the float64 graph functions at exact coincidences.**
+  `flux_dev`, `flux_dev_poly` and `flux_dev_hybrid` returned wrong
+  reverse-mode gradients (right values) at `z == r` (d/dz -0.26 for
+  +0.016), at `z == 1`, and as the planet vanishes (d/dr 0.52 at `r = 0`
+  for 0). The sides of the lens are now sorted by selects, whose
+  derivative follows one branch at a tie; the `z ~ r` expansion takes its
+  derivative along `z = r`, over a window of `sqrt(eps)` where it beats
+  the general form's; and two floors that had no derivative at `r = 0`
+  pass it through. The values are unchanged bit for bit.
 - **A NaN or infinite `t0`, `inc` or `w` now raises** in `light_curve`
   and `light_curves`, as a bad `rp`, `a` or `per` did, and so does a
   NaN `fp` for a secondary eclipse. The float32 kernels returned an

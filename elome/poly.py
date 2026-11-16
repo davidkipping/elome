@@ -96,7 +96,10 @@ def sn_dev_poly(z: mx.array, r, n_max: int) -> list:
                         fourzr, one)
     onembmr2_c = mx.where(m_comp, onembmr2, one)
     k2 = onembmr2 / fourzr_p            # only read on partial lanes
-    k2inv = fourzr / onembmr2_c         # only read on complete lanes
+    # only read on complete lanes; 4zr unfloored (it is no denominator
+    # here), since the floor's maximum has no derivative at r = 0, where it
+    # dropped a term of d/dr (0.009 for the truth's 0)
+    k2inv = (4.0 * zz * rr) / onembmr2_c
     twothird = 2.0 / 3.0
 
     # M_0..M_3, complete (k^2 >= 1) and partial (k^2 < 1) closed forms

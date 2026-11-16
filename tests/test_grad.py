@@ -150,3 +150,56 @@ class TestFiniteDifferences:
                 mx.array(np.full(8, 0.4), dtype=mx.float64),
                 mx.array(np.full(8, 0.2), dtype=mx.float64))
             assert np.allclose(np.array(g[0]), 0.0, atol=1e-12)
+
+
+# exact ties and a vanishing planet: reverse mode used to go wrong there
+# (a maximum/minimum sort sent the cotangent down both branches; the z ~ r
+# expansion's gradient followed its modulus off the line z = r; floors
+# and clips cut d/dr at r -> 0) while the values were right
+_TIE_POINTS = [(0.3, 0.3), (0.7, 0.7), (1.0, 0.1), (1.0, 0.5), (0.3, 0.3 + 5e-15),
+               (0.3, 0.3 + 1e-10), (0.9, 0.2), (0.3, 0.5)]
+_SMALL_R = [(0.5, 0.0), (0.95, 0.0), (0.5, 1e-12), (0.5, 1e-8), (0.0, 1e-6)]
+
+
+def _tie_fns():
+    import elome as el
+    return {
+        "quadratic": lambda z, r: el.flux_dev(z, r, 0.4, 0.25),
+        "polynomial": lambda z, r: el.flux_dev_poly(z, r, [0.3, 0.2, -0.1, 0.05]),
+        "hybrid4": lambda z, r: el.flux_dev_hybrid(z, r, [0.2, 0.2, 0.1, 0.1], "hybrid4"),
+    }
+
+
+def _grad(f, z, r, dt):
+    F = lambda zz, rr: mx.sum(f(zz, rr))
+    with mx.stream(mx.cpu):
+        g = mx.grad(F, argnums=(0, 1))(mx.array([z], dtype=dt), mx.array([r], dtype=dt))
+        return float(g[0][0]), float(g[1][0])
+
+
+def _fd(f, z, r, which):
+    h = 1e-6
+    F = lambda a, b: float(mx.sum(f(mx.array([a], dtype=mx.float64),
+                                    mx.array([b], dtype=mx.float64))))
+    with mx.stream(mx.cpu):
+        if which == 0:
+            return (F(z + h, r) - F(z - h, r)) / (2 * h)
+        return (F(z, r + h) - F(z, r - h)) / (2 * h)
+
+
+def test_gradients_at_exact_ties():
+    for name, f in _tie_fns().items():
+        for z, r in _TIE_POINTS:
+            for dt, tol in ((mx.float64, 1e-6), (mx.float32, 1e-3)):
+                gz, gr = _grad(f, z, r, dt)
+                assert abs(gz - _fd(f, z, r, 0)) < tol, (name, z, r, dt, "dz")
+                assert abs(gr - _fd(f, z, r, 1)) < tol, (name, z, r, dt, "dr")
+
+
+def test_gradients_as_the_planet_vanishes():
+    """F - 1 ~ -r^2 I(z) / N: d/dr -> 0 and d/dz -> 0 with r."""
+    for name, f in _tie_fns().items():
+        for z, r in _SMALL_R:
+            for dt, tol in ((mx.float64, 1e-9), (mx.float32, 1e-6)):
+                gz, gr = _grad(f, z, r, dt)
+                assert abs(gz) < tol and abs(gr) < tol + 10.0 * r, (name, z, r, dt, gz, gr)

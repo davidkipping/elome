@@ -74,13 +74,17 @@ def _kite_sqarea(z, r):
     Positive iff the three circles' geometry has a real intersection
     (partial overlap); negative outside — callers clamp.
     """
-    # sort (1, z, r) descending: a >= b >= c
-    a = mx.maximum(z, r)
-    c = mx.minimum(z, r)
-    b_ = mx.minimum(a, 1.0 + 0.0 * a)
-    a = mx.maximum(a, 1.0 + 0.0 * a)
-    b = mx.maximum(b_, c)
-    c = mx.minimum(b_, c)
+    # sort (1, z, r) descending: a >= b >= c. By selects, not maximum /
+    # minimum, whose reverse mode at a tie (z == r, z == 1, r == 1) sends
+    # the cotangent down both branches; a select sends it down one, and
+    # the area is symmetric in its sides, so either is the derivative
+    one = 1.0 + 0.0 * z
+    zr = z >= r
+    a, c = mx.where(zr, z, r), mx.where(zr, r, z)
+    a1 = a >= one
+    b_, a = mx.where(a1, one, a), mx.where(a1, a, one)
+    bc = b_ >= c
+    b, c = mx.where(bc, b_, c), mx.where(bc, c, b_)
     return (a + (b + c)) * (c - (a - b)) * (c + (a - b)) * (a + (b - c))
 
 
@@ -100,6 +104,7 @@ def sn_dev_with_aux(z: mx.array, r):
     eps = dtype_eps(dtype)
     tiny = 1e-30 if dtype == mx.float32 else 1e-280
     d_req = 10.0 * eps          # |z - r| Taylor switch half-width
+    d_req_g = math.sqrt(eps)    # ... and for the gradient (see below)
     d_con = math.sqrt(eps)      # |z + r - 1| Taylor switch half-width
 
     z = mx.abs(z)
@@ -116,6 +121,7 @@ def sn_dev_with_aux(z: mx.array, r):
     m_occ = mx.logical_not(m_none)           # any overlap at all
     m_ps = z + r > 1.0                       # "partial side": k^2 < 1
     m_req = mx.logical_and(mx.abs(z - r) < d_req, m_occ)
+    m_req_g = mx.logical_and(mx.abs(z - r) < d_req_g, m_occ)
     m_con = mx.logical_and(mx.abs(z + r - 1.0) < d_con, m_occ)
     # the contact z + r = 1 (k^2 = 1) exists only for r <= 1; for r > 1 the
     # switch would read sqrt(r (1 - r)) out of its domain. (r == 1 keeps
@@ -179,7 +185,13 @@ def sn_dev_with_aux(z: mx.array, r):
     # branch from feeding cel out-of-range kc
     kc2_ps = mx.clip(mx.where(m_ps, mx.where(m_tot, 1.0, -onembpr2), 0.0)
                      / fourzr_ps, 0.0, 1.0)
-    kc2_cs = mx.clip(mx.where(m_ps, 0.0, onembpr2) / on_mr_cs, 0.0, 1.0)
+    # on the complete side kc^2 -> 1 from below as r -> 0, and rounds onto
+    # the clip at tiny r (always at r = 0), whose zero cotangent dropped a
+    # term of d/dr (F'(r) read 0.5 where the truth is 0). The clip's value
+    # with the unclipped derivative: x + (clip(x) - x) is clip(x) exactly
+    # here (the difference is exact near 1 and at 0)
+    x_cs = mx.where(m_ps, 0.0, onembpr2) / on_mr_cs
+    kc2_cs = x_cs + mx.stop_gradient(mx.clip(x_cs, 0.0, 1.0) - x_cs)
     kc2 = mx.where(m_ps, kc2_ps, kc2_cs)
     kc = mx.sqrt(mx.maximum(kc2, tiny))
 
@@ -210,19 +222,38 @@ def sn_dev_with_aux(z: mx.array, r):
     #    corrections; reuses E and Em1mKdm at the branch modulus, which
     #    matches the case modulus to O(|z-r|) — inside the 10 eps window
     #    that error is at rounding level).
-    on_mr_req = mx.where(m_req, onembmr2, 1.0)   # ~1 where active (z ~ r)
-    m_req_mod = mx.where(m_req, fourzr, 0.0) / on_mr_req
+    on_mr_req = mx.where(m_req_g, onembmr2, 1.0)   # ~1 where active (z ~ r)
+    m_req_mod = mx.where(m_req_g, fourzr, 0.0) / on_mr_req
     lam5 = _PI + (2.0 / 3.0) * (
         (2.0 * m_req_mod - 3.0) * Eofk - m_req_mod * Em1mKdm
     ) + zmr * 4.0 * r * (Eofk - 2.0 * Em1mKdm)
     # Case 7 applies only on the partial side of the z ~ r switch, where
     # z ~ r and z + r > 1 force r > ~0.5 — the denominator is never small
-    r7 = mx.where(mx.logical_and(m_req, m_ps), r, 1.0)
+    r7 = mx.where(mx.logical_and(m_req_g, m_ps), r, 1.0)
     lam7 = _PI + (1.0 / (3.0 * r7)) * (
         -m_req_mod * Eofk + (2.0 * m_req_mod - 3.0) * Em1mKdm
     ) - zmr * 2.0 * (2.0 * Eofk - Em1mKdm)
     lam_req = mx.where(m_ps, lam7, lam5)
-    s1d_req = -lam_req / 3.0
+    # The zeroth-order term of these expansions belongs at z = r, modulus
+    # m0 = 4 r^2, but is read at m = 4 z r / (1 - (z - r)^2): the same
+    # value to O(z - r), and a gradient that also follows m (and E(m),
+    # D(m) through kc) off the line z = r -- ds1/dz read -0.71 for 0.09 at
+    # z = r = 0.3. That path is traded for m0's: + L0'(m) (m0 - m), each
+    # factor's value cancelled (x - stop_gradient(x)), with E' and D' in
+    # closed form (q = k^2: m on the complete side, 1 / m on the partial).
+    mq = mx.where(m_req_g, m_req_mod, 0.5)
+    q = mx.where(m_ps, 1.0 / mq, mq)
+    q = mx.minimum(mx.maximum(q, eps), 1.0 - eps)
+    Kofk = (Eofk - q * Em1mKdm) / (1.0 - q)
+    dE = (Eofk - Kofk) / (2.0 * q)
+    dD = (dE + Kofk - 1.5 * Em1mKdm) / q
+    dl5 = (2.0 / 3.0) * (2.0 * Eofk - Em1mKdm + (2.0 * mq - 3.0) * dE - mq * dD)
+    dl7 = (1.0 / (3.0 * r7)) * (-Eofk + 2.0 * Em1mKdm
+                                + (-mq * dE + (2.0 * mq - 3.0) * dD) / (-mq * mq))
+    dl = mx.stop_gradient(mx.where(m_ps, dl7, dl5))
+    m0 = 4.0 * r2
+    swap = dl * ((m0 - mx.stop_gradient(m0)) - (mq - mx.stop_gradient(mq)))
+    s1d_req = -(lam_req + mx.where(m_req_g, swap, 0.0)) / 3.0
 
     # -- Taylor switch at contact z + r ~ 1 (Case 4). Smooth on both sides.
     acos_arg = mx.clip(1.0 - 2.0 * r, -1.0 + eps, 1.0 - eps)
@@ -235,7 +266,13 @@ def sn_dev_with_aux(z: mx.array, r):
     ) / 3.0
     s1d_con = s1_con - _TWO_PI / 3.0
 
-    s1d = mx.where(m_req, s1d_req, s1d_gen)
+    # The general form loses its gradient to cancellation as z -> r (an
+    # error ~ eps / |z - r|), the expansion's grows as |z - r|: the value
+    # switches at 10 eps as before, the gradient at sqrt(eps). The value
+    # is the switched one exactly (x + (y - y) is x).
+    s1d_val = mx.where(m_req, s1d_req, s1d_gen)
+    s1d_grad = mx.where(m_req_g, s1d_req, s1d_gen)
+    s1d = mx.stop_gradient(s1d_val) + (s1d_grad - mx.stop_gradient(s1d_grad))
     s1d = mx.where(m_con, s1d_con, s1d)
     s1d = mx.where(m_none, 0.0 * zero, s1d)
 
