@@ -90,6 +90,20 @@ every release is tagged `vX.Y.Z` in git.
   MLX arrays, differentiable.
 
 ### Changed
+- **The float64 path computes only the times an event can touch.**
+  `light_curve`, `light_curves` and `light_curve_mx` in float64 pick, on
+  the host, the times that can be in the transit (or the eclipse) and
+  run the graph on those alone; every other time takes the out-of-event
+  flux. The pick is conservative, from a bound on the sky separation
+  that holds on any orbit, and the result is the full graph's: bit for
+  bit, but for the contact rule's rounding (10⁻¹⁶), gradients included.
+  On mission-length data this is 4-11 times faster for a spherical
+  planet (27 days of 2-minute data: 2.9 to 0.6 ms; 90 days of
+  30-minute exposures under the contact rule: 22 to 2 ms, and 94 to
+  6 ms at 2-minute cadence), about 2 times for an oblate planet and 2.6
+  times for a ringed one. Spotted stars, whose flux changes out of
+  transit, tidally locked planets, and calls inside a caller's
+  `mx.compile` or `mx.vmap` compute every time as before.
 - **`TransitModel` runs spherical planets on the sampler API's fused
   kernels.** In float32 on the GPU, the contact rule, secondary eclipses
   and the hybrid laws now compute the orbit, the exposure and the

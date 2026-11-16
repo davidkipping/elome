@@ -233,6 +233,7 @@ def test_long_grids_are_evaluated_in_blocks(pkw, mkw, monkeypatch):
     exposure nodes: the same curve, bit for bit."""
     p = P(**pkw)
     m = el.TransitModel(p, T, **mkw)
+    m._view = lambda *a, **k: None          # every time, as a long dense grid
     sets = [p, P(**{**pkw, "ring_f": 0.9, "ring_tau": 0.3, "theta": 80.0})]
     whole, whole_sets = m.light_curve(p), m.light_curves(sets)
     nodes = 5 * 2 if mkw.get("integration") == "contact" else 1

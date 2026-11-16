@@ -506,6 +506,18 @@ def _eclipse_split(t0, per, rp, a, ci, k=None, h=None, b=None, ew=False):
     return t0 + per * (0.5 + dev), cs
 
 
+def _view_size(n):
+    """The padded size of an _event_view subset of n points: the first of
+    64 * 2^(k/2) (k = 0, 1, ...) that holds them, so that the sizes a fit
+    sees are few and the padding at most ~41%."""
+    k = 0
+    while True:
+        size = int(round(64.0 * 2.0 ** (0.5 * k)))
+        if size >= n:
+            return size
+        k += 1
+
+
 class TransitModel:
     """Precomputes the (super)sampled time grid; ``light_curve(params)``
     evaluates the model for (possibly updated) parameters, batman-style.
@@ -652,7 +664,8 @@ class TransitModel:
         # round-off behaviour is untouched.
         self._t_ref = (0.0 if self.dtype == mx.float64
                        else float(0.5 * (t_super.min() + t_super.max())))
-        self._t_mx = mx.array(t_super - self._t_ref, dtype=self.dtype)
+        self._t_np = t_super - self._t_ref
+        self._t_mx = mx.array(self._t_np, dtype=self.dtype)
         self._compiled_sets = {}
         self._large = None
 
@@ -813,10 +826,12 @@ class TransitModel:
         return metal_available() and _gpu_stream_active()
 
     def _get_compiled(self, circular: bool, ew: bool = False):
-        """The compiled model graph. ``ew`` selects, for the eccentric
-        graphs, (e, w [rad]) inputs in place of (k, h) -- light_curve_mx's
-        differentiable route, exact at e = 0 (anchored.anchor_constants_ew).
-        With ew=False every graph is exactly what it always was."""
+        """The compiled model graph, (t, *params) -> flux with ``t`` the
+        times (self._t_mx, or the subset _event_view selects). ``ew``
+        selects, for the eccentric graphs, (e, w [rad]) inputs in place of
+        (k, h) -- light_curve_mx's differentiable route, exact at e = 0
+        (anchored.anchor_constants_ew). With ew=False every graph is
+        exactly what it always was."""
         vec = bool(self._n_vec)
         # The kernel decision depends on the *active* stream, so it is part
         # of the key: a graph first built under the CPU stream (an fp64
@@ -832,14 +847,14 @@ class TransitModel:
         # (e, w) orbit, or a kernel-less stream -- reaches a z-input kernel
         # (quadratic or hybrid) through _photom, decided inside the trace,
         # which mx.compile keeps per stream: no key needed.
+        contact = self.integration == "contact"
         kernel_branch = (not ew and not vec and self.transittype == "primary"
-                         and self.integration != "contact")
+                         and not contact)
         kern = kernel_branch and self._kernel_usable()
         key = "ew" if ew else (circular, kern)
         fn = self._compiled.get(key)
         if fn is not None:
             return fn
-        t = self._t_mx
         if ew:
             circular = False
 
@@ -848,7 +863,7 @@ class TransitModel:
             so those graphs are unchanged; the (e, w) constants else."""
             return dict(consts=anchor_constants_ew(k, h)) if ew else {}
 
-        if self.integration == "contact":
+        if contact:
             # Node times depend on the parameters (the contacts move), so
             # the grid is rebuilt inside the compiled graph each call and
             # `t` stays the exposure mid-times.
@@ -862,7 +877,7 @@ class TransitModel:
             eclipse = self.transittype == "secondary"
 
             if circular:
-                def raw(t0, per, a, b, rp, *ld_fp):
+                def raw(t, t0, per, a, b, rp, *ld_fp):
                     u1, u2, uv, fp = _unpack_ld(vec, ld_fp)
                     ci = b / a
                     if eclipse:
@@ -877,7 +892,7 @@ class TransitModel:
                                            1e-24))
                     return _avg(z, cphi > 0.0, rp, u1, u2, fp, uv, W)
             else:
-                def raw(t0, per, a, k, h, ci, rp, *ld_fp):
+                def raw(t, t0, per, a, k, h, ci, rp, *ld_fp):
                     u1, u2, uv, fp = _unpack_ld(vec, ld_fp)
                     kw = consts(k, h)
                     if ew:
@@ -900,7 +915,7 @@ class TransitModel:
                     return _avg(z, front, rp, u1, u2, fp, uv, W)
 
         elif circular and vec:
-            def raw(t0, per, a, b, rp, uv, fp):
+            def raw(t, t0, per, a, b, rp, uv, fp):
                 phase = (2.0 * math.pi) * (t - t0) / per
                 sphi, cphi = sincos(phase)
                 z = mx.sqrt(mx.maximum((a * sphi) ** 2 + (b * cphi) ** 2,
@@ -908,7 +923,7 @@ class TransitModel:
                 return self._photom(z, cphi > 0.0, rp, None, None, fp,
                                     uvec=uv)
         elif vec:
-            def raw(t0, per, a, k, h, ci, rp, uv, fp):
+            def raw(t, t0, per, a, k, h, ci, rp, uv, fp):
                 phi = (2.0 * math.pi) * (t - t0) / per
                 z, front = separation_anchored(phi, k, h, a, ci,
                                                **consts(k, h))
@@ -922,10 +937,11 @@ class TransitModel:
             from .anchored import pack_orbit_constants
             from .metal import make_model_core_metal
             core = make_model_core_metal(0.0)
-            m = t.shape[0]
-            xdat = mx.stack([t, mx.zeros_like(t)])
 
-            def raw(t0, per, a, b, rp, u1, u2, fp):
+            def raw(t, t0, per, a, b, rp, u1, u2, fp):
+                m = t.shape[0]
+                xdat = mx.stack([t, mx.zeros_like(t)])
+
                 def col(v):
                     return mx.reshape(v, (1,))
                 zero = mx.zeros((1,), dtype=self.dtype)
@@ -934,7 +950,7 @@ class TransitModel:
                            col(u1), col(u2))
                 return 1.0 + mx.reshape(dev, (m,))
         elif circular:
-            def raw(t0, per, a, b, rp, u1, u2, fp):
+            def raw(t, t0, per, a, b, rp, u1, u2, fp):
                 phase = (2.0 * math.pi) * (t - t0) / per
                 sphi, cphi = sincos(phase)
                 z = mx.sqrt(mx.maximum((a * sphi) ** 2 + (b * cphi) ** 2,
@@ -960,10 +976,11 @@ class TransitModel:
             from .anchored import pack_orbit_constants
             from .metal import make_model_core_metal
             core = make_model_core_metal(0.0)
-            m = t.shape[0]
-            xdat = mx.stack([t, mx.zeros_like(t)])
 
-            def raw(t0, per, a, k, h, ci, rp, u1, u2, fp):
+            def raw(t, t0, per, a, k, h, ci, rp, u1, u2, fp):
+                m = t.shape[0]
+                xdat = mx.stack([t, mx.zeros_like(t)])
+
                 def col(v):
                     return mx.reshape(v, (1,))
                 orb = pack_orbit_constants(col(k), col(h), col(ci))
@@ -974,7 +991,7 @@ class TransitModel:
             # transit-anchored: phi is measured straight from t0, so no
             # mean-anomaly-at-transit offset is needed, and float32 stays
             # accurate all the way to e = 0 (see anchored.py).
-            def raw(t0, per, a, k, h, ci, rp, u1, u2, fp):
+            def raw(t, t0, per, a, k, h, ci, rp, u1, u2, fp):
                 phi = (2.0 * math.pi) * (t - t0) / per
                 z, front = separation_anchored(phi, k, h, a, ci,
                                                **consts(k, h))
@@ -983,6 +1000,136 @@ class TransitModel:
         fn = mx.compile(raw)
         self._compiled[key] = fn
         return fn
+
+    # -- evaluating only the times an event can touch ---------------------
+    #
+    # A graph (float64, and so the float64 path on every platform)
+    # evaluates every time in full, where the float32 kernels skip the
+    # points out of any event. With the orbit readable on the host,
+    # _event_view picks the times that can be in the model's event -- the
+    # transit, on the near side, or the eclipse, on the far side -- and
+    # the graph runs on those alone. The pick is conservative and cheap:
+    # on the sky z^2 = r^2 (cos^2 i + sin^2 i sin^2(nu - nu_c)), with nu_c
+    # the true anomaly at conjunction, so with r_min the nearest approach
+    # to the star around the event and R the occultor's largest radius, a
+    # point whose true anomaly is far enough from the event's is out of
+    # it, and the mean anomaly moves at most (1 - e^2)^(3/2) /
+    # (1 + e cos nu)^2 times as fast as the true one. The subset is padded
+    # to one of a few sizes, so that a fit retraces only a few times, with
+    # copies of the point farthest from the event; every other point takes
+    # the value at that padded slot, which is the graph's own out-of-event
+    # flux, so the result is the full graph's (bit for bit, but for the
+    # contact rule's rounding, ~1e-16).
+
+    def _view_extent(self, rp, f=None, ring_out=None):
+        """The occultor's largest radius on the sky, from host values
+        (numbers or (n_sets,) arrays), or None where it cannot be bounded:
+        a spotted star, whose flux changes out of transit, and a tidally
+        locked planet."""
+        if self._spotted or self._tidal:
+            return None
+        rp = np.asarray(rp, dtype=np.float64)
+        if not (self._oblate or self._ringed):
+            return rp
+        R = rp / np.sqrt(1.0 - np.asarray(0.0 if f is None else f,
+                                          dtype=np.float64))
+        if self._ringed:
+            R = np.maximum(R, rp * np.asarray(ring_out, dtype=np.float64))
+        return R
+
+    def _event_view(self, params):
+        """light_curve's _view: the host values of params, or None (all
+        times) where one is traced -- inside a caller's mx.compile or
+        mx.vmap; eagerly and under mx.grad they can be read."""
+        if self.dtype != mx.float64 or self._spotted or self._tidal:
+            return None
+        names = ("t0", "per", "a", "inc", "ecc", "w", "rp")
+        if self._oblate or self._ringed:
+            names += ("f",)
+        if self._ringed:
+            names += ("ring_out",)
+        vals = {}
+        for name in names:
+            x = getattr(params, name)
+            if x is None:                   # an unset f: a spherical ring host
+                vals[name] = None
+                continue
+            v = _scalar_value(x) if isinstance(x, mx.array) else float(x)
+            if v is None:
+                return None
+            vals[name] = v
+        R = self._view_extent(vals["rp"], vals.get("f"), vals.get("ring_out"))
+        return self._view(vals["t0"], vals["per"], vals["a"], vals["inc"],
+                          vals["ecc"], vals["w"], R)
+
+    def _view(self, t0, per, a, inc, e, w, R):
+        """(times, gather index) for the subset of this model's times that
+        the event of any of the given parameter sets (numbers or (n_sets,)
+        arrays; angles in degrees) can touch, or None to evaluate them all.
+        Float64 only: the float32 kernels skip on their own."""
+        if self.dtype != mx.float64 or R is None:
+            return None
+        t0, per, a, inc, e, w, R = (np.atleast_1d(np.asarray(v, np.float64))
+                                    for v in (t0, per, a, inc, e, w, R))
+        # a window about the event that surely holds it, from z >= a (1 - e)
+        # |sin(nu - nu_c)|; refined below
+        s0 = (1.0 + R) / (a * (1.0 - e))
+        if not bool(np.all(s0 < 1.0)):
+            return None
+        two = 2.0 * np.pi
+        nu_c = 0.5 * np.pi - np.radians(w)
+
+        def mean_anom(nu):
+            E = 2.0 * np.arctan2(np.sqrt(1.0 - e) * np.sin(0.5 * nu),
+                                 np.sqrt(1.0 + e) * np.cos(0.5 * nu))
+            return E - e * np.sin(E)
+        # a transit only where the planet is in front, an eclipse only
+        # where it is behind: elsewhere the flux is the out-of-event value
+        if self.transittype == "primary":
+            nu, m_ev = nu_c, 0.0
+        else:
+            nu = nu_c + np.pi
+            m_ev = mean_anom(nu) - mean_anom(nu_c)
+        # within the window: the range of cos nu, so the nearest approach
+        # and the fastest dM/dnu
+        dn = np.arcsin(s0)
+        lo, hi = nu - dn, nu + dn
+        c_max = np.where(np.ceil(lo / two) <= np.floor(hi / two), 1.0,
+                         np.maximum(np.cos(lo), np.cos(hi)))
+        c_min = np.where(np.ceil((lo - np.pi) / two)
+                         <= np.floor((hi - np.pi) / two), -1.0,
+                         np.minimum(np.cos(lo), np.cos(hi)))
+        r_min = a * (1.0 - e * e) / (1.0 + e * c_max)
+        gain = (1.0 - e * e) ** 1.5 / (1.0 + e * c_min) ** 2
+        ci2 = np.cos(np.radians(inc)) ** 2
+        num = ((1.0 + R) / r_min) ** 2 * (1.0 + 1e-9) - ci2
+        s2 = np.clip(num / np.maximum(1.0 - ci2, 1e-300), 0.0, 1.0)
+        dm = np.arcsin(np.sqrt(s2)) * gain * (1.0 + 1e-6) + 1e-9
+        if self.integration == "contact":
+            dm = dm + np.pi * self.exp_time / per
+        dm = np.where(num > 0.0, dm, -1.0)  # -1: the orbit misses the star
+        t = self._t_np + self._t_ref
+        m_ev = np.broadcast_to(m_ev, t0.shape)
+        live = np.flatnonzero(dm > 0.0)
+        q = np.full(t.size, np.inf)
+        step = max(1, (1 << 20) // t.size)          # ~1e6 elements at a time
+        for j in range(0, live.size, step):
+            i = live[j:j + step, None]
+            x = (two / per[i]) * (t[None, :] - t0[i]) - m_ev[i]
+            q = np.minimum(q, np.min(np.abs(x - two * np.round(x / two))
+                                     / dm[i], axis=0))
+        keep = q <= 1.0
+        n, n_keep = q.size, int(np.count_nonzero(keep))
+        size = _view_size(n_keep + 1)
+        if size >= n:
+            return None
+        # the padding: the point farthest from every set's event
+        idx = np.full(size, int(np.argmax(q)), dtype=np.int32)
+        idx[:n_keep] = np.flatnonzero(keep)
+        pos = np.full(n, n_keep, dtype=np.int32)
+        pos[keep] = np.arange(n_keep, dtype=np.int32)
+        return (mx.array(self._t_np[idx], dtype=self.dtype),
+                mx.array(pos))
 
     def _model_eval(self, params, uv, grad=True) -> mx.array:
         """_model_eval_set under the large_occultors flag of params.rp."""
@@ -1056,6 +1203,8 @@ class TransitModel:
             ld = _ld_coeffs(params, conv=cast, u=uv)
 
         route = self._ecc_route(params, cast, rad, is_arr)
+        view = self._event_view(params)
+        t = self._t_mx if view is None else view[0]
         graph_first = route[0] == "circ" and not grad and self._circ_graph_faster()
         if route[0] != "ew" and self._tau_kernels() and not graph_first:
             head = (self._t_mx, t0_off, per, a)
@@ -1072,17 +1221,19 @@ class TransitModel:
         if route[0] == "ew":
             _, e, wr, emask = route
             f = self._get_compiled(False, ew=True)(
-                t0_off, per, a, e, wr, ci, rp, *ld, fp)
+                t, t0_off, per, a, e, wr, ci, rp, *ld, fp)
         elif route[0] == "circ":                      # w is irrelevant
             emask = None
             b = (a * ci if is_arr(params.a) or is_arr(params.inc)
                  else cast(float(params.a) * ci_py))
-            f = self._get_compiled(True)(t0_off, per, a, b, rp, *ld, fp)
+            f = self._get_compiled(True)(t, t0_off, per, a, b, rp, *ld, fp)
         else:
             _, k, h, _, _ = route
             emask = None
-            f = self._get_compiled(False)(t0_off, per, a, k, h, ci, rp,
+            f = self._get_compiled(False)(t, t0_off, per, a, k, h, ci, rp,
                                           *ld, fp)
+        if view is not None:
+            f = f[view[1]]
         return self._apply_masks(f, emask, gmask)
 
     # -- parameter preparation shared by the spherical and oblate paths ---
@@ -1384,7 +1535,8 @@ class TransitModel:
                                                           is_arr)
         f = cast(params.tidal_q if self._tidal else params.f)
         th = rad(0.0 if params.theta is None else params.theta)
-        head = (self._t_mx, t0_off, per, a)
+        view = self._event_view(params)
+        head = (self._t_mx if view is None else view[0], t0_off, per, a)
         mu = ()
         if self._tidal:
             mu = (cast(0.0 if params.mass_ratio is None else params.mass_ratio),)
@@ -1407,6 +1559,8 @@ class TransitModel:
             emask = None
             b = contact_geometry(a, cast(ev), h * sq, ci)[1]   # e sin w = h sqrt(e)
             out = model("kh")(*head, b, rp, f, th, last, k, h, *mu)
+        if view is not None:
+            out = out[view[1]]
         return self._apply_masks(out, emask, gmask)
 
     # -- ringed planets -------------------------------------------------------
@@ -1460,7 +1614,8 @@ class TransitModel:
         ring = (cast(f), rad(0.0 if params.theta is None else params.theta),
                 cast(params.ring_in), cast(params.ring_out),
                 cast(params.ring_f), cast(tau))
-        head = (self._t_mx, t0_off, per, a)
+        view = self._event_view(params)
+        head = (self._t_mx if view is None else view[0], t0_off, per, a)
         route = self._ecc_route(params, cast, rad, is_arr)
         if route[0] == "ew":
             _, e, wr, emask = route
@@ -1476,6 +1631,8 @@ class TransitModel:
             emask = None
             b = contact_geometry(a, cast(ev), h * sq, ci)[1]
             out = self._ring_fn("kh")(*head, b, rp, *ring, cast(uv), k, h)
+        if view is not None:
+            out = out[view[1]]
         return self._apply_masks(out, emask, gmask)
 
     # -- spotted stars ---------------------------------------------------------
@@ -1737,7 +1894,14 @@ class TransitModel:
         stream = self._stream
         ctx = mx.stream(stream) if stream is not None else _nullcontext()
         self._large = self._large_flag(cols["rp"])
+        view = None
+        if self.dtype == mx.float64:
+            view = self._view(cols["t0"], cols["per"], cols["a"], cols["inc"],
+                              cols["ecc"], cols["w"], self._view_extent(
+                                  cols["rp"], cols.get("f"),
+                                  cols.get("ring_out")))
         with ctx, large_occultors(self._large):
+            tt = (self._t_mx if view is None else view[0])[None, :]
             t0, per = col(cols["t0"] - self._t_ref), col(cols["per"])
             rp, a = col(cols["rp"]), col(cols["a"])
             ecc = cols["ecc"]
@@ -1775,7 +1939,7 @@ class TransitModel:
                 b_np = contact_geometry(
                     cols["a"], ecc, ecc * np.sin(w), np.cos(inc),
                     sqrt=np.sqrt, maximum=np.maximum)[1]
-                args = (self._t_mx[None, :], t0, per, a, col(b_np), rp,
+                args = (tt, t0, per, a, col(b_np), rp,
                         col(cols["f"]), col(np.radians(cols["theta"])),
                         col(cols["ring_in"]), col(cols["ring_out"]),
                         col(cols["ring_f"]), col(cols["ring_tau"]), uvec)
@@ -1800,7 +1964,7 @@ class TransitModel:
                 secondary = self.transittype == "secondary"
                 model = (self._oblate_eclipse_fn if secondary
                          else self._oblate_fn)
-                args = (self._t_mx[None, :], t0, per, a, col(b_np), rp,
+                args = (tt, t0, per, a, col(b_np), rp,
                         col(cols["tidal_q" if self._tidal else "f"]),
                         col(np.radians(cols["theta"])),
                         fp if secondary else uvec)
@@ -1827,8 +1991,8 @@ class TransitModel:
                     cols["a"], ecc, ecc * np.sin(w), np.cos(inc),
                     sqrt=np.sqrt, maximum=np.maximum)[1]
                 ld = (uvec,) if self._n_vec else (u1, u2)
-                out = self._batch_graph_fn(True)(t0, per, rp, a, k, h, ci,
-                                                 fp, col(b_np), *ld)
+                out = self._batch_graph_fn(True)(tt, t0, per, rp, a, k, h,
+                                                 ci, fp, col(b_np), *ld)
             elif (not self._n_vec and self.transittype == "primary"
                   and self._kernel_usable()):
                 # the fused model kernel, as light_curve uses it (see
@@ -1842,8 +2006,10 @@ class TransitModel:
                                               u1, u2)
             else:
                 ld = (uvec,) if self._n_vec else (u1, u2)
-                out = self._batch_graph_fn(False)(t0, per, rp, a, k, h, ci,
-                                                  fp, *ld)
+                out = self._batch_graph_fn(False)(tt, t0, per, rp, a, k, h,
+                                                  ci, fp, *ld)
+            if view is not None:
+                out = out[:, view[1]]
             res = np.array(out, dtype=np.float64)
         if (self.supersample_factor > 1
                 and self.integration == "supersample"):
@@ -1853,7 +2019,7 @@ class TransitModel:
 
     def _batch_graph_fn(self, contact: bool):
         """light_curves' spherical graph, compiled as light_curve's graphs
-        are; (n, 1) columns in, (n, len(t)) out. ``contact``: the contact
+        are; (1, m) times and (n, 1) columns in, (n, m) out. ``contact``: the contact
         rule, which takes b at conjunction after fp. The law's coefficients
         come last: (u1, u2), or the (n, n_w) vector of a vector law."""
         key = ("batch_graph", contact)
@@ -1861,10 +2027,9 @@ class TransitModel:
         if fn is not None:
             return fn
         vec = bool(self._n_vec)
-        tt = self._t_mx[None, :]
         dt = self.dtype
 
-        def body(t0, per, rp, a, k, h, ci, fp, ld, b=None):
+        def body(tt, t0, per, rp, a, k, h, ci, fp, ld, b=None):
             u1, u2, uvec = (None, None, ld[0]) if vec else (*ld, None)
             if not contact:
                 phi = (2.0 * math.pi) * (tt - t0) / per
@@ -1888,11 +2053,11 @@ class TransitModel:
             return mx.sum(f * W, axis=-1)
 
         if contact:
-            def raw(t0, per, rp, a, k, h, ci, fp, b, *ld):
-                return body(t0, per, rp, a, k, h, ci, fp, ld, b)
+            def raw(tt, t0, per, rp, a, k, h, ci, fp, b, *ld):
+                return body(tt, t0, per, rp, a, k, h, ci, fp, ld, b)
         else:
-            def raw(t0, per, rp, a, k, h, ci, fp, *ld):
-                return body(t0, per, rp, a, k, h, ci, fp, ld)
+            def raw(tt, t0, per, rp, a, k, h, ci, fp, *ld):
+                return body(tt, t0, per, rp, a, k, h, ci, fp, ld)
         fn = self._compiled[key] = mx.compile(raw)
         return fn
 

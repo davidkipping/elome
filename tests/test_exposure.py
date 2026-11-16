@@ -169,7 +169,7 @@ class TestIntegrationWithTheRest:
             f64 = lambda v: mx.array(float(v), dtype=mx.float64)
             b = 8.8 * math.cos(math.radians(87.07))
             g = mx.grad(lambda rp: mx.sum(fn(
-                f64(0.0), f64(3.456), f64(8.8), f64(b), rp,
+                m._t_mx, f64(0.0), f64(3.456), f64(8.8), f64(b), rp,
                 f64(0.4), f64(0.25), f64(0.0))))(f64(0.1))
             assert bool(mx.isfinite(g)) and float(g) < 0.0
 
@@ -188,7 +188,7 @@ class TestIntegrationWithTheRest:
                 0.1, 0.4, 0.25, 0.0)
         with mx.stream(mx.cpu):
             args = [mx.array(v, dtype=mx.float64) for v in vals]
-            g = mx.grad(lambda *v: mx.sum(fn(*v)),
+            g = mx.grad(lambda *v: mx.sum(fn(m._t_mx, *v)),
                         argnums=tuple(range(7)))(*args)
             mx.eval(g)
         for x in g:
