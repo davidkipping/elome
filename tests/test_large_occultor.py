@@ -652,3 +652,73 @@ def test_anvil_target_samples_large_occultors(b):
     lp, g = np.asarray(lp), np.asarray(g)
     assert np.isfinite(lp).all() and np.isfinite(g).all()
     assert lp.argmax() == 0
+
+
+# ---------------------------------------------------------------------------
+# ringed planets and spotted stars: an outline larger than the star
+# ---------------------------------------------------------------------------
+
+def _wd(**kw):
+    p = el.TransitParams()
+    p.t0, p.per, p.rp, p.a, p.ecc, p.w = 0.0, 1.4079, 7.28, 336.0, 0.0, 90.0
+    p.inc = math.degrees(math.acos(7.0 / 336.0))
+    p.limb_dark, p.u = "hybrid4", list(W["hybrid4"])
+    for k, v in kw.items():
+        setattr(p, k, v)
+    return p
+
+
+_OUTLINES = {
+    "ringed companion": (dict(ring_in=1.3, ring_out=1.8, ring_f=0.6, theta=20.0),
+                         np.linspace(-0.006, 0.006, 201)),
+    "spotted star": (dict(spots=[[10.0, 5.0, 10.0, 0.5]], prot=10.0),
+                     np.linspace(-0.006, 0.006, 201)),
+    "small planet, ring wider than the star": (
+        dict(rp=0.8, ring_in=1.3, ring_out=6.0, ring_f=0.6, theta=20.0, a=60.0,
+             per=30.0, inc=89.8), np.linspace(-0.6, 0.6, 301)),
+}
+
+
+@pytest.mark.skipif(not KERNEL, reason="Metal unavailable")
+@pytest.mark.parametrize("name", list(_OUTLINES))
+def test_fp32_ring_and_spot_kernels_beyond_the_star(name):
+    """The even columns of an outline larger than the star come from
+    quadrature (oblate._even_arc_gl, metal_rings._RG_LARGE): float32 was
+    off by 1e-3 at rp = 7.28 and by 9e-5 for a ring edge at 4.8 stellar
+    radii."""
+    kw, t = _OUTLINES[name]
+    p = _wd(**kw)
+    f64 = el.TransitModel(p, t).light_curve(p)
+    f32 = el.TransitModel(p, t, dtype=mx.float32).light_curve(p)
+    assert 1.0 - f64.min() > 0.3
+    assert np.abs(f32 - f64).max() < 2e-6
+
+
+@pytest.mark.parametrize("name", ["ringed companion", "spotted star"])
+def test_fp32_ring_and_spot_graphs_beyond_the_star(name):
+    kw, t = _OUTLINES[name]
+    p = _wd(**kw)
+    f64 = el.TransitModel(p, t).light_curve(p)
+    f32 = el.TransitModel(p, t, dtype=mx.float32, use_metal=False).light_curve(p)
+    assert np.abs(f32 - f64).max() < 2e-6
+
+
+@pytest.mark.skipif(not KERNEL, reason="Metal unavailable")
+def test_ring_array_r_takes_the_large_form_only_when_declared():
+    """As for the spherical planet: an array r says nothing about its size,
+    so the ring kernels build the quadrature in only on large_occultor=True;
+    their ordinary source is unchanged."""
+    from elome.metal_rings import _rg_header
+    tau = np.linspace(-0.006, 0.006, 201)
+    kw = dict(limb_dark="hybrid4", u=list(W["hybrid4"]), ring_in=1.3,
+              ring_out=1.8, ring_f=0.6, theta=0.3)
+    with mx.stream(mx.cpu):
+        ref = np.asarray(flux_dev_from_tau(f64(tau), 1.4079, 336.0, 7.0, 7.28, **kw))
+    r32 = mx.array([7.28], dtype=mx.float32)
+    plain = np.asarray(flux_dev_from_tau(f32(tau), 1.4079, 336.0, 7.0, r32, **kw),
+                       dtype=np.float64)
+    big = np.asarray(flux_dev_from_tau(f32(tau), 1.4079, 336.0, 7.0, r32,
+                                       large_occultor=True, **kw), dtype=np.float64)
+    assert np.abs(big - ref).max() < 2e-6 < np.abs(plain - ref).max()
+    assert "t_val(A) > 1.0f" not in _rg_header("hybrid4")
+    assert "t_val(A) > 1.0f" in _rg_header("hybrid4", large=True)

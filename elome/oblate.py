@@ -503,6 +503,42 @@ def _q_coeffs(S0, S1, S2, K0, K1, n_max):
     return q
 
 
+# Gauss-Legendre nodes per arc for an outline larger than the star
+# (_even_arc_gl): 1e-15 in float64 on arcs up to ~5 rad, the float32
+# result at the rounding of its own inputs
+_GL_ARC = 16
+
+
+def _even_arc_gl(x0, y0, a, b, lo, hi, n_max):
+    """_even_arc's integral, the integral of h_n(s) K over [lo, hi], by
+    Gauss-Legendre quadrature on the arc. For an outline larger than the
+    star the Fourier coefficients of h_n(s) K grow as its size^(2 n + 2)
+    and cancel to order 1 (|P| <= 1 on any arc on the star), losing
+    ~size^6 eps for mu^4; pointwise every factor is of order 1 there, and
+    K = x y' - y x' is formed from the point itself, so the quadrature
+    loses ~size eps, the rounding of the inputs. Endpoints frozen and
+    coefficients live, as _even_arc's."""
+    from .exposure import gauss_legendre
+    xg, wg = gauss_legendre(_GL_ARC)
+    dt = x0.dtype
+    t = mx.array(0.5 * (np.asarray(xg) + 1.0), dtype=dt)
+    w = mx.array(0.5 * np.asarray(wg), dtype=dt)
+    L = (hi - lo)[..., None]
+    sp, cp = sincos(lo[..., None] + L * t)
+    a_, b_ = a[..., None], b[..., None]
+    x, y = x0[..., None] + a_ * cp, y0[..., None] + b_ * sp
+    s = x * x + y * y
+    K = x * (b_ * cp) + y * (a_ * sp)
+    al = _alpha(n_max)
+    out = []
+    for n in range(n_max + 1):
+        h = 0.0 * s + float(al[n, n])
+        for p in range(n - 1, -1, -1):
+            h = h * s + float(al[n, p])
+        out.append(L[..., 0] * mx.sum(w * h * K, axis=-1))
+    return out
+
+
 def _even_arc(q, lo, hi):
     """Psi_n(hi) - Psi_n(lo) along one ellipse arc, n = 0..n_max."""
     mid, half = 0.5 * (lo + hi), 0.5 * (hi - lo)

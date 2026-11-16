@@ -62,7 +62,8 @@ import numpy as np
 
 from .dtypes import fp64_on_cpu
 from .hybrid import _combine, combine_cols, get_law
-from .oblate import (_C, _F_SW, _N_MAX, _alpha, _coeffs, _csqrt, _cwhere, _even_arc, _mod2pi,
+from .oblate import (_C, _F_SW, _N_MAX, _alpha, _coeffs, _csqrt, _cwhere, _even_arc,
+                     _even_arc_gl, _mod2pi,
                      _pole_arc, _q_coeffs, _to_dtype)
 from .rings import (_BIG, _S1_CENTRED, _TINY, _arcs, _centred, _circle_roots, _crossings,
                     _h)
@@ -192,7 +193,7 @@ def _hs(eps):
 
 
 def _outline_cols(coef, pole_coef, roots, cen, LO, HI, kappa, OK, sky_live, sky_frozen, eps,
-                  s2=None, turn=None):
+                  s2=None, turn=None, big=None):
     """kappa-weighted arc integrals of one outline over the arcs [LO, HI]
     (trailing axis), with the corner terms: a list of columns.
 
@@ -204,7 +205,8 @@ def _outline_cols(coef, pole_coef, roots, cen, LO, HI, kappa, OK, sky_live, sky_
     tangent, which adds [g(s_lo) - g(s_hi)] d(phi), g = h s, to each arc's
     corner term, with (s_lo - s_hi) / |n_xy| = turn[1](LO, HI) formed
     without cancellation. s2: (a^2 - b^2) / 4 given (live), in place of
-    the coefficients'."""
+    the coefficients'. big: the lanes whose outline is larger than the
+    star, whose even columns come from oblate._even_arc_gl (None: none)."""
     shp = LO.shape
     bx = lambda v: mx.broadcast_to(v[..., None], shp)
     X0, Y0, A, B = (bx(v) for v in coef)
@@ -212,6 +214,9 @@ def _outline_cols(coef, pole_coef, roots, cen, LO, HI, kappa, OK, sky_live, sky_
     if s2 is not None:
         S2 = bx(s2)
     cols = list(_even_arc(_q_coeffs(S0, S1, S2, K0, K1, _N_MAX), LO, HI))
+    if big is not None:
+        gl = _even_arc_gl(X0, Y0, A, B, LO, HI, _N_MAX)
+        cols = [mx.where(bx(big), g_, c_) for g_, c_ in zip(gl, cols)]
     pS = _coeffs(*(bx(v) for v in pole_coef))
     if s2 is not None:
         pS = (pS[0], pS[1], mx.where(bx(cen), pS[2], S2), pS[3], pS[4])
@@ -268,9 +273,11 @@ def _g_diff(n_or_p, s_lo, s_hi, ds, even):
 # the columns
 # --------------------------------------------------------------------------
 
-def _region_cols(X, Y, rp, spots, c, law, dt):
+def _region_cols(X, Y, rp, spots, c, law, dt, large=False):
     """Occulted generator columns (positive): the integral of w I over the
-    disc. spots: list of (nx, ny, nz, alpha); c: list of contrasts."""
+    disc. spots: list of (nx, ny, nz, alpha); c: list of contrasts.
+    ``large``: the planet may be larger than the star (its outline's even
+    columns then by quadrature; the spots' rims are on the star)."""
     eps = law.eps
     K = len(spots)
     ncol = 3 + len(eps)
@@ -346,7 +353,7 @@ def _region_cols(X, Y, rp, spots, c, law, dt):
         s, c_ = sincos(psi)
         return gX[..., None] + grp[..., None] * c_, gY[..., None] + grp[..., None] * s
     cols = _outline_cols((X, Y, rp, rp), pcoef, roots, cen, LO, HI, kappa, OK,
-                         p_live, p_frozen, eps)
+                         p_live, p_frozen, eps, big=grp > 1.0 if large else None)
     occ = [o + v for o, v in zip(occ, cols)]
 
     # ---- each rim -------------------------------------------------------------
@@ -432,6 +439,16 @@ def _prep(X, Y, rp, n, alpha, contrast):
     return X, Y, rp, spots, [cb[..., k] for k in range(K)]
 
 
+def _large_planet(rp):
+    """May the planet be larger than the star? From a host rp, or for an
+    array as hybrid.large_occultors declares (no declaration: no)."""
+    from .hybrid import _LARGE, _UNDECLARED
+    if isinstance(rp, mx.array):
+        flag = _LARGE.get()
+        return False if flag is _UNDECLARED or flag is False else True
+    return bool(np.max(np.asarray(rp, np.float64)) > 1.0)
+
+
 def generator_cols_spots(X, Y, rp, n, alpha, contrast, law):
     """Generator deviation columns [E0, E1, E2, P_k...] (minus the integral
     of w I over the disc, for mu^0, mu^2, mu^4 and each pole of ``law``) of
@@ -440,8 +457,9 @@ def generator_cols_spots(X, Y, rp, n, alpha, contrast, law):
     spots' unit centre vectors, alpha (..., K) their angular radii
     (radians), contrast (..., K) their intensity ratios."""
     law = get_law(law)
+    large = _large_planet(rp)
     X, Y, rp, spots, c = _prep(X, Y, rp, n, alpha, contrast)
-    occ = _region_cols(X, Y, rp, spots, c, law, X.dtype)
+    occ = _region_cols(X, Y, rp, spots, c, law, X.dtype, large)
     return [-o for o in occ]
 
 
@@ -457,20 +475,22 @@ def shape_cols_spots(X, Y, rp, n, alpha, contrast, law) -> mx.array:
     (radians); contrast (..., K) their intensities over the photosphere's.
     All cast to X's dtype; float64 on the CPU stream unless float32."""
     law = get_law(law)
+    large = _large_planet(rp)
     X, Y, rp, spots, c = _prep(X, Y, rp, n, alpha, contrast)
     args = [X, Y, rp] + [v for s in spots for v in s] + c
     from .metal import _gpu_stream_active
     if _gpu_stream_active():
-        return _shape_cols(law, len(spots))(*args)
-    return _shape_cols_compiled(law, len(spots))(*args)
+        return _shape_cols(law, len(spots), large)(*args)
+    return _shape_cols_compiled(law, len(spots), large)(*args)
 
 
-def _shape_cols(law, K):
+def _shape_cols(law, K, large=False):
     S = law.generator_matrix()
 
     def cols(X, Y, rp, *rest):
         spots = [tuple(rest[4 * k:4 * k + 4]) for k in range(K)]
-        occ = _region_cols(X, Y, rp, spots, list(rest[4 * K:]), law, X.dtype)
+        occ = _region_cols(X, Y, rp, spots, list(rest[4 * K:]), law, X.dtype,
+                           large)
         gen = [-o for o in occ]
         return mx.stack([gen[0]] + [_combine(gen, S[j]) for j in range(law.n_w)], axis=-1)
     return cols
@@ -483,11 +503,11 @@ def _shape_cols(law, K):
 _COMPILED = {}
 
 
-def _shape_cols_compiled(law, K):
-    key = (law.definition, K)
+def _shape_cols_compiled(law, K, large=False):
+    key = (law.definition, K, bool(large))
     fn = _COMPILED.get(key)
     if fn is None:
-        fn = _COMPILED[key] = mx.compile(_shape_cols(law, K))
+        fn = _COMPILED[key] = mx.compile(_shape_cols(law, K, large))
     return fn
 
 

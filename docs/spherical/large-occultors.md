@@ -1,10 +1,11 @@
 # Companions larger than their star
 
 A planet transiting a white dwarf can be several times larger than its
-star (WD 1856+534 b has $R_p/R_\star = 7.28$). For a spherical planet
-every entry point accepts `rp > 1`, with every limb-darkening law, in
-both precisions, with gradients. A ringed planet or a spotted star with
-`rp > 1` needs float64 (below).
+star (WD 1856+534 b has $R_p/R_\star = 7.28$). Every entry point
+accepts `rp > 1`, with every limb-darkening law, in both precisions, with
+gradients, for a spherical planet, a ringed one and a planet crossing
+starspots alike. A ring may also be wider than the star around a planet
+that is not.
 
 A fourth regime then appears beside no overlap, partial overlap and a
 planet fully inside the disc: **total occultation**, $z \le r_p - 1$
@@ -86,10 +87,14 @@ table. With the polynomial law, use float64.
   `flux_dev_hybrid`, `shape_cols`, `make_hybrid_transit_flux` and
   `make_eclipse_flux` take it. Without it, the error beyond `rp = 1`
   grows as for the polynomial law.
-- **Ringed planets and spotted stars** do not have the large-occultor
-  form in their float32 kernels. Beyond `rp = 1` their float32 error
-  grows quickly with `rp`: for hybrid4 about $10^{-3}$ at `rp = 7.28`
-  and over $0.2$ at `rp = 20`. Use float64 for them.
+- **Ringed planets and spotted stars** have the same form for any
+  outline larger than the star: the planet when `rp > 1`, and a ring
+  edge wider than the star even around a planet smaller than it. Their
+  float32 error stays near $5\times10^{-7}$ (at `rp = 7.28`; a few
+  $10^{-6}$ for a ring edge 36 stellar radii across, the rounding of its
+  float32 inputs). `TransitModel` decides from `rp`, `ring_out` and `f`;
+  a direct call with them as arrays declares `large_occultor=True` as
+  above.
 - **`rp = 1` exactly** is a degenerate point, where the contacts meet at
   $z = 0$. The result there is good to $5\times10^{-9}$ in float64 and
   $10^{-4}$ in float32, and finite everywhere.

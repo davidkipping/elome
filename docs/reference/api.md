@@ -224,8 +224,11 @@ Args:
         A parameter array of another dtype is cast to tau's. For
         ``mx.grad`` with respect to a float64 parameter, make the
         ``mx.grad`` call itself under ``mx.stream(mx.cpu)`` (MLX).
-        Expected to lie within half a period of it -- that is what "its
-        own" means.
+        It must lie within half a period of it -- that is what "its
+        own" means: beyond P/2 the float32 kernels see no transit
+        (F - 1 = 0, or fp for an eclipse) while the float64 graph sees
+        the next one. Wrap first, ``tau - period * mx.round(tau /
+        period)``, if times may stray.
     period, a, b, r, u1, u2: scalars or (n,), broadcast per chain as
         ``flux_dev_metal`` does. ``a`` is a/R*, ``b`` the impact
         parameter at conjunction, ``r`` = Rp/R*, ``u1``/``u2`` quadratic
@@ -255,11 +258,13 @@ Args:
         its (n, m, 1 + n_w) shape-basis columns B = [E0, S_1..S_n],
         and ``flux - 1 == (B @ c)/(N @ c)`` with ``c = (1, -w)``,
         ``N = hybrid.hybrid_norms(law)``.
-    large_occultor: a hybrid law with ``r`` that may exceed 1, given
-        as an array (a scalar decides for itself): True builds in the
-        large-occultor form of its columns, accurate at any r. The
-        default leaves it out, for speed: beyond r = 1 the float32
-        error then grows as r^5 (hybrid4: 6e-4 at r = 7.28).
+    large_occultor: a hybrid law with ``r`` that may exceed 1 -- for
+        a ringed planet, an outline (``r * ring_out``, or the oblate
+        planet's long axis) that may exceed the star -- given as an
+        array (scalars decide for themselves): True builds in the
+        large-occultor form of its columns, accurate at any size. The
+        default leaves it out, for speed: beyond the star the float32
+        error then grows as the size^5 (hybrid4: 6e-4 at r = 7.28).
         TransitModel and anvil's targets set it themselves.
     f, theta: an oblate planet (``elome.oblate``): projected
         flattening f = 1 - B/A and the sky angle of its long axis from

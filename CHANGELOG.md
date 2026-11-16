@@ -151,9 +151,21 @@ every release is tagged `vX.Y.Z` in git.
   number from its value, on every route. A direct call with `r` as an
   array opts in with `large_occultor=True`: `flux_dev_from_tau`,
   `flux_dev_metal`, `flux_dev_hybrid`, `shape_cols`,
-  `make_hybrid_transit_flux` and `make_eclipse_flux` take it. Ringed
-  planets and spotted stars do not have the new form: beyond `rp = 1`
-  they need float64.
+  `make_hybrid_transit_flux` and `make_eclipse_flux` take it.
+- **Ringed planets and spotted stars with an outline larger than the
+  star.** The planet's outline (`rp > 1`) or a ring edge wider than the
+  star (around any planet) was integrated from Fourier coefficients that
+  grow as its size to the sixth power and cancel to order 1: in float32
+  a ringed or spotted companion at `rp = 7.28` was off by 1e-3 to 4e-3,
+  and by 0.2 at `rp = 20`; a ring edge 4.8 stellar radii across around
+  a planet of `rp = 0.8`, by 9e-5. Those outlines' even columns now come
+  from Gauss-Legendre quadrature along each arc, whose factors are all of
+  order 1 there: 5e-7 in float32 at `rp = 7.28`, in the kernels and the
+  graphs. As for the spherical planet, the quadrature is built in only
+  where an outline may exceed the star -- `TransitModel` decides from
+  `rp`, `ring_out` and `f`, the anvil targets from their bounds, and
+  `flux_dev_from_tau` from `large_occultor` -- so the kernels for
+  smaller outlines are exactly what they were.
 - **Gradients of the float64 graph functions at exact coincidences.**
   `flux_dev`, `flux_dev_poly` and `flux_dev_hybrid` returned wrong
   reverse-mode gradients (right values) at `z == r` (d/dz -0.26 for
@@ -211,6 +223,10 @@ every release is tagged `vX.Y.Z` in git.
   not 3–9×10⁻⁶. The polynomial law in float32 is unusable for large
   occultors (2×10⁻² at `rp = 20`). The page now recommends a hybrid law
   in float32, or float64.
+- **`tau`'s range in the sampler API.** `tau` must lie within half a
+  period of its own mid-transit: beyond it the float32 kernels see no
+  transit while the float64 graph sees the next one. The docstring and
+  the sampler guide now say so, with the wrap to apply.
 - **Corrections and gaps across the guides.** The fitting page's first
   example now runs from data to posterior samples, and says that the
   default quadratic target is instantaneous. The gradients guide says

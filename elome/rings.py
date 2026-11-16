@@ -58,7 +58,7 @@ import numpy as np
 
 from .dtypes import fp64_on_cpu
 from .hybrid import _combine, combine_cols, get_law
-from .oblate import (_C, _F_SW, _N_MAX, _alpha, _coeffs, _cwhere, _even_arc,
+from .oblate import (_C, _F_SW, _N_MAX, _alpha, _coeffs, _cwhere, _even_arc, _even_arc_gl,
                      _limb_candidates, _mod2pi, _pole_arc, _q_coeffs, _roots,
                      _to_dtype, axes)
 from .trig import sincos
@@ -289,11 +289,12 @@ def _weight(flags, T):
     return mx.where(flags[0], 1.0, band)
 
 
-def _region_cols(x0, y0, conics, T, law, dt):
+def _region_cols(x0, y0, conics, T, law, dt, large=False):
     """Occulted generator columns (positive) of the weighted occultor:
     conics[0] the planet, conics[1:] the ring edges innermost first (all
     concentric at (x0, y0), coaxial); T[k] the blocked fraction between
-    edges k and k + 1."""
+    edges k and k + 1. ``large``: an outline may be larger than the star,
+    whose even columns then come from oblate._even_arc_gl."""
     eps = law.eps
     n_c = len(conics)
     gx0, gy0 = _sg(x0), _sg(y0)
@@ -354,6 +355,10 @@ def _region_cols(x0, y0, conics, T, law, dt):
         S0, S1, S2, K0, K1 = _coeffs(X0, Y0, A, B)
         q = _q_coeffs(S0, S1, S2, K0, K1, _N_MAX)
         cols = list(_even_arc(q, LO, HI))
+        if large:
+            big = bx(ga > 1.0)
+            gl = _even_arc_gl(X0, Y0, A, B, LO, HI, _N_MAX)
+            cols = [mx.where(big, g_, c_) for g_, c_ in zip(gl, cols)]
         cen = bx(_centred(gx0, gy0, ga, dt) & circ[k])
         # the general pole branch on a centred circle's lanes gets a safe,
         # gradient-free offset (its roots are taken there too): a masked
@@ -406,12 +411,30 @@ def _region_cols(x0, y0, conics, T, law, dt):
     return occ
 
 
-def generator_cols_ring(x0, y0, rp, f, ring_in, ring_out, ring_f, ring_tau, law):
+def _large_outlines(rp, f, ring_out):
+    """May an outline be larger than the star (rings._region_cols)? From
+    host values, rp max(ring_out, 1 / sqrt(1 - f)) > 1; for arrays, as
+    hybrid.large_occultors declares (no declaration: no)."""
+    from .hybrid import _LARGE, _UNDECLARED
+    if any(isinstance(v, mx.array) for v in (rp, f, ring_out)):
+        flag = _LARGE.get()
+        return False if flag is _UNDECLARED or flag is False else True
+    R = np.asarray(rp, np.float64) * np.maximum(
+        np.asarray(ring_out, np.float64),
+        1.0 / np.sqrt(1.0 - np.asarray(f, np.float64)))
+    return bool(np.max(R) > 1.0)
+
+
+def generator_cols_ring(x0, y0, rp, f, ring_in, ring_out, ring_f, ring_tau, law,
+                        large=None):
     """Generator deviation columns [E0, E1, E2, P_k...] (minus the occulted
     flux of mu^0, mu^2, mu^4 and each pole of ``law``) of a ringed planet,
     elementwise over broadcast arguments. (x0, y0): the planet's centre in
-    the principal frame (``oblate.principal_frame``)."""
+    the principal frame (``oblate.principal_frame``). ``large``: whether an
+    outline may exceed the star (None: _large_outlines decides)."""
     law = get_law(law)
+    if large is None:
+        large = _large_outlines(rp, f, ring_out)
     dt = x0.dtype
     y0, rp, f, ring_in, ring_out, ring_f, ring_tau = (
         _to_dtype(v, dt) for v in (y0, rp, f, ring_in, ring_out, ring_f, ring_tau))
@@ -423,7 +446,7 @@ def generator_cols_ring(x0, y0, rp, f, ring_in, ring_out, ring_f, ring_tau, law)
     planet, edges = ring_axes(rp, f, ring_in, ring_out, ring_f)
     conics = [(planet[0] + zero, planet[1] + zero)] + [(a + zero, b + zero) for a, b in edges]
     T = [ring_opacity(ring_tau, ring_f) + zero]
-    occ = _region_cols(x0, y0, conics, T, law, dt)
+    occ = _region_cols(x0, y0, conics, T, law, dt, large)
     return [-o for o in occ]
 
 
@@ -437,19 +460,20 @@ def shape_cols_ring(x0, y0, rp, f, ring_in, ring_out, ring_f, ring_tau, law) -> 
     law = get_law(law)
     dt = x0.dtype
     _check_ring(f, ring_in, ring_out, ring_f, ring_tau)
+    large = _large_outlines(rp, f, ring_out)
     args = [_to_dtype(v, dt) for v in (y0, rp, f, ring_in, ring_out, ring_f, ring_tau)]
     from .metal import _gpu_stream_active
     if _gpu_stream_active():
-        return _shape_cols(law)(x0, *args)
-    return _shape_cols_compiled(law)(x0, *args)
+        return _shape_cols(law, large)(x0, *args)
+    return _shape_cols_compiled(law, large)(x0, *args)
 
 
-def _shape_cols(law):
+def _shape_cols(law, large=False):
     S = law.generator_matrix()
 
     def cols(x0, y0, rp, f, ring_in, ring_out, ring_f, ring_tau):
         gen = generator_cols_ring(x0, y0, rp, f, ring_in, ring_out, ring_f,
-                                  ring_tau, law)
+                                  ring_tau, law, large)
         return mx.stack([gen[0]] + [_combine(gen, S[j]) for j in range(law.n_w)],
                         axis=-1)
     return cols
@@ -464,10 +488,11 @@ def _shape_cols(law):
 _COMPILED = {}
 
 
-def _shape_cols_compiled(law):
-    fn = _COMPILED.get(law.definition)
+def _shape_cols_compiled(law, large=False):
+    key = (law.definition, bool(large))
+    fn = _COMPILED.get(key)
     if fn is None:
-        fn = _COMPILED[law.definition] = mx.compile(_shape_cols(law))
+        fn = _COMPILED[key] = mx.compile(_shape_cols(law, large))
     return fn
 
 

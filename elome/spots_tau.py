@@ -723,10 +723,15 @@ def flux_dev_spots_tau(tau, ts, period, a, b, r, prot, istar, lam, spots4, law, 
     tau is float32; float32 on the GPU stream takes the Metal kernels
     (``metal_spots``) unless ``use_metal`` is False. Not under mx.compile
     or vmap."""
+    from .hybrid import large_occultors
+    from .spots import _large_planet
     law = get_law(law)
     if tau.ndim not in (1, 2):
         raise ValueError(f"tau must be (m,) or (n, m); got {tau.shape}")
     _check_spots(spots4, degrees)
+    # may the planet exceed the star? From the caller's r: below it is an
+    # array, which alone would read as undeclared
+    large = _large_planet(r)
     _refuse_transforms([tau, ts, period, a, b, r, prot, istar, lam, spots4, u, k, h])
     if exp_time == 0.0:
         mode = M._INT_NONE
@@ -792,8 +797,10 @@ def flux_dev_spots_tau(tau, ts, period, a, b, r, prot, istar, lam, spots4, law, 
     # evaluation points per time: under the contact rule the active nodes
     # (_active_pieces), typically one or two pieces of n_gl
     nodes = {M._INT_NONE: 1, M._INT_SUPER: max(int(n_sub), 1)}.get(mode, 2 * int(n_gl))
-    out = _in_blocks(run, t2d, [*pc[:7], sp, w2d, *kh], nodes,
-                     _SPOT_BLOCK_KERNEL if kernel else _SPOT_BLOCK, per_time=per_time)
+    with large_occultors(large):
+        out = _in_blocks(run, t2d, [*pc[:7], sp, w2d, *kh], nodes,
+                         _SPOT_BLOCK_KERNEL if kernel else _SPOT_BLOCK,
+                         per_time=per_time)
     ok = _spots_ok(sp)[:, None]
     out = mx.where(ok[..., None] if basis else ok, out, mx.nan)
     return out[0] if squeeze and n == 1 else out

@@ -301,11 +301,16 @@ def flux_dev_from_tau_ring(tau, period, a, b, r, f, theta, ring_in, ring_out,
     ring Metal kernels (``metal_rings``) unless ``use_metal`` is False;
     anything else runs this graph, fp64 on the CPU stream. ``ew``: (k, h)
     hold (e, w [rad]) -- TransitModel's array-ecc route."""
+    from .hybrid import large_occultors
     from .metal_hybrid import _canon_w
+    from .rings import _large_outlines
     law = get_law(law)
     if tau.ndim not in (1, 2):
         raise ValueError(f"tau must be (m,) or (n, m); got {tau.shape}")
     _check_ring(f, ring_in, ring_out, ring_f, ring_tau)
+    # may an outline exceed the star? From the caller's values: below they
+    # are arrays, which alone would read as undeclared
+    large = _large_outlines(r, f, ring_out)
     squeeze = tau.ndim == 1
     tau2d = tau[None, :] if squeeze else tau
     ecc = k is not None
@@ -327,7 +332,7 @@ def flux_dev_from_tau_ring(tau, period, a, b, r, f, theta, ring_in, ring_out,
         from .metal_rings import flux_dev_from_tau_ring_kernel
         out = flux_dev_from_tau_ring_kernel(
             tau2d, *pc[:10], w2d, exp_time, mode, n_gl, n_sub, law,
-            basis=basis, k=kh[0], h=kh[1], ew=ew)
+            basis=basis, k=kh[0], h=kh[1], ew=ew, large=large)
     else:
         # the contact rule's kinks depend on the parameters alone: once per
         # set, not per block
@@ -339,9 +344,10 @@ def flux_dev_from_tau_ring(tau, period, a, b, r, f, theta, ring_in, ring_out,
             *p10, w, kk, hh, kn = rows
             return _tau_graph(tt, *p10, w, exp_time, mode, n_gl, n_sub, law,
                               basis=basis, k=kk, h=hh, ew=ew, kinks=kn)
-        out = _in_blocks(run, tau2d, [*pc[:10], w2d, *kh, kinks],
-                         _nodes_per_time(exp_time, mode, n_gl, n_sub),
-                         _RING_BLOCK)
+        with large_occultors(large):
+            out = _in_blocks(run, tau2d, [*pc[:10], w2d, *kh, kinks],
+                             _nodes_per_time(exp_time, mode, n_gl, n_sub),
+                             _RING_BLOCK)
     ok = _ring_ok(*pc[3:5], *pc[6:10])[:, None]
     out = mx.where(ok[..., None] if basis else ok, out, mx.nan)
     return out[0] if squeeze and n == 1 else out

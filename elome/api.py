@@ -692,18 +692,31 @@ class TransitModel:
         never share a trace."""
         return self._compiled_sets.setdefault(self._large, {})
 
-    def _large_flag(self, rp):
-        """The large_occultors flag for this evaluation: may r exceed 1?
-        Declared only for a hybrid law on a spherical planet (the one model
-        with an r > 1 form), and None when rp is traced."""
-        if (self._hlaw is None or self._oblate or self._ringed
-                or self._spotted or rp is None):
+    def _large_flag(self, rp, f=None, ring_out=None):
+        """The large_occultors flag for this evaluation: may an occultor's
+        outline exceed the star -- r for a spherical planet, crossing spots
+        or not, and r max(ring_out, 1 / sqrt(1 - f)) for a ringed one?
+        Declared for the hybrid laws' spherical, spotted and ringed models
+        (the ones with a large-occultor form); None when a value is
+        traced."""
+        if (self._hlaw is None or rp is None
+                or (self._oblate and not self._ringed)):
             return None
-        if isinstance(rp, mx.array):
-            rp = _scalar_value(rp) if rp.ndim == 0 else None
-            if rp is None:
+
+        def host(v):
+            if isinstance(v, mx.array):
+                return _scalar_value(v) if v.ndim == 0 else None
+            return np.asarray(v, dtype=np.float64)
+        R = host(rp)
+        if R is None:
+            return None
+        if self._ringed:
+            ro = host(ring_out)
+            fv = host(0.0 if f is None else f)
+            if ro is None or fv is None:
                 return None
-        return bool(np.max(np.asarray(rp, dtype=np.float64)) > 1.0)
+            R = R * np.maximum(ro, 1.0 / np.sqrt(1.0 - fv))
+        return bool(np.max(R) > 1.0)
 
     def _require(self, get, names):
         """Raise for a parameter left as None: batched or not, a missing
@@ -1133,7 +1146,8 @@ class TransitModel:
 
     def _model_eval(self, params, uv, grad=True) -> mx.array:
         """_model_eval_set under the large_occultors flag of params.rp."""
-        self._large = self._large_flag(params.rp)
+        self._large = self._large_flag(params.rp, getattr(params, "f", None),
+                                       getattr(params, "ring_out", None))
         with large_occultors(self._large):
             return self._model_eval_set(params, uv, grad)
 
@@ -1893,7 +1907,8 @@ class TransitModel:
 
         stream = self._stream
         ctx = mx.stream(stream) if stream is not None else _nullcontext()
-        self._large = self._large_flag(cols["rp"])
+        self._large = self._large_flag(cols["rp"], cols.get("f"),
+                                       cols.get("ring_out"))
         view = None
         if self.dtype == mx.float64:
             view = self._view(cols["t0"], cols["per"], cols["a"], cols["inc"],

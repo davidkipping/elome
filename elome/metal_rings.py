@@ -58,6 +58,30 @@ _NKINK = 24                     # rings_tau: 3 outlines x _N_EVENTS
 # device code
 # ---------------------------------------------------------------------------
 
+_RG_LARGE = """    // an outline larger than the star (built in only where one may be,
+    // _rg_header): the Fourier coefficients above grow as A^(2p + 2) and
+    // cancel to order 1, so E[p] = the integral of s^p K over the arc by
+    // Gauss-Legendre instead (oblate._even_arc_gl), every factor of order
+    // 1 on an arc on the star; B from K0 = A B
+    if (t_val(A) > 1.0f) {
+        const float gx[16] = {-9.894009350e-01f, -9.445750231e-01f, -8.656312024e-01f, -7.554044084e-01f, -6.178762444e-01f, -4.580167777e-01f, -2.816035508e-01f, -9.501250984e-02f, 9.501250984e-02f, 2.816035508e-01f, 4.580167777e-01f, 6.178762444e-01f, 7.554044084e-01f, 8.656312024e-01f, 9.445750231e-01f, 9.894009350e-01f};
+        const float gw[16] = {2.715245941e-02f, 6.225352394e-02f, 9.515851168e-02f, 1.246289713e-01f, 1.495959888e-01f, 1.691565194e-01f, 1.826034150e-01f, 1.894506105e-01f, 1.894506105e-01f, 1.826034150e-01f, 1.691565194e-01f, 1.495959888e-01f, 1.246289713e-01f, 9.515851168e-02f, 6.225352394e-02f, 2.715245941e-02f};
+        T Bq = K0 / A;
+        float hq = 0.5f * (hi - lo);
+        for (int p = 0; p < 3; ++p) E[p] = T(0.0f);
+        for (int j = 0; j < 16; ++j) {
+            float ph = lo + hq * (1.0f + gx[j]);
+            float sq = metal::precise::sin(ph), cq = metal::precise::cos(ph);
+            T x = x0 + A * cq, y = y0 + Bq * sq;
+            T sv = x * x + y * y;
+            T wK = (hq * gw[j]) * (x * (Bq * cq) + y * (A * sq));
+            E[0] = E[0] + wK;
+            E[1] = E[1] + wK * sv;
+            E[2] = E[2] + wK * sv * sv;
+        }
+    }
+"""
+
 _RG_FN = r"""
 // ============================ ringed planets ============================
 constant float RG_BIG = 1e8f;           // the root at infinity (rings._BIG)
@@ -224,6 +248,7 @@ inline void rg_arc(T x0, T y0, T A, T S0, cx<T> S1, T S2, T K0, cx<T> K1,
         }
         E[p] = acc;
     }
+RG_LARGE
     for (int n = 0; n < 3; ++n) {
         T acc = T(0.0f);
         for (int p = 0; p <= n; ++p) acc = acc + RG_AL[n][p] * E[p];
@@ -596,8 +621,11 @@ inline float rg_phot_d(float X, float Y, float r, float fl, float cth,
 """
 
 
-def _rg_header(law) -> str:
-    src = _RG_FN
+def _rg_header(law, large=False) -> str:
+    """The ring device functions; ``large`` splices _RG_LARGE into rg_arc
+    (an outline that may exceed the star). Without it the source is
+    exactly what it was."""
+    src = _RG_FN.replace("RG_LARGE\n", _RG_LARGE if large else "")
     for k, v in MO._OB_CONST.items():
         src = src.replace(k, v)
     return M._subst(src)
@@ -766,21 +794,22 @@ def _src(body, orbit, law, basis, vjp):
     return M._tau_src(s)
 
 
-def _header(law, orbit):
-    return MO._header(law, orbit) + _rg_header(law)
+def _header(law, orbit, large=False):
+    return MO._header(law, orbit) + _rg_header(law, large)
 
 
-def _get_kernels(law, orbit: str, basis: bool):
+def _get_kernels(law, orbit: str, basis: bool, large: bool = False):
     law = get_law(law)
-    key = ("ring", law.definition, orbit, basis)
+    key = ("ring", law.definition, orbit, basis) + (("large",) if large else ())
     if key not in M._kernels:
-        hdr = _header(law, orbit)
+        hdr = _header(law, orbit, large)
         ins = (["taui", "perin", "ain"] + MO._OB_ORBITS[orbit]["inputs"]
                + ["rin", "fin", "thin", "riin", "roin", "crin", "Tin"]
                + ([] if basis else ["win"])
                + ["ks", "xg", "wg", "expt", "mode", "ngl", "nsub", "npart",
                   "npts"])
-        tag = f"{_law_tag(law)}_{orbit}{'_b' if basis else ''}"
+        tag = (f"{_law_tag(law)}_{orbit}{'_b' if basis else ''}"
+               f"{'_large' if large else ''}")
         M._kernels[key] = (
             mx.fast.metal_kernel(
                 name=f"mp_rtau_fwd_{tag}", input_names=ins,
@@ -793,12 +822,12 @@ def _get_kernels(law, orbit: str, basis: bool):
     return M._kernels[key]
 
 
-def _make_core(law, exp_time, mode, n_gl, n_sub, orbit, basis):
+def _make_core(law, exp_time, mode, n_gl, n_sub, orbit, basis, large=False):
     """custom_function over the ring tau kernels. Primals: (tau2d, period,
     a, shape, r, f, theta, ring_in, ring_out, c, T, [w2d,] kinks)."""
     law = get_law(law)
     key = ("ring", law.definition, orbit, bool(basis), float(exp_time),
-           int(mode), int(n_gl), int(n_sub))
+           int(mode), int(n_gl), int(n_sub)) + (("large",) if large else ())
     if key in M._tau_cores:
         return M._tau_cores[key]
     from .exposure import gauss_legendre
@@ -826,7 +855,7 @@ def _make_core(law, exp_time, mode, n_gl, n_sub, orbit, basis):
         tau2d = primals[0]
         n, m = tau2d.shape
         xg, wg = _static(tau2d.dtype)
-        k = _get_kernels(law, orbit, basis)[0]
+        k = _get_kernels(law, orbit, basis, large)[0]
         npart = npart_f
         out = k(inputs=[*primals, xg, wg, exp_time, mode, n_gl, n_sub, npart,
                         int(m)],
@@ -840,7 +869,7 @@ def _make_core(law, exp_time, mode, n_gl, n_sub, orbit, basis):
         tau2d = primals[0]
         n, m = tau2d.shape
         xg, wg = _static(tau2d.dtype)
-        k = _get_kernels(law, orbit, basis)[1]
+        k = _get_kernels(law, orbit, basis, large)[1]
         npart = npart_b
         cols = (npart * m + 31) // 32
         gtau, gpar = k(
@@ -880,7 +909,7 @@ def _make_core(law, exp_time, mode, n_gl, n_sub, orbit, basis):
 def flux_dev_from_tau_ring_kernel(tau2d, per_c, a_c, b_c, r_c, f_c, th_c, ri_c,
                                   ro_c, rf_c, rt_c, w2d, exp_time, mode, n_gl,
                                   n_sub, law, basis=False, k=None, h=None,
-                                  ew=False):
+                                  ew=False, large=False):
     """The fp32 kernel route of ``rings_tau.flux_dev_from_tau_ring``:
     canonical (n,) parameters in, (n, m) or (n, m, ncol) out. The kinks are
     rings_tau's (detached), as tau offsets, solved only for the contact
@@ -910,7 +939,7 @@ def flux_dev_from_tau_ring_kernel(tau2d, per_c, a_c, b_c, r_c, f_c, th_c, ri_c,
     c = 1.0 - rf_c
     T = ring_opacity(rt_c, rf_c)
     orbit = "circ" if not ecc else ("eccew" if ew else "ecc")
-    core = _make_core(law, exp_time, mode, n_gl, n_sub, orbit, basis)
+    core = _make_core(law, exp_time, mode, n_gl, n_sub, orbit, basis, large)
     ws = () if basis else (w2d,)
     return core(tau2d, per_c, a_c, shape, r_c, f_c, th_c, ri_c, ro_c, c, T,
                 *ws, ks)
@@ -1081,20 +1110,21 @@ _POINT_SRC = """
 
 
 def _point_cols(X, Y, r, f, theta, ring_in, ring_out, ring_f, T, law,
-                wct=None, grad=False):
+                wct=None, grad=False, large=False):
     """The device functions at single points (no orbit, no exposure): the
     shape columns B (n, ncol) and, with ``grad``, the gradient of wct . B in
     (X, Y, r, f, theta, ring_in, ring_out, c = 1 - ring_f, T) (n, 9). Host
     arrays in, numpy out."""
     law = get_law(law)
-    key = ("ring-point", law.definition)
+    key = ("ring-point", law.definition) + (("large",) if large else ())
     if key not in M._kernels:
         M._kernels[key] = mx.fast.metal_kernel(
-            name=f"mp_rpoint_{_law_tag(law)}",
+            name=f"mp_rpoint_{_law_tag(law)}{'_large' if large else ''}",
             input_names=["Xi", "Yi", "rri", "fi", "ti", "rii", "roi", "cri", "Ti",
                          "wi", "grad", "npts"],
             output_names=["out"],
-            header=M._HEADER + M._phot_header() + MO._ob_header(law) + _rg_header(law),
+            header=(M._HEADER + M._phot_header() + MO._ob_header(law)
+                    + _rg_header(law, large)),
             source=_POINT_SRC)
     X = np.asarray(X, dtype=np.float32)
     n = X.shape[0]

@@ -22,7 +22,7 @@ flux = 1.0 + dev
 
 | argument | shape | meaning |
 |---|---|---|
-| `tau` | `(n, m)` or `(m,)` | time since mid-transit for each point [days] |
+| `tau` | `(n, m)` or `(m,)` | time since each point's own mid-transit [days], within $\pm P/2$ |
 | `period`, `a`, `b`, `r` | scalar or `(n,)` | orbit and planet; `b` is the impact parameter |
 | `u1`, `u2` | scalar or `(n,)` | quadratic limb darkening |
 | `limb_dark`, `u` | name; `(n_w,)` or `(n, n_w)` | a hybrid law and its weights, instead of `u1`, `u2` |
@@ -33,7 +33,7 @@ flux = 1.0 + dev
 | `secosw`, `sesinw` | scalar or `(n,)` | an eccentric orbit, $(\sqrt{e}\cos\omega, \sqrt{e}\sin\omega)$ |
 | `exp_time`, `integration`, `n_gl`, `n_sub` | | the exposure rule; see {doc}`exposures` |
 | `ld_basis` | bool | return the limb-darkening basis instead (below) |
-| `large_occultor` | bool | a hybrid law with `r` given as an array that may exceed 1 ({doc}`../spherical/large-occultors`) |
+| `large_occultor` | bool | a hybrid law with `r` given as an array that may exceed 1, or a ring that may be wider than the star ({doc}`../spherical/large-occultors`) |
 | `transittype`, `fp` | `"primary"` or `"secondary"`; scalar or `(n,)` | a secondary eclipse and the planet-to-star flux ratio (below) |
 
 float32 `tau` runs on the GPU; float64 runs the exact graph on the CPU
@@ -50,6 +50,11 @@ mid-times sampled jointly with the shape) cannot express its model that
 way. With `flux_dev_from_tau` the caller builds `tau` however its
 parameterisation requires, MLX chains the gradient back through it, and
 gradients flow in `tau` as well as in every parameter.
+
+`tau` must lie within half a period of the mid-transit it belongs to.
+Beyond that the float32 kernels see no transit, while the float64 graph
+sees the next one; wrap times that may stray with
+`tau - period * mx.round(tau / period)`.
 
 ## Exposures inside the kernel
 

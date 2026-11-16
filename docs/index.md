@@ -101,7 +101,7 @@ a spherical planet.
 | batches of parameter sets | ✓ | ✓ | ✓ | ✓ |
 | gradients in every parameter | ✓ | ✓ | ✓ | ✓ |
 | float32 GPU kernels | ✓ | ✓ | ✓ | ✓ |
-| occultor larger than the star | ✓ | ✗ | float64 | float64, untested |
+| occultor larger than the star | ✓ | ✗ | ✓ | ✓ |
 | `anvil` fitting target | ✓ | ✗ | ✗ | ✓ |
 
 - **Eccentric orbits**: Elómë computes the light curve up to $e < 1$
@@ -122,9 +122,7 @@ a spherical planet.
 - **float32 GPU kernels**: polynomial laws beyond quadratic run as a
   float32 MLX graph instead.
 - **Occultor size**: an oblate planet needs $r_p \le (1-f)^{3/2}$, so
-  that its outline crosses the stellar limb at most twice. A ringed
-  planet or a spotted star larger than the star needs float64
-  ({doc}`spherical/large-occultors`).
+  that its outline crosses the stellar limb at most twice.
 - **`anvil` fitting target** (`make_transit_target`): the quadratic or a
   hybrid law; finite exposures with a hybrid law or an eclipse.
 

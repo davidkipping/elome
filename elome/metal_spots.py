@@ -504,9 +504,9 @@ def _sp_header(law, K) -> str:
     return M._subst(src)
 
 
-def _point_header(law, K) -> str:
-    return (M._HEADER + M._phot_header() + MO._ob_header(law) + _rg_header(law)
-            + _sp_header(law, K))
+def _point_header(law, K, large=False) -> str:
+    return (M._HEADER + M._phot_header() + MO._ob_header(law)
+            + _rg_header(law, large) + _sp_header(law, K))
 
 
 # ---------------------------------------------------------------------------
@@ -543,12 +543,14 @@ _VJP_SRC = """
 """
 
 
-def _cols_kernels(law, K):
+def _cols_kernels(law, K, large=False):
+    """The columns and their VJP; ``large`` builds in the planet outline's
+    quadrature for a planet that may exceed the star (metal_rings._RG_LARGE)."""
     law = get_law(law)
-    key = ("spot-cols", law.definition, int(K))
+    key = ("spot-cols", law.definition, int(K)) + (("large",) if large else ())
     if key not in M._kernels:
-        hdr = _point_header(law, K)
-        tag = f"{_law_tag(law)}_k{int(K)}"
+        hdr = _point_header(law, K, large)
+        tag = f"{_law_tag(law)}_k{int(K)}{'_large' if large else ''}"
         ins = ["Xi", "Yi", "ri", "Si", "act"]
         M._kernels[key] = (
             mx.fast.metal_kernel(
@@ -565,12 +567,12 @@ def _cols_kernels(law, K):
 _CORES: dict = {}
 
 
-def _cols_core(law, K):
+def _cols_core(law, K, large=False):
     """custom_function (X, Y, rp, S, act) -> B over N flat points: S (N, K,
     5) of (n_x, n_y, n_z, alpha, contrast); act (N,) zero where a point is
     not needed (its columns and gradient are 0)."""
     law = get_law(law)
-    key = (law.definition, int(K))
+    key = (law.definition, int(K)) + (("large",) if large else ())
     if key in _CORES:
         return _CORES[key]
     ncol, ng = law.n_col, 3 + 5 * int(K)
@@ -578,7 +580,7 @@ def _cols_core(law, K):
     @mx.custom_function
     def core(X, Y, rp, S, act):
         n = X.shape[0]
-        return _cols_kernels(law, K)[0](
+        return _cols_kernels(law, K, large)[0](
             inputs=[X, Y, rp, S, act, n], output_shapes=[(n, ncol)],
             output_dtypes=[mx.float32], grid=(n, 1, 1), threadgroup=(256, 1, 1))[0]
 
@@ -586,7 +588,7 @@ def _cols_core(law, K):
         X, Y, rp, S, act = primals
         ct = cotangent if isinstance(cotangent, mx.array) else cotangent[0]
         n = X.shape[0]
-        g = _cols_kernels(law, K)[1](
+        g = _cols_kernels(law, K, large)[1](
             inputs=[X, Y, rp, S, act, ct, n], output_shapes=[(n, ng)],
             output_dtypes=[mx.float32], grid=(n, 1, 1), threadgroup=(256, 1, 1))[0]
         return (g[:, 0], g[:, 1], g[:, 2], mx.reshape(g[:, 3:], (n, int(K), 5)),
@@ -601,7 +603,9 @@ def spot_cols_kernel(X, Y, rp, n, alpha, contrast, law, active=None):
     point shape (broadcast), n (..., K, 3), alpha and contrast (..., K);
     (..., ncol) out, differentiable in every input. ``active`` (point
     shape, optional): where False the columns are 0 and not computed."""
+    from .spots import _large_planet
     law = get_law(law)
+    large = _large_planet(rp)
     f32 = lambda v: (v if isinstance(v, mx.array) else mx.array(v)).astype(mx.float32)
     X, Y, rp, n, alpha, contrast = (f32(v) for v in (X, Y, rp, n, alpha, contrast))
     K = n.shape[-2]
@@ -614,7 +618,7 @@ def spot_cols_kernel(X, Y, rp, n, alpha, contrast, law, active=None):
     flat = lambda v: mx.reshape(mx.broadcast_to(v, point), (N,))
     act = (mx.ones((N,), dtype=mx.float32) if active is None
            else flat(mx.stop_gradient(active).astype(mx.float32)))
-    B = _cols_core(law, K)(flat(X), flat(Y), flat(rp), mx.reshape(S, (N, K, 5)), act)
+    B = _cols_core(law, K, large)(flat(X), flat(Y), flat(rp), mx.reshape(S, (N, K, 5)), act)
     return mx.reshape(B, point + (law.n_col,))
 
 
