@@ -162,6 +162,11 @@ every release is tagged `vX.Y.Z` in git.
   which path needs what. The float32 tests run on the default device
   instead of naming the GPU, and without the kernels hold the MLX
   graph's compiled result to its own float32 error against float64.
+- **Calling Elómë from other languages** (new guide): from Julia through
+  PythonCall.jl, tested end to end. The guide covers light curves, many
+  parameter sets, the float32 kernels and MLX gradients of a function
+  written in Julia; Julia's light curve is bit for bit Python's. R, IDL
+  and C are noted as untested routes through their Python bridges.
 - **Large occultors: accuracy by law** (`benchmarks/bench_large_occultor.py`).
   The table is now per law, measured on 2,001 separations rather than
   four. The quadratic law in float32 is off by 1.5×10⁻⁵ at `rp = 7.28`,

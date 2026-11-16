@@ -196,6 +196,7 @@ guides/exposures
 guides/batching
 guides/gradients-and-precision
 guides/sampler-api
+guides/other-languages
 ```
 
 ```{toctree}
