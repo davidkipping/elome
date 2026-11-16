@@ -152,6 +152,16 @@ every release is tagged `vX.Y.Z` in git.
   array opts in with `large_occultor=True`: `flux_dev_from_tau`,
   `flux_dev_metal`, `flux_dev_hybrid`, `shape_cols`,
   `make_hybrid_transit_flux` and `make_eclipse_flux` take it.
+- **A `t0` far from the data in float32.** `TransitModel` re-centred
+  the times on the data but left `t0` where it was, so float32 carried
+  the distance into every phase: about 5e-7 in flux per orbit between
+  `t0` and the data (5e-5 at 100 orbits), and 4e-3 in the gradients.
+  `t0` is now moved by whole periods, in float64, to the transit nearest
+  the data -- by its own count for a Python value, by the count of the
+  parameters the model was built with for an `mx.array` -- which leaves
+  the light curve and its gradients as they are with `t0` among the data
+  (3e-8 in flux for `rp = 0.16`). A spotted star's rotation still counts from the unmoved
+  `t0`.
 - **Ringed planets and spotted stars with an outline larger than the
   star.** The planet's outline (`rp > 1`) or a ring edge wider than the
   star (around any planet) was integrated from Fourier coefficients that

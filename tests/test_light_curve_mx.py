@@ -419,6 +419,42 @@ def test_absolute_t0_in_fp64_survives_an_fp32_model():
     assert math.isfinite(float(g)) and float(g) != 0.0
 
 
+@pytest.mark.skipif(not metal_available(), reason="Metal unavailable")
+def test_a_distant_t0_costs_nothing_in_fp32():
+    """t0 a hundred orbits from the data: float32 folds t0 - t_ref by whole
+    periods in fp64, for host and array fields and in light_curves, so the
+    flux and the gradients are as good as with t0 among the data (they
+    were 5e-5 and 4e-3 off)."""
+    per = 3.45
+    p = params(t0=0.3, rp=0.16, limb_dark="hybrid5", u=[0.2, 0.2, 0.1, 0.1, 0.1])
+    tt = 0.3 + 100 * per + T
+    ref = elome.TransitModel(p, tt).light_curve(p)
+    m = elome.TransitModel(p, tt, dtype=mx.float32, **MODES["contact"])
+    ref_c = elome.TransitModel(p, tt, **MODES["contact"]).light_curve(p)
+    m_plain = elome.TransitModel(p, tt, dtype=mx.float32)
+    assert np.abs(m_plain.light_curve(p) - ref).max() < 2e-7
+    assert np.abs(m.light_curve(p) - ref_c).max() < 2e-7
+    assert np.abs(m.light_curves([p, p])[1] - ref_c).max() < 2e-7
+    q = params(**{**vars(p), "t0": mx.array(0.3, dtype=mx.float64),
+                  "per": mx.array(per, dtype=mx.float64)})
+    got = np.asarray(m.light_curve_mx(q), dtype=np.float64)
+    assert np.abs(got - ref_c).max() < 2e-7
+
+    y = mx.array(ref_c + 1e-4, dtype=mx.float64)
+
+    def grads(model):
+        def f(t0, pr):
+            r = params(**{**vars(p), "t0": t0, "per": pr})
+            return mx.sum((model.light_curve_mx(r).astype(mx.float64) - y) ** 2)
+        args = [mx.array(v, dtype=mx.float64) for v in (0.301, per)]
+        with mx.stream(mx.cpu):
+            g = mx.grad(f, argnums=(0, 1))(*args)
+            mx.eval(g)
+        return np.array([float(x) for x in g])
+    g64 = grads(elome.TransitModel(p, tt, **MODES["contact"]))
+    assert np.all(np.abs(grads(m) - g64) < 2e-5 * np.abs(g64))
+
+
 def test_callers_compile_and_grad():
     """No concrete-value branching on array fields, so a caller can wrap
     light_curve_mx in mx.compile and differentiate the result."""

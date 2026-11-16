@@ -100,7 +100,8 @@ dtype, is differentiable, and compiles.
 
 In float32, the orbital phase loses precision when the data span many
 orbits. The frontend re-centres the times on their midpoint in float64,
-so absolute times and a distant `t0` cost nothing, but float32 still
+and moves `t0` by whole periods to the transit nearest that midpoint, so
+absolute times and a distant `t0` cost nothing, but float32 still
 sees times up to half the data's span. Measured through the frontend
 for $P = 10$ days and $r_p = 0.1$ on a circular orbit, with transits at
 both ends of the span (`benchmarks/verify_doc_claims.py`), the maximum

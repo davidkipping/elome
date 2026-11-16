@@ -666,6 +666,18 @@ class TransitModel:
                        else float(0.5 * (t_super.min() + t_super.max())))
         self._t_np = t_super - self._t_ref
         self._t_mx = mx.array(self._t_np, dtype=self.dtype)
+        # t0 - t_ref is also folded by whole periods (_prep), or float32
+        # carries the distance to t0 into every phase: ~5e-7 in flux per
+        # orbit between t0 and the data. A host t0 and per fold by their
+        # own count; an mx.array one (which may be traced) by this one,
+        # from the parameters the model was built with.
+        self._n_fold = 0
+        if self._t_ref != 0.0:
+            try:
+                n = round((float(params.t0) - self._t_ref) / float(params.per))
+                self._n_fold = n if abs(n) < 2 ** 52 else 0
+            except (TypeError, ValueError, ZeroDivisionError, OverflowError):
+                pass
         self._compiled_sets = {}
         self._large = None
 
@@ -1256,14 +1268,25 @@ class TransitModel:
         """(t0_off, per, a, rp, cos i, cos i as a Python float or None,
         geometry mask or None). Python fields fold on the host in fp64 and
         cast once; mx.array fields stay in the graph. Readable geometry
-        is validated (_check_geometry); traced fields get a NaN mask."""
+        is validated (_check_geometry); traced fields get a NaN mask.
+        t0_off is t0 - t_ref less a whole number of periods (__init__)."""
         dt = self.dtype
         traced = _check_geometry(params, self._geom_rules)
-        t0 = params.t0
-        if is_arr(t0):
-            # the reference-time subtraction in fp64, then the model dtype
+        t0, per_in = params.t0, params.per
+        n = self._n_fold
+        if self._t_ref != 0.0 and not (is_arr(t0) or is_arr(per_in)):
+            n = round((float(t0) - self._t_ref) / float(per_in))
+        if is_arr(t0) or (n and is_arr(per_in)):
+            # the reference-time subtraction and the fold in fp64, then
+            # the model dtype
             with mx.stream(mx.cpu):
-                t0_off = (t0.astype(mx.float64) - self._t_ref).astype(dt)
+                d = (t0.astype(mx.float64) if is_arr(t0) else t0) - self._t_ref
+                if n:
+                    d = d - n * (per_in.astype(mx.float64) if is_arr(per_in)
+                                 else float(per_in))
+                t0_off = d.astype(dt)
+        elif n:
+            t0_off = cast((t0 - self._t_ref) - n * per_in)
         else:
             t0_off = cast(t0 - self._t_ref)
         inc = params.inc
@@ -1698,10 +1721,10 @@ class TransitModel:
                              "curve; (n_sets, K, 4) is for light_curves")
         t0_off, per, a, rp, ci, ci_py, gmask = self._prep(params, cast, rad,
                                                           is_arr)
-        ep = params.spot_epoch
-        if ep is None:
-            ep_off = t0_off
-        elif is_arr(ep):
+        # the spots' epoch (None: t0) is never folded: the star turns
+        # with prot, not per
+        ep = params.t0 if params.spot_epoch is None else params.spot_epoch
+        if is_arr(ep):
             with mx.stream(mx.cpu):
                 ep_off = (ep.astype(mx.float64) - self._t_ref).astype(self.dtype)
         else:
@@ -1917,7 +1940,13 @@ class TransitModel:
                                   cols.get("ring_out")))
         with ctx, large_occultors(self._large):
             tt = (self._t_mx if view is None else view[0])[None, :]
-            t0, per = col(cols["t0"] - self._t_ref), col(cols["per"])
+            # t0 - t_ref folded by whole periods, as in _prep
+            d0 = cols["t0"] - self._t_ref
+            if self._t_ref != 0.0:
+                with np.errstate(all="ignore"):
+                    nf = np.rint(d0 / cols["per"])
+                d0 = d0 - np.where(np.isfinite(nf), nf, 0.0) * cols["per"]
+            t0, per = col(d0), col(cols["per"])
             rp, a = col(cols["rp"]), col(cols["a"])
             ecc = cols["ecc"]
             inc = np.radians(cols["inc"])
