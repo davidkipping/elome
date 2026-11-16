@@ -106,7 +106,6 @@ from dataclasses import dataclass
 import mlx.core as mx
 import numpy as np
 
-from .ellip import dtype_eps
 from .solution import _kite_sqarea
 from .dtypes import fp64_on_cpu
 
@@ -408,7 +407,6 @@ def lens_geometry(z: mx.array, r):
     """Masks and the lens geometry of a circular planet on the disc, with
     every masked denominator already sanitised for autodiff."""
     dtype = z.dtype
-    eps = dtype_eps(dtype)
     tiny = 1e-30 if dtype == mx.float32 else 1e-280
     large = _may_be_large(r)
 
@@ -426,10 +424,16 @@ def lens_geometry(z: mx.array, r):
     one = zero + 1.0
 
     A = mx.maximum((r + 1.0 - z) * (1.0 - r + z), tiny)     # 1 - (z-r)^2
-    Bp = (1.0 - z - r) * (1.0 + z + r)                       # 1 - (z+r)^2
+    # 1 - z - r and r^2 + z^2 - 1 subtract the larger of z, r from 1 first
+    # (exact for it in [1/2, 2]): formed as written, (1 - z) - r rounds z
+    # away against 1 at r = 1, z -> 0, and r^2 + z^2 - 1 loses z^2 whole
+    zr = z >= r
+    onemzmr = mx.where(zr, (1.0 - z) - r, (1.0 - r) - z)
+    rzm1 = mx.where(zr, (z - 1.0) * (z + 1.0) + r2, (r - 1.0) * (r + 1.0) + z2)
+    Bp = onemzmr * (1.0 + z + r)                             # 1 - (z+r)^2
     sqarea = _kite_sqarea(z, r)                              # signed Heron
-    kite_floor = (10.0 * eps) ** 2
-    kite_safe = mx.sqrt(mx.where(m_part, mx.maximum(sqarea, kite_floor), 1.0))
+    # floored only against a negative round-off (solution.sn_dev_with_aux)
+    kite_safe = mx.sqrt(mx.where(m_part, mx.maximum(sqarea, tiny), 1.0))
     # Total occultation (r > 1) shares the partial mask; there the lens is
     # the whole disc and kite = 0, which makes every column below land
     # exactly on its full-disk value with zero partials: kap0 = 0,
@@ -439,13 +443,13 @@ def lens_geometry(z: mx.array, r):
     # graphs and moved r < 1 results by an ulp.
     m_lens = mx.logical_and(m_part, mx.logical_not(m_tot))
     kite = mx.where(m_lens, kite_safe, 0.0)
-    kap0 = mx.arctan2(kite, r2 + z2 - 1.0)      # pi complete, 0 outside
-    kap1 = mx.arctan2(kite, 1.0 + z2 - r2)
+    kap0 = mx.arctan2(kite, rzm1)               # pi complete, 0 outside
+    kap1 = mx.arctan2(kite, (1.0 - r) * (1.0 + r) + z2)
 
     # sin and cos of kap0 from the geometry, not from trig
     twozr = mx.where(m_lens, mx.maximum(2.0 * z * r, tiny), one)
     sink = mx.where(m_lens, kite / twozr, 0.0)
-    cosk = mx.where(m_lens, (r2 + z2 - 1.0) / twozr, -one)
+    cosk = mx.where(m_lens, rzm1 / twozr, -one)
     return dict(z=z, r=r, r2=r2, z2=z2, zero=zero, one=one, tiny=tiny,
                 m_none=m_none, m_comp=m_comp, m_part=m_part, m_tot=m_tot,
                 m_lens=m_lens, large=large,

@@ -203,3 +203,30 @@ def test_gradients_as_the_planet_vanishes():
             for dt, tol in ((mx.float64, 1e-9), (mx.float32, 1e-6)):
                 gz, gr = _grad(f, z, r, dt)
                 assert abs(gz) < tol and abs(gr) < tol + 10.0 * r, (name, z, r, dt, gz, gr)
+
+
+def test_a_planet_as_large_as_the_star_nearly_centred():
+    """r = 1, z -> 0: F + 1 is linear in z down to 1e-15, and d/dz tends to
+    a constant. 1 - z - r and r^2 + z^2 - 1 formed as written, and a floor
+    on the kite above its true value, lost z there: the hybrid laws were
+    6e-6 off at z = 1e-13 and 2e-3 at 1e-15, the uniform disc half its
+    value below 1e-8, d/dz up to twice its value. Laws with a linear term
+    keep the contact expansion's 5e-9 offset within 1e-8 of the centre
+    (the guide's known limitation), so for them only d/dz is checked."""
+    import elome as el
+    h5 = lambda z, r: el.flux_dev_hybrid(z, r, [0.2, 0.2, 0.1, 0.1, 0.1], "hybrid5")
+    no_linear = {"uniform": lambda z, r: el.flux_dev(z, r, 0.0, 0.0),
+                 "hybrid4": _tie_fns()["hybrid4"], "hybrid5": h5}
+
+    def F(f, z):
+        return float(mx.sum(f(mx.array([z], dtype=mx.float64),
+                              mx.array([1.0], dtype=mx.float64))))
+    with mx.stream(mx.cpu):
+        for name, f in no_linear.items():
+            s = (1.0 + F(f, 1e-9)) / 1e-9
+            for z in (1e-11, 1e-13, 1e-15):
+                assert abs(1.0 + F(f, z) - s * z) < 1e-3 * s * z + 4e-16, (name, z)
+    for name, f in {**_tie_fns(), "hybrid5": h5}.items():
+        g_ref = _grad(f, 1e-6, 1.0, mx.float64)[0]
+        for z in (1e-9, 1e-12, 1e-14):
+            assert abs(_grad(f, z, 1.0, mx.float64)[0] - g_ref) < 5e-3 * abs(g_ref), (name, z)

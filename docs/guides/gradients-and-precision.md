@@ -130,11 +130,13 @@ already entirely wrong (`benchmarks/kh_grad_conditioning.py`).
 
 ## A planet exactly as large as the star
 
-At exactly $r_p = 1$, with the planet's centre within about $10^{-12}$
-stellar radii of the star's, the planet's and the star's outlines
-coincide and the closed forms are degenerate. There the flux is off by
-up to $5\times10^{-9}$ and its gradients are wrong: 0, very large, or
-NaN, depending on the law and the path. Anywhere else, including
-$r_p = 0.999$ or a separation of $10^{-3}$, they are accurate. A sampler
-whose prior on $r_p$ reaches 1 is very unlikely to land on exactly 1.0,
-but avoid fixing $r_p = 1$ with $b = 0$.
+At exactly $r_p = 1$ the contacts meet at the centre of the disc. With
+the planet's centre exactly on the star's, the outlines coincide and the
+gradients are NaN. Within $10^{-8}$ stellar radii of it, the laws with a
+linear term (linear, quadratic, polynomial) are off by up to
+$5\times10^{-9}$ in float64, from the linear term's expansion about the
+contact; the uniform disc and the hybrid laws are exact to rounding, and
+the gradients of every law are right. Anywhere else, including
+$r_p = 0.999$ or a separation of $10^{-3}$, all of them are accurate. A
+sampler whose prior on $r_p$ reaches 1 is very unlikely to land on
+exactly 1.0, but avoid fixing $r_p = 1$ with $b = 0$.

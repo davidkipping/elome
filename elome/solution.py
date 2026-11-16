@@ -132,7 +132,13 @@ def sn_dev_with_aux(z: mx.array, r):
 
     # ---- shared geometry (sanitized once, used by every branch) ----------
     onembmr2 = mx.maximum((r + 1.0 - z) * (1.0 - r + z), tiny)   # 1-(z-r)^2
-    onembpr2 = (1.0 - z - r) * (1.0 + z + r)                     # 1-(z+r)^2
+    # 1 - z - r and r^2 + z^2 - 1 subtract the larger of z, r from 1 first
+    # (exact for it in [1/2, 2]): formed as written, (1 - z) - r rounds z
+    # away against 1 at r = 1, z -> 0, and r^2 + z^2 - 1 loses z^2 whole
+    zr = z >= r
+    onemzmr = mx.where(zr, (1.0 - z) - r, (1.0 - r) - z)
+    rzm1 = mx.where(zr, (z - 1.0) * (z + 1.0) + r2, (r - 1.0) * (r + 1.0) + z2)
+    onembpr2 = onemzmr * (1.0 + z + r)                           # 1-(z+r)^2
     fourzr = mx.maximum(4.0 * z * r, tiny)
     sqbr = mx.sqrt(mx.maximum(z * r, tiny))
     zmr = z - r
@@ -140,8 +146,9 @@ def sn_dev_with_aux(z: mx.array, r):
 
     # ---- uniform disk: kappas and kite area ------------------------------
     sqarea = _kite_sqarea(z, r)
-    kite_floor = (10.0 * eps) ** 2
-    kite_safe = mx.sqrt(mx.where(m_part, mx.maximum(sqarea, kite_floor), 1.0))
+    # floored only against a negative round-off: the true 16 area^2 is 4 z^2
+    # at r = 1, below any floor of order eps^2 for z < 1e-15
+    kite_safe = mx.sqrt(mx.where(m_part, mx.maximum(sqarea, tiny), 1.0))
     # Total occultation (r > 1) shares the partial mask. There kite = 0, so
     # kap0 = 0 and kap1 = pi exactly and the partial formulas give the
     # full-disk s0d = -pi, s2d = 0 by construction, with zero gradients; s1d
@@ -151,8 +158,8 @@ def sn_dev_with_aux(z: mx.array, r):
     # results by 1-2 ulp. Unreachable for r < 1.
     kite = mx.where(mx.logical_and(m_part, mx.logical_not(m_tot)),
                     kite_safe, 0.0)
-    kap0 = mx.arctan2(kite, r2 + z2 - 1.0)        # angle at planet center
-    kap1 = mx.arctan2(kite, 1.0 + z2 - r2)        # angle at star center
+    kap0 = mx.arctan2(kite, rzm1)                 # angle at planet center
+    kap1 = mx.arctan2(kite, (1.0 - r) * (1.0 + r) + z2)   # angle at star center
 
     s0d_part = -(kap1 + r2 * kap0 - 0.5 * kite)   # = -A_lens
     s0d_comp = -_PI * r2

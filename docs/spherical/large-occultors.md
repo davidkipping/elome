@@ -96,5 +96,6 @@ table. With the polynomial law, use float64.
   a direct call with them as arrays declares `large_occultor=True` as
   above.
 - **`rp = 1` exactly** is a degenerate point, where the contacts meet at
-  $z = 0$. The result there is good to $5\times10^{-9}$ in float64 and
-  $10^{-4}$ in float32, and finite everywhere.
+  $z = 0$. The result there is good to $5\times10^{-9}$ in float64 (to
+  rounding for the hybrid laws) and $10^{-4}$ in float32, and finite
+  everywhere.

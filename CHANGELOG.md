@@ -176,6 +176,18 @@ every release is tagged `vX.Y.Z` in git.
   `rp`, `ring_out` and `f`, the anvil targets from their bounds, and
   `flux_dev_from_tau` from `large_occultor` -- so the kernels for
   smaller outlines are exactly what they were.
+- **A planet exactly as large as the star, nearly centred.** At
+  `r = 1` with `z -> 0` the float64 graphs lost `z` three ways: `1 - z -
+  r` was formed as `(1 - z) - r`, rounding `z` against 1; `r^2 + z^2 - 1`
+  lost `z^2` whole; and the kite was floored at `(10 eps)^2`, above its
+  true `4 z^2` for `z < 1e-15`. The hybrid laws were off by 3e-9 at `z =
+  1e-8`, 6e-6 at `1e-13` and 2e-3 at `1e-15`; the uniform disc was half
+  its value below `z = 1e-8`; `d/dz` was up to twice its value. Each now
+  subtracts the larger of `z` and `r` from 1 first, and the floor only
+  guards a negative rounding. The laws with a linear term keep an offset
+  of up to 5e-9 within 1e-8 of the centre, from that term's expansion
+  about the contact, and every law's gradients are NaN at exactly `z =
+  0`, as documented.
 - **Spotted stars and ringed planets at an exact tangency.** Which side
   of the star, of a spot or of the planet an arc lies on was read at the
   arc's midpoint, and an outline that no other curve cuts is one arc read
