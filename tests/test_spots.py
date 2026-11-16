@@ -146,6 +146,41 @@ def test_planet_tangent_to_a_rim(kind, delta, dt):
     assert err(cols(case, dt), oracle(case)) < TOL[dt]
 
 
+def _touching(lon, lat, al, psi, rp, outside):
+    """A planet of radius rp touching the spot's rim, from outside or
+    inside, at the rim's parameter psi."""
+    n = SO.spot_vector(D(lon), D(lat))
+    c0, c1, c2 = SO._rim_fourier(n, D(al))
+    P = c0 + c1 * math.cos(psi) + c2 * math.sin(psi)
+    dP = -c1 * math.sin(psi) + c2 * math.cos(psi)
+    nrm = np.array([dP[1], -dP[0]]) / math.hypot(dP[0], dP[1])
+    if nrm @ (P[:2] - n[:2] * math.cos(D(al))) < 0:
+        nrm = -nrm
+    C = P[:2] + (rp if outside else -rp) * nrm
+    return (C[0], C[1], rp), [(lon, lat, al, 0.5)]
+
+
+# tangencies at the point where an outline with no corners (one arc, 0 to
+# 2 pi) is read: psi = pi on the planet's, a rim's or the limb's
+TOUCHING = {
+    "planet inside the limb, touching it": ((-0.9, 0.0, 0.1), [(20, 15, 10, 0.5)]),
+    "planet's pi on a centred rim": _touching(0, 0, 17, 0.0, 0.1, True),
+    "centred rim's pi on the planet": _touching(0, 0, 17, math.pi, 0.1, True),
+    "generic rim's pi on the planet": _touching(17, 14, 17, math.pi, 0.1, True),
+    "planet inside a generic rim, touching it at the rim's pi":
+        _touching(17, 14, 17, math.pi, 0.1, False),
+}
+
+
+@pytest.mark.parametrize("dt", [mx.float64, mx.float32], ids=["fp64", "fp32"])
+@pytest.mark.parametrize("name", list(TOUCHING))
+def test_tangency_where_an_uncut_outline_is_read(name, dt):
+    """Membership is read at three points along each arc, so a tangency at
+    any one of them does not decide it (at the midpoint alone these were
+    1e-2 to 1 off, the limb case in fp64)."""
+    assert err(cols(TOUCHING[name], dt), oracle(TOUCHING[name])) < TOL[dt]
+
+
 @pytest.mark.parametrize("name", ["planet across a rim", "umbra in penumbra", "three spots",
                                   "planet straddling the limb and a rim"])
 def test_unspotted_is_the_spherical_closed_form(name):

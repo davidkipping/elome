@@ -75,6 +75,21 @@ def test_point_columns_and_gradients(name, law):
     assert np.max(np.abs(g32[0] - g64)) < 1e-5 * np.max(np.abs(g64))
 
 
+@pytest.mark.parametrize("name", list(TR.LIMB_TOUCHING))
+def test_an_edge_touching_the_limb(name):
+    """As the graph (test_rings): membership against the star read at three
+    points of an arc. theta = 0, so the sky frame is the ring's."""
+    from elome import metal_rings as MR
+    x0, y0, rp, f, ri, ro, rf, tau = TR.LIMB_TOUCHING[name]
+    T = float(rings.ring_opacity(tau, rf))
+    B32, _ = MR._point_cols([x0], [y0], rp, f, 0.0, ri, ro, rf, T, HYBRID5)
+    with mx.stream(mx.cpu):
+        B64 = np.array([b.item() for b in rings.shape_cols_ring(
+            mx.array(x0, dtype=mx.float64), mx.array(y0, dtype=mx.float64),
+            rp, f, ri, ro, rf, tau, HYBRID5)])
+    assert np.max(np.abs(B32[0] - B64) / hybrid_norms(HYBRID5)) < 1e-7
+
+
 @pytest.mark.parametrize("rule", list(RULES))
 @pytest.mark.parametrize("name", list(CASES))
 def test_kernel_matches_the_fp64_graph(name, rule):

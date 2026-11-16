@@ -176,6 +176,16 @@ every release is tagged `vX.Y.Z` in git.
   `rp`, `ring_out` and `f`, the anvil targets from their bounds, and
   `flux_dev_from_tau` from `large_occultor` -- so the kernels for
   smaller outlines are exactly what they were.
+- **Spotted stars and ringed planets at an exact tangency.** Which side
+  of the star, of a spot or of the planet an arc lies on was read at the
+  arc's midpoint, and an outline that no other curve cuts is one arc read
+  at its parameter pi -- so an outline touching another there was decided
+  by rounding. A planet touching the limb from inside, with any spot on
+  the star, was off by 1 in flux in float64; a planet touching a spot's
+  rim by 1e-2 to 1e-1; a ring edge touching the limb by 1. Each such test
+  is now read at a quarter, half and three quarters along the arc, taking
+  the reading farthest from its boundary, in the graphs and the kernels.
+  Everything off a tangency is unchanged.
 - **Gradients of the float64 graph functions at exact coincidences.**
   `flux_dev`, `flux_dev_poly` and `flux_dev_hybrid` returned wrong
   reverse-mode gradients (right values) at `z == r` (d/dz -0.26 for

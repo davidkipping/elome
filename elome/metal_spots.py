@@ -110,8 +110,9 @@ inline void sp_rim_sky(thread const sp_rim &R, float psi, thread float *x,
     *mu = R.mu_a + R.mu_b * s;
 }
 
-inline bool sp_own(thread const sp_rim &R, float x, float y, float z) {
-    return x * R.nx + y * R.ny + z * R.nz >= R.ca;
+// how far (x, y, z) is into the cap: >= 0 in it
+inline float sp_margin(thread const sp_rim &R, float x, float y, float z) {
+    return x * R.nx + y * R.ny + z * R.nz - R.ca;
 }
 
 // planet-rim corners on the rim's parameter: rings._crossings in the
@@ -279,16 +280,25 @@ inline void sp_planet(T X, T Y, T rp, thread const sp_geo &G, thread T *occ,
         float lo = (n == 0) ? 0.0f : bp[i];
         float hi = (n == 0) ? MP_TWO_PI : ((i + 1 < n) ? bp[i + 1] : bp[0] + MP_TWO_PI);
         if (!(hi > lo)) continue;
-        float mid = 0.5f * (lo + hi);
-        float xs = G.X + G.rp * metal::precise::cos(mid);
-        float ys = G.Y + G.rp * metal::precise::sin(mid);
-        float r2 = xs * xs + ys * ys;
-        if (!(r2 < 1.0f)) continue;
-        float zs = metal::precise::sqrt(1.0f - r2);
+        float mstar = 0.0f, mk[SP_K];
+        for (int k = 0; k < SP_K; ++k) mk[k] = 0.0f;
+        for (int t = 0; t < 3; ++t) {
+            float ang = lo + RG_SAMPLE[t] * (hi - lo);
+            float xs = G.X + G.rp * metal::precise::cos(ang);
+            float ys = G.Y + G.rp * metal::precise::sin(ang);
+            float m = 1.0f - (xs * xs + ys * ys);
+            if (t == 0 || fabs(m) > fabs(mstar)) mstar = m;
+            float zs = metal::precise::sqrt(max(m, 0.0f));
+            for (int k = 0; k < SP_K; ++k) {
+                float mm = sp_margin(G.R[k], xs, ys, zs);
+                if (t == 0 || fabs(mm) > fabs(mk[k])) mk[k] = mm;
+            }
+        }
+        if (!(mstar > 0.0f)) continue;
         bool fl[SP_K];
         float kappa = 1.0f;
         for (int k = 0; k < SP_K; ++k) {
-            fl[k] = G.R[k].vis && sp_own(G.R[k], xs, ys, zs);
+            fl[k] = G.R[k].vis && mk[k] >= 0.0f;
             if (fl[k]) kappa -= 1.0f - G.c[k];
         }
         T val[HYB_NGEN], cor[HYB_NGEN];
@@ -337,11 +347,17 @@ inline void sp_rim_outline(int k, thread const sp_live<T> &L, thread const sp_ge
         float lo = (n == 0) ? 0.0f : bp[i];
         float hi = (n == 0) ? MP_TWO_PI : ((i + 1 < n) ? bp[i + 1] : bp[0] + MP_TWO_PI);
         if (!(hi > lo)) continue;
-        float xm, ym, mum;
-        sp_rim_sky(R, 0.5f * (lo + hi), &xm, &ym, &mum);
-        if (!(mum > 0.0f)) continue;
-        float dx = xm - G.X, dy = ym - G.Y;
-        if (dx * dx + dy * dy < G.rp * G.rp) continue;
+        float mmu = 0.0f, mp = 0.0f;
+        for (int t = 0; t < 3; ++t) {
+            float xm, ym, mum;
+            sp_rim_sky(R, lo + RG_SAMPLE[t] * (hi - lo), &xm, &ym, &mum);
+            float dx = xm - G.X, dy = ym - G.Y;
+            float m = G.rp * G.rp - (dx * dx + dy * dy);
+            if (t == 0 || fabs(mum) > fabs(mmu)) mmu = mum;
+            if (t == 0 || fabs(m) > fabs(mp)) mp = m;
+        }
+        if (!(mmu > 0.0f)) continue;
+        if (mp > 0.0f) continue;
         T val[HYB_NGEN], cor[HYB_NGEN];
         rg_arc(x0, L.y0, L.a, S0, S1, S2, K0, K1, c0, c1, c2, z, R.cen, lo, hi, val);
         float cl = metal::precise::cos(lo), sl = metal::precise::sin(lo);
@@ -408,16 +424,26 @@ inline void sp_limb(thread const sp_geo &G, thread float *occ, bool want,
         float lo = (n == 0) ? 0.0f : th[i];
         float hi = (n == 0) ? MP_TWO_PI : ((i + 1 < n) ? th[i + 1] : th[0] + MP_TWO_PI);
         if (!(hi > lo)) continue;
-        float mid = 0.5f * (lo + hi);
-        float cm = metal::precise::cos(mid), sm = metal::precise::sin(mid);
-        float dx = cm - G.X, dy = sm - G.Y;
-        bool in_p = dx * dx + dy * dy < G.rp * G.rp;
+        float mp = 0.0f, mk[SP_K];
+        for (int k = 0; k < SP_K; ++k) mk[k] = 0.0f;
+        for (int t = 0; t < 3; ++t) {
+            float ang = lo + RG_SAMPLE[t] * (hi - lo);
+            float cm = metal::precise::cos(ang), sm = metal::precise::sin(ang);
+            float dx = cm - G.X, dy = sm - G.Y;
+            float m = G.rp * G.rp - (dx * dx + dy * dy);
+            if (t == 0 || fabs(m) > fabs(mp)) mp = m;
+            for (int k = 0; k < SP_K; ++k) {
+                float mm = sp_margin(G.R[k], cm, sm, 0.0f);
+                if (t == 0 || fabs(mm) > fabs(mk[k])) mk[k] = mm;
+            }
+        }
+        bool in_p = mp > 0.0f;
         float w = 1.0f;
         float dth = hi - lo;
         if (!in_p) {
             w = 0.0f;
             for (int k = 0; k < SP_K; ++k) {
-                if (!(G.R[k].vis && sp_own(G.R[k], cm, sm, 0.0f))) continue;
+                if (!(G.R[k].vis && mk[k] >= 0.0f)) continue;
                 w += 1.0f - G.c[k];
                 if (want) gc[k] -= uh * dth;
             }

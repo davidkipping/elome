@@ -86,6 +86,9 @@ _RG_FN = r"""
 // ============================ ringed planets ============================
 constant float RG_BIG = 1e8f;           // the root at infinity (rings._BIG)
 constant float RG_S1C = 1e-8f;          // a centred circle: R d below this
+// membership a corner does not decide, read at three points of an arc,
+// each test taking the reading farthest from its boundary (rings._SAMPLES)
+constant float RG_SAMPLE[3] = {0.5f, 0.25f, 0.75f};
 constant float RG_AL[3][3] = {{0.5f, 0.0f, 0.0f}, {0.5f, -0.25f, 0.0f},
                               {0.5f, -0.5f, 1.0f / 6.0f}};
 
@@ -440,8 +443,15 @@ inline void rg_outline(int k, T x0, T y0, T A, T B, thread const rg_geo &G,
         if (!(hi > lo)) continue;
         float mid = 0.5f * (lo + hi);
         float smid = metal::precise::sin(mid), cmid = metal::precise::cos(mid);
-        float xs = x0f + Af * cmid, ys = y0f + Bf * smid;
-        if (xs * xs + ys * ys >= 1.0f) continue;
+        float mstar = 0.0f;
+        for (int t = 0; t < 3; ++t) {
+            float ang = lo + RG_SAMPLE[t] * (hi - lo);
+            float xs = x0f + Af * metal::precise::cos(ang);
+            float ys = y0f + Bf * metal::precise::sin(ang);
+            float m = 1.0f - (xs * xs + ys * ys);
+            if (t == 0 || fabs(m) > fabs(mstar)) mstar = m;
+        }
+        if (!(mstar > 0.0f)) continue;
         bool fin[3], fout[3];
         for (int j = 0; j < 3; ++j) {
             bool v;
@@ -493,13 +503,18 @@ inline void rg_limb_sum(thread const rg_geo &G, thread float *la,
         float lo = (n == 0) ? 0.0f : th[i];
         float hi = (n == 0) ? MP_TWO_PI : ((i + 1 < n) ? th[i + 1] : th[0] + MP_TWO_PI);
         if (!(hi > lo)) continue;
-        float mid = 0.5f * (lo + hi);
-        float X = metal::precise::cos(mid), Y = metal::precise::sin(mid);
-        bool f[3];
-        for (int k = 0; k < 3; ++k) {
-            float u = (X - G.x0) / G.A[k], v = (Y - G.y0) / G.B[k];
-            f[k] = u * u + v * v < 1.0f;
+        float mk[3] = {0.0f, 0.0f, 0.0f};
+        for (int t = 0; t < 3; ++t) {
+            float ang = lo + RG_SAMPLE[t] * (hi - lo);
+            float X = metal::precise::cos(ang), Y = metal::precise::sin(ang);
+            for (int k = 0; k < 3; ++k) {
+                float u = (X - G.x0) / G.A[k], v = (Y - G.y0) / G.B[k];
+                float m = 1.0f - (u * u + v * v);
+                if (t == 0 || fabs(m) > fabs(mk[k])) mk[k] = m;
+            }
         }
+        bool f[3];
+        for (int k = 0; k < 3; ++k) f[k] = mk[k] > 0.0f;
         int a, b;
         rg_w(f, &a, &b);
         float dth = hi - lo;

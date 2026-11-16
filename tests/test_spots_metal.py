@@ -87,6 +87,13 @@ def test_point_columns_and_gradients(name, law):
     assert eg < 1e-5
 
 
+@pytest.mark.parametrize("name", list(TS.TOUCHING))
+def test_tangency_where_an_uncut_outline_is_read(name):
+    """As the graph (test_spots): membership read at three points of an arc."""
+    eB, _ = errors(HYBRID4, *case_arrays(TS.TOUCHING[name]), seed=len(name))
+    assert eB < 5e-7
+
+
 def test_random_configurations():
     """A planet near one of one to three random spots: the fp32 floor is
     a rim grazing the limb or the planet straddling it under hybrid5's

@@ -65,8 +65,8 @@ from .hybrid import _combine, combine_cols, get_law
 from .oblate import (_C, _F_SW, _N_MAX, _alpha, _coeffs, _csqrt, _cwhere, _even_arc,
                      _even_arc_gl, _mod2pi,
                      _pole_arc, _q_coeffs, _to_dtype)
-from .rings import (_BIG, _S1_CENTRED, _TINY, _arcs, _centred, _circle_roots, _crossings,
-                    _h)
+from .rings import (_BIG, _S1_CENTRED, _SAMPLES, _TINY, _arcs, _centred, _circle_roots,
+                    _crossings, _decisive, _h)
 from .trig import sincos
 
 __all__ = ["generator_cols_spots", "shape_cols_spots", "flux_dev_spots", "spot_vector"]
@@ -151,11 +151,11 @@ class _Rim:
         return (xr * self.ux + yr * self.vx, xr * self.uy + yr * self.vy,
                 self.mu_a + self.mu_b * s)
 
-    def own(self, x, y, z):
-        """Whether the 3D point (x, y, z) is in this cap (x may carry a
-        trailing arc axis beyond the rim's shape)."""
+    def margin(self, x, y, z):
+        """How far the 3D point (x, y, z) is into this cap: >= 0 in it (x
+        may carry a trailing arc axis beyond the rim's shape)."""
         ex = (lambda v: v[..., None]) if x.ndim > self.nx.ndim else (lambda v: v)
-        return x * ex(self.nx) + y * ex(self.ny) + z * ex(self.nz) >= ex(self.ca)
+        return x * ex(self.nx) + y * ex(self.ny) + z * ex(self.nz) - ex(self.ca)
 
 
 def _rim_roots(rim, eps, dt):
@@ -292,9 +292,6 @@ def _region_cols(X, Y, rp, spots, c, law, dt, large=False):
             acc = acc + mx.where(in_spots[k], 1.0 - c[k], 0.0)
         return mx.where(in_planet, 1.0, acc)
 
-    def cap_flags(x, y, z):
-        return [r.own(x, y, z) for r in gr]
-
     # ---- corners -----------------------------------------------------------
     # planet-rim, in the planet's unit frame: the rim as an ellipse with |b|
     # (a cap facing away is the mirror image, psi -> -psi)
@@ -328,12 +325,17 @@ def _region_cols(X, Y, rp, spots, c, law, dt, large=False):
     los, his, oks = _arcs(bps, bv)
     LO, HI = _sg(mx.stack(los, -1)), _sg(mx.stack(his, -1))
     OK = mx.stack(oks, -1)
-    sm, cm = sincos(0.5 * (LO + HI))
-    xs, ys = gX[..., None] + grp[..., None] * cm, gY[..., None] + grp[..., None] * sm
-    r2 = xs * xs + ys * ys
-    in_star = r2 < 1.0
-    zs = mx.sqrt(mx.where(in_star, 1.0 - r2, 0.0))
-    fl = cap_flags(xs, ys, zs)
+    m_star, m_cap = [], [[] for _ in range(K)]
+    for t in _SAMPLES:
+        sm, cm = sincos(LO + t * (HI - LO))
+        xs, ys = gX[..., None] + grp[..., None] * cm, gY[..., None] + grp[..., None] * sm
+        r2 = xs * xs + ys * ys
+        m_star.append(1.0 - r2)
+        zs = mx.sqrt(mx.maximum(1.0 - r2, 0.0))
+        for k, g in enumerate(gr):
+            m_cap[k].append(g.margin(xs, ys, zs))
+    in_star = _decisive(m_star) > 0.0
+    fl = [_decisive(m) >= 0.0 for m in m_cap]
     acc = 0.0 * LO
     for k in range(K):
         acc = acc + mx.where(fl[k], 1.0 - c[k][..., None], 0.0)
@@ -369,15 +371,17 @@ def _region_cols(X, Y, rp, spots, c, law, dt, large=False):
         LO, HI = _sg(mx.stack(los, -1)), _sg(mx.stack(his, -1))
         OK = mx.stack(oks, -1)
         ex = lambda v: v[..., None]
-        # the midpoint, frozen, in 3D
-        mid = 0.5 * (LO + HI)
-        s, c_ = sincos(mid)
-        xr, yr = ex(g.a) * c_, ex(g.y0) + ex(g.b) * s
-        xm = xr * ex(g.ux) + yr * ex(g.vx)
-        ym = xr * ex(g.uy) + yr * ex(g.vy)
-        mum = ex(g.mu_a) + ex(g.mu_b) * s
-        front = mum > 0.0
-        in_p = (xm - ex(gX)) ** 2 + (ym - ex(gY)) ** 2 < ex(grp) ** 2
+        # membership along the arc, frozen, in 3D
+        m_mu, m_p = [], []
+        for t in _SAMPLES:
+            s, c_ = sincos(LO + t * (HI - LO))
+            xr, yr = ex(g.a) * c_, ex(g.y0) + ex(g.b) * s
+            xm = xr * ex(g.ux) + yr * ex(g.vx)
+            ym = xr * ex(g.uy) + yr * ex(g.vy)
+            m_mu.append(ex(g.mu_a) + ex(g.mu_b) * s)
+            m_p.append(ex(grp) ** 2 - ((xm - ex(gX)) ** 2 + (ym - ex(gY)) ** 2))
+        front = _decisive(m_mu) > 0.0
+        in_p = _decisive(m_p) > 0.0
         kappa = mx.where(OK & front & ~in_p, 1.0 - c[k][..., None], 0.0)
         # other spots: none of their flags changes across rim k
         roots = [_rim_roots(g, e, dt) for e in eps]
@@ -405,10 +409,14 @@ def _region_cols(X, Y, rp, spots, c, law, dt, large=False):
     los, his, oks = _arcs(limb_th, limb_ok)
     h1 = [1.0 / (2.0 * (n + 1.0)) for n in range(3)] + [1.0 / (2.0 * (1.0 + e) * e) for e in eps]
     for lo, hi, ok in zip(los, his, oks):
-        sm, cm = sincos(0.5 * (lo + hi))
-        in_p = (cm - gX) ** 2 + (sm - gY) ** 2 < grp * grp
-        zero = 0.0 * cm
-        w = mx.where(ok, weight(in_p, cap_flags(cm, sm, zero)), 0.0)
+        m_p, m_cap = [], [[] for _ in range(K)]
+        for t in _SAMPLES:
+            sm, cm = sincos(lo + t * (hi - lo))
+            m_p.append(grp * grp - ((cm - gX) ** 2 + (sm - gY) ** 2))
+            for k, g in enumerate(gr):
+                m_cap[k].append(g.margin(cm, sm, 0.0 * cm))
+        in_p = _decisive(m_p) > 0.0
+        w = mx.where(ok, weight(in_p, [_decisive(m) >= 0.0 for m in m_cap]), 0.0)
         dth = _sg(hi - lo)
         for idx in range(ncol):
             occ[idx] = occ[idx] + w * h1[idx] * dth

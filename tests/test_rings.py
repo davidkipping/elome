@@ -92,6 +92,29 @@ def test_tangencies(edge, where, delta, dt):
     assert err(cols(cs, dt), oracle(cs)) < TOL[dt]
 
 
+_A_OUT = 0.08 * 2.6
+# the outer edge touching the limb on the x axis: from inside at the
+# edge's psi = pi and 0, from outside at the limb's theta = pi -- psi = pi
+# and theta = pi being where an outline with no corners (one arc, 0 to
+# 2 pi) is read
+LIMB_TOUCHING = {
+    "inside, at the edge's pi": (-(1 - _A_OUT), 0.0, 0.08, 0.0, 1.4, 2.6, 0.6, np.inf),
+    "inside, at the edge's 0": (1 - _A_OUT, 0.0, 0.08, 0.0, 1.4, 2.6, 0.6, np.inf),
+    "outside, at the limb's pi": (-(1 + _A_OUT), 0.0, 0.08, 0.0, 1.4, 2.6, 0.6, np.inf),
+    "translucent, inside at the edge's pi": (-(1 - _A_OUT), 0.0, 0.08, 0.0, 1.4, 2.6, 0.6, 0.5),
+}
+
+
+@pytest.mark.parametrize("dt", [mx.float64, mx.float32], ids=["fp64", "fp32"])
+@pytest.mark.parametrize("name", list(LIMB_TOUCHING))
+def test_an_edge_touching_the_limb(name, dt):
+    """Whether an arc is in the star, or a limb arc in an outline, is read
+    at three points along it, so a tangency at any one of them does not
+    decide it (at the midpoint alone these were 1 off in fp64)."""
+    cs = LIMB_TOUCHING[name]
+    assert err(cols(cs, dt), oracle(cs)) < TOL[dt]
+
+
 @pytest.mark.parametrize("dt", [mx.float64, mx.float32], ids=["fp64", "fp32"])
 @pytest.mark.parametrize("d", [0.0, 1e-30, 1e-20, 1e-12, 1e-6])
 def test_centred_on_the_star(d, dt):

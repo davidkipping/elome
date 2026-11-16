@@ -280,6 +280,25 @@ def _h(n_or_p, s, even):
     return 1.0 / (2.0 * p * (p - s))
 
 
+# a membership the arcs' corners do not decide (an outline against the
+# star, the limb against an outline) is read at three points of each arc (a
+# quarter, half and three quarters along), each test taking the reading
+# farthest from its boundary: an arc has no corner with the curve it is
+# tested against, so every interior point gives the same answer -- except
+# one where the curve merely touches it (a tangency), which a single
+# midpoint can land on: an outline with no corners is one arc, 0 to 2 pi,
+# read at pi
+_SAMPLES = (0.5, 0.25, 0.75)
+
+
+def _decisive(ms):
+    """The margin of largest magnitude among the samples' margins."""
+    best = ms[0]
+    for m in ms[1:]:
+        best = mx.where(mx.abs(m) > mx.abs(best), m, best)
+    return best
+
+
 def _weight(flags, T):
     """Blocked fraction for membership flags [planet, edge_0, ..., edge_n]
     (edges innermost first): 1 in the planet, else the band's T."""
@@ -328,11 +347,14 @@ def _region_cols(x0, y0, conics, T, law, dt, large=False):
         los, his, oks = _arcs(bps, bv)
         LO, HI = _sg(mx.stack(los, -1)), _sg(mx.stack(his, -1))
         OK = mx.stack(oks, -1)
-        mid = 0.5 * (LO + HI)
-        sm, cm = sincos(mid)
-        xs, ys = gx0[..., None] + ga[..., None] * cm, gy0[..., None] + gb[..., None] * sm
-        in_star = xs * xs + ys * ys < 1.0
+        sm, cm = sincos(0.5 * (LO + HI))
         cos2, sin2 = cm * cm, sm * sm
+        m_star = []
+        for t in _SAMPLES:
+            sm_, cm_ = sincos(LO + t * (HI - LO))
+            xs, ys = gx0[..., None] + ga[..., None] * cm_, gy0[..., None] + gb[..., None] * sm_
+            m_star.append(1.0 - (xs * xs + ys * ys))
+        in_star = _decisive(m_star) > 0.0
         flags_in, flags_out = [], []
         for j in range(n_c):
             if j == k:
@@ -399,11 +421,13 @@ def _region_cols(x0, y0, conics, T, law, dt, large=False):
     los, his, oks = _arcs(limb_th, limb_ok)
     h1 = [1.0 / (2.0 * (n + 1.0)) for n in range(3)] + [1.0 / (2.0 * (1.0 + e) * e) for e in eps]
     for lo, hi, ok in zip(los, his, oks):
-        sm, cm = sincos(0.5 * (lo + hi))
-        flags = []
-        for ga, gb in g:
-            u, v = (cm - gx0) / ga, (sm - gy0) / gb
-            flags.append(u * u + v * v < 1.0)
+        m_in = [[] for _ in g]
+        for t in _SAMPLES:
+            sm, cm = sincos(lo + t * (hi - lo))
+            for j, (ga, gb) in enumerate(g):
+                u, v = (cm - gx0) / ga, (sm - gy0) / gb
+                m_in[j].append(1.0 - (u * u + v * v))
+        flags = [_decisive(m) > 0.0 for m in m_in]
         w = mx.where(ok, _weight(flags, T), 0.0)
         dth = _sg(hi - lo)
         for idx in range(ncol):
