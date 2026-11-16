@@ -33,7 +33,7 @@ because they differ in what they can do and in what they cost:
 |---|---|---|---|
 | shape on the sky | disc, radius `rp` | ellipse: area-equivalent radius `rp`, flattening `f`, angle `theta` | the planet, plus an elliptical annulus: `ring_in`, `ring_out`, `ring_f`, `ring_tau`, angle `theta` |
 | limb darkening | uniform, linear, quadratic, polynomial, hybrid2/4/5 | hybrid2/4/5 | hybrid2/4/5 |
-| cost (fp32 GPU) | ~0.2 ns per point | tens of times more (B8) | about 10x an oblate planet (C4) |
+| cost (fp32 GPU) | ~0.2 ns per point | tens of times more (B8) | 10-20x an oblate planet (C4) |
 | switch | leave `f` as `None` (the default) | set `f` | set `ring_in` |
 
 **Part A** walks through a spherical planet; **Part B** repeats the same
@@ -122,7 +122,7 @@ will see, whether the planet is oblate).
 md(r"""
 ## A2. Hybrid limb darkening
 
-The quadratic law is the default, but Elómë also has three **hybrid
+Besides the quadratic law, Elómë has three **hybrid
 laws**: even powers of $\mu$ plus "double-pole"
 terms $(\mu^2+\epsilon)^{-2}$ that follow a real star's steep fall at the
 limb. Across PHOENIX and MPS-ATLAS stellar models in 37 passbands the
@@ -517,8 +517,8 @@ print(f"flux_dev_from_tau on the GPU: spherical {k_s:.2f} ms ({k_s * 1e6 / npts:
 
 md("""
 The ratio depends on the law, the shapes and how much of the grid is in
-transit: 15-32x for 512 chains of 5,000 points around a transit, about
-50x for the sets above. With the contact rule each point costs 25
+transit: 16-31x for 512 chains of 5,000 points around a transit, about
+50x for the sets above. With the contact rule each point costs up to 25
 evaluations, and the spherical kernel is so cheap per evaluation that the
 oblate one is ~60x it there. In absolute terms an oblate planet
 on the GPU is still far faster than the CPU codes for oblate planets -- see
@@ -733,7 +733,7 @@ md("""
 | float64 accuracy | ~1e-16 | ~1e-16 (vs a 30-digit integral) | ~1e-16 (vs brute-force integrals) |
 | float32 (GPU) accuracy | ~1e-7 | ~1e-7 | ~1e-7 |
 | exposures, eccentric orbits, gradients, batching, `ld_basis` | yes | yes | yes |
-| cost (fp32 GPU) | ~0.2 ns per point | tens of times that (15-32x; B8 measures this notebook's case); ~60x under the contact rule | about 10x an oblate planet (C4) |
+| cost (fp32 GPU) | ~0.2 ns per point | tens of times that (16-31x; B8 measures this notebook's case); ~60x under the contact rule | 10-20x an oblate planet (C4) |
 
 ## Where to go next
 

@@ -58,9 +58,10 @@ companions larger than their star.
 :link-type: doc
 :class-card: path-card path-oblate
 
-A planet flattened by rotation projects to an ellipse. Two more
-parameters (flattening and sky angle), the hybrid limb-darkening laws,
-and the same fast, differentiable machinery.
+A planet flattened by rotation projects to an ellipse: two more
+parameters (flattening and sky angle). A tidally locked triaxial planet,
+whose outline changes through the transit, is one parameter more. The
+hybrid limb-darkening laws and the same fast, differentiable machinery.
 :::
 
 :::{grid-item-card} Ringed planets
@@ -100,7 +101,7 @@ a spherical planet.
 | batches of parameter sets | ✓ | ✓ | ✓ | ✓ |
 | gradients in every parameter | ✓ | ✓ | ✓ | ✓ |
 | float32 GPU kernels | ✓ | ✓ | ✓ | ✓ |
-| occultor larger than the star | ✓ | ✗ | ✓ | untested |
+| occultor larger than the star | ✓ | ✗ | float64 | float64, untested |
 | `anvil` fitting target | ✓ | ✗ | ✗ | ✓ |
 
 - **Eccentric orbits**: Elómë computes the light curve up to $e < 1$
@@ -121,7 +122,9 @@ a spherical planet.
 - **float32 GPU kernels**: polynomial laws beyond quadratic run as a
   float32 MLX graph instead.
 - **Occultor size**: an oblate planet needs $r_p \le (1-f)^{3/2}$, so
-  that its outline crosses the stellar limb at most twice.
+  that its outline crosses the stellar limb at most twice. A ringed
+  planet or a spotted star larger than the star needs float64
+  ({doc}`spherical/large-occultors`).
 - **`anvil` fitting target** (`make_transit_target`): the quadratic or a
   hybrid law; finite exposures with a hybrid law or an eclipse.
 
@@ -131,7 +134,7 @@ New to Elómë? Start with {doc}`getting-started/installation` and the
 ## Citing Elómë
 
 If Elómë contributes to your research, please cite the Elómë paper
-(*Journal of Open Source Software*, in preparation). The hybrid
+(in preparation). The hybrid
 limb-darkening laws and their coefficients have papers of their own;
 see {doc}`about/citing`.
 
@@ -190,7 +193,7 @@ spots/accuracy-and-fitting
 
 ```{toctree}
 :hidden:
-:caption: Guides for both
+:caption: Guides
 
 guides/exposures
 guides/batching

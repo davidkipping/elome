@@ -12,7 +12,8 @@ planets.
 ```python
 from elome import flux_dev_from_tau
 
-# tau: (n_chains, m) time since each point's OWN mid-transit [days]
+# tau: (n_chains, m) mx.array, time since each point's OWN mid-transit [days];
+# period, a, b, r, u1, u2: floats or (n_chains,) mx.arrays, one per chain
 dev = flux_dev_from_tau(tau, period, a, b, r, u1, u2,
                         exp_time=29.4 / 60 / 24,   # Kepler long cadence
                         integration="contact", n_gl=5)
@@ -27,10 +28,12 @@ flux = 1.0 + dev
 | `limb_dark`, `u` | name; `(n_w,)` or `(n, n_w)` | a hybrid law and its weights, instead of `u1`, `u2` |
 | `f`, `theta` | scalar or `(n,)` | an oblate planet; `theta` in radians |
 | `tidal_q`, `mass_ratio` | scalar or `(n,)` | a tidally locked planet in place of `f` ({doc}`../oblate/tidal`); `mass_ratio` optional |
+| `ring_in`, `ring_out`, `ring_f`, `ring_tau` | scalar or `(n,)` | a ring: inner and outer radii in units of `r`, projected flattening, normal optical depth (`None`: opaque); see {doc}`../rings/light-curves` |
 | `spots`, `spot_time`, `prot`, `istar`, `lam` | `(K, 4)` or `(n, K, 4)`; like `tau`; scalar or `(n,)` | a spotted star (below); angles in radians |
 | `secosw`, `sesinw` | scalar or `(n,)` | an eccentric orbit, $(\sqrt{e}\cos\omega, \sqrt{e}\sin\omega)$ |
 | `exp_time`, `integration`, `n_gl`, `n_sub` | | the exposure rule; see {doc}`exposures` |
 | `ld_basis` | bool | return the limb-darkening basis instead (below) |
+| `large_occultor` | bool | a hybrid law with `r` given as an array that may exceed 1 ({doc}`../spherical/large-occultors`) |
 | `transittype`, `fp` | `"primary"` or `"secondary"`; scalar or `(n,)` | a secondary eclipse and the planet-to-star flux ratio (below) |
 
 float32 `tau` runs on the GPU; float64 runs the exact graph on the CPU
@@ -40,7 +43,7 @@ that runs in float32.
 
 ## Why `tau`
 
-The ready-made model in `elome.anvil` derives each point's phase from a
+The ready-made models in `elome.anvil` derive each point's phase from a
 linear ephemeris, so the times are data there. A sampler that fits
 **individual transit times** (transit-timing variations, with tens of
 mid-times sampled jointly with the shape) cannot express its model that
@@ -255,6 +258,11 @@ $$
 with the two deviations `flux_dev_from_tau` gives, the eclipse's being
 $f_p$ times the planet's visible fraction.
 
+Here `t` is the data's times in float64 and `t_ref` a float64 reference
+time near them, subtracted on the host so that float32 keeps the
+resolution; `t0_ref` and `period_ref` are the reference ephemeris, with
+`t0_ref` measured from `t_ref`.
+
 ```python
 import mlx.core as mx
 from elome.anvil import make_eclipse_flux, transit_param_names
@@ -305,8 +313,8 @@ returns a float64 float) or MLX arrays (and is differentiable).
 
 `flux_dev_metal(z, r, ...)` takes sky separations $z$ (in stellar radii)
 instead of times, for callers that compute the orbit themselves. It has
-the same limb-darkening keywords and `ld_basis`, but no exposure
-integration.
+the same limb-darkening keywords, `ld_basis` and `large_occultor`, but no
+exposure integration.
 
 ## Hybrid-law speed
 

@@ -31,6 +31,6 @@ python docs/tutorials/build_03.py docs/tutorials/03_spherical_and_oblate_planets
 jupyter nbconvert --to notebook --execute --inplace docs/tutorials/03_spherical_and_oblate_planets.ipynb
 ```
 
-The committed notebooks are executed on Apple Silicon before each
-release, which is why the documentation can show their outputs without
-running them.
+The committed notebooks were executed on Apple Silicon, each with the
+Elómë version it prints in its first cells, which is why the
+documentation can show their outputs without running them.

@@ -28,7 +28,8 @@ Two more fields, `f` and `theta`, make the planet oblate; leave them as
 
 `TransitModel(params, t, ...)` prepares a model for the times `t`. It
 fixes the limb-darkening law and the transit type, and any parameter
-may change between evaluations:
+may change between evaluations. With `params` and `t` as in the
+{doc}`../getting-started/quickstart`:
 
 ```python
 m = elome.TransitModel(params, t)
@@ -44,8 +45,9 @@ flux = m.light_curve(params)          # ...and evaluate again, nothing rebuilt
 | `exp_time` | `0.0` | exposure length, in the units of `t` |
 | `supersample_factor` | `1` | samples per exposure, batman's rule |
 | `integration` | `"supersample"` | or `"contact"`, the more accurate rule |
-| `n_gl` | `7` | Gauss-Legendre nodes per piece for `"contact"` |
+| `n_gl` | `7` | Gauss-Legendre nodes per piece for `"contact"` (the sampler API's default is 5) |
 | `dtype` | `mx.float64` | `mx.float32` runs on the GPU |
+| `use_metal` | `True` | `False` runs float32 as an MLX graph instead of the Metal kernels |
 
 Exposure integration has its own page: {doc}`../guides/exposures`.
 
@@ -56,7 +58,8 @@ Three ways to evaluate the model:
   `(n_sets, len(t))` array from one dispatch. See
   {doc}`../guides/batching`.
 - `light_curve_mx(params)` returns an MLX array that is differentiable in
-  every field. See {doc}`../guides/gradients-and-precision`.
+  every field (with `supersample_factor`, one value per sub-exposure).
+  See {doc}`../guides/gradients-and-precision`.
 
 ## Precision and speed
 
@@ -123,7 +126,8 @@ Exposures integrate as for a transit: `supersample_factor`, or
   rule), eccentric orbits, secondary eclipses with `fp`.
 - Elómë adds the contact rule for exposures, many parameter sets per call
   (`light_curves`), gradients (`light_curve_mx`), float32 on the GPU,
-  the hybrid limb-darkening laws, and oblate planets.
+  the hybrid limb-darkening laws, oblate, tidally locked and ringed
+  planets, and spotted stars.
 - Not available: the nonlinear, square-root, logarithmic, exponential
   and power-2 laws, which have no closed form in this formulation; the
   polynomial and hybrid laws cover the same ground (see

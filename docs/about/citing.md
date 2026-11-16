@@ -3,7 +3,7 @@
 If Elómë contributes to your research, please cite the software paper:
 
 > Kipping, D. (in preparation). *Elómë: analytic, differentiable transit
-> light curves on Apple Silicon.* Journal of Open Source Software.
+> light curves on Apple Silicon.*
 
 The reference, DOI and BibTeX entry will appear here once the paper is
 published. Until then, please cite the software by its repository,

@@ -79,7 +79,7 @@ rule ({doc}`../guides/exposures`) splits each exposure at the kinks that
 fall inside it (at most four), so it costs the same number of
 evaluations as for any other planet. On a nearly edge-on ring that
 crosses the limb four times, it agrees with supersampling extrapolated to
-infinitely many points to $2\times10^{-7}$ at the default `n_gl = 5`, and
+infinitely many points to $2\times10^{-7}$ at `n_gl = 5` (the sampler API's default), and
 to $2\times10^{-9}$ at `n_gl = 20`. Uniform supersampling, by contrast,
 converges only as $1/N$ across a kink.
 

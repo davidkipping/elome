@@ -90,8 +90,10 @@ Each map has an MLX version, which is differentiable and suited to
 sampling, and a numpy version with the `_np` suffix:
 
 ```python
+import numpy as np
 from elome import TransitParams, TransitModel, simplex_from_q_np
 
+t = np.linspace(-0.1, 0.1, 1000)
 p = TransitParams()
 p.t0, p.per, p.rp, p.a, p.inc, p.ecc, p.w = 0.0, 3.45, 0.1, 8.8, 87.0, 0.0, 90.0
 p.limb_dark = "hybrid5"

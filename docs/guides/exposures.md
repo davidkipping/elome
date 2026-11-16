@@ -4,13 +4,15 @@ A long exposure records the average flux over its duration, not the
 flux at its midpoint. For Kepler's 29.4-minute long cadence, or TESS's
 30-minute full-frame images, ignoring this distorts the ingress and
 egress and biases the fitted parameters. Elómë has two ways to integrate
-over the exposure, for spherical and oblate planets alike.
+over the exposure, for every kind of planet and star it models.
+`TransitModel` takes `n_gl = 7` Gauss-Legendre nodes per piece by
+default; `flux_dev_from_tau` and the anvil models take 5.
 
 ## Supersampling
 
 The rule of Kipping (2010), as batman implements it: average
 `supersample_factor` evenly spaced samples across each exposure,
-endpoints included.
+endpoints included. With `params` and `t` as in the {doc}`../getting-started/quickstart`:
 
 ```python
 m = elome.TransitModel(params, t, supersample_factor=15, exp_time=29.4 / 60 / 24)

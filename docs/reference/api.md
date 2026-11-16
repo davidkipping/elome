@@ -17,6 +17,41 @@ TransitParams()
 ```text
 Object to store the physical parameters of the transit
 (attribute-compatible with batman.TransitParams).
+
+Any field may be a Python number, a numpy value or an ``mx.array``
+scalar (differentiable through ``TransitModel.light_curve_mx``), or
+an array of one value per parameter set for ``light_curves``.
+
+Fields (times in the units of ``t``, usually days; lengths in
+stellar radii; angles in degrees):
+
+- ``t0``: time of inferior conjunction (mid-transit). ``per``:
+  orbital period. ``rp``: planet radius. ``a``: semi-major axis.
+  ``inc``: orbital inclination. ``ecc``: eccentricity (default 0).
+  ``w``: the planet's argument of periastron (default 90).
+- ``limb_dark``: the law, "uniform", "linear", "quadratic",
+  "polynomial", or a hybrid law ("hybrid2", "hybrid4", "hybrid5",
+  or a ``HybridLaw``); ``u``: its coefficients or weights.
+- ``fp``: planet-to-star flux ratio, for secondary eclipses.
+- ``f``, ``theta``: an oblate planet's projected flattening
+  1 - B/A (``rp`` is then the area-equivalent radius) and the sky
+  angle of its long axis from the direction of motion.
+- ``tidal_q``, ``mass_ratio``: a tidally locked triaxial planet in
+  place of ``f`` (``rp`` the volumetric radius), and optionally the
+  planet-to-star mass ratio for its offset towards the star.
+- ``ring_in``, ``ring_out``, ``ring_f``, ``ring_tau``: a ring's inner
+  and outer radii in units of ``rp``, its projected flattening, and
+  its normal optical depth (None: opaque).
+- ``spots``: a (K, 4) array of longitude, latitude, angular radius
+  and contrast per spot; ``prot``: the star's rotation period;
+  ``istar``, ``lam``: its spin inclination (None: 90) and
+  sky-projected obliquity (None: 0); ``spot_epoch``: when the
+  longitudes are measured (None: ``t0``).
+- ``t_secondary`` (unused: the eclipse time follows from the orbit)
+  and ``spot_u`` (reserved) exist for compatibility.
+
+Unset shape, ring and spot fields (None) mean a spherical planet on
+an unspotted star.
 ```
 
 ### `TransitModel`
@@ -44,7 +79,11 @@ Args:
         hundreds of orbits the float32 phase loses precision.
     integration: "supersample" (batman's rule) or "contact"
         (Gauss-Legendre on windows split at the contact times).
-    n_gl: Gauss-Legendre nodes per piece for "contact".
+    n_gl: Gauss-Legendre nodes per piece for "contact" (7 here; the
+        sampler API and the anvil models default to 5).
+    use_metal: float32 may use the fused Metal kernels (default);
+        False runs the float32 MLX graph instead, as on a machine
+        without Metal.
 ```
 
 ### `TransitModel.light_curve`
@@ -94,16 +133,16 @@ Model flux as an MLX array that stays in the graph, for building
 on in MLX -- differentiable in the parameters.
 
 Any ``TransitParams`` field may be an ``mx.array`` scalar (t0, per,
-rp, a, inc, ecc, w, fp, and ``u`` or its entries), and gradients
-flow to every such field. Python numbers stay constants, folded on
+rp, a, inc, ecc, w, fp, ``u`` or its entries, and the shape, ring
+and spot fields), and gradients flow to every such field. Python numbers stay constants, folded on
 the host exactly as ``light_curve`` folds them. With ``ecc`` a
 Python number the result is ``light_curve``'s bit for bit when the
 arrays are among t0, per, rp, fp, u and -- on an eccentric orbit
 -- a, which enter the graph as they are. An array ``inc`` or
 ``w``, or ``a`` on a circular orbit, is combined in-graph in the
 model dtype (b = a cos i, (k, h) = sqrt(e) (cos w, sin w)), which
-on an fp32 model is within ~1 ulp of the host fold (see
-``_model_eval``). Every field must be a scalar and ``u`` a flat
+on an fp32 model is within ~1 ulp of the host fold. Every field
+must be a scalar and ``u`` a flat
 vector -- list, tuple, numpy or mx.array, or a list holding
 mx.array scalars; a wrong shape raises before anything is built.
 
@@ -114,8 +153,7 @@ average, as ``light_curve`` does.
 
 Differentiable details:
 
-* an array-valued ``ecc`` enters as (e, w) directly
-  (``anchor_constants_ew``), so d/d(ecc) is finite and correct at
+* an array-valued ``ecc`` enters as (e, w) directly, so d/d(ecc) is finite and correct at
   e = 0 -- the one-sided derivative, since e >= 0 -- and d/dw is
   exactly 0 there. Out of [0, 1) it raises ValueError whenever the
   value can be read (eagerly, or under ``mx.grad``); when it is
@@ -125,8 +163,8 @@ Differentiable details:
   e = 0, (k, h) above it -- so a fit that differentiates, say, only
   rp and t0 runs exactly as fast as ``light_curve``, fused kernel
   included. Only an array-valued ``ecc`` takes the (e, w) graph.
-  For the quadratic law that forgoes the fused *model* kernel (see
-  _get_compiled): measured 3-4x slower on an fp32 GPU model at
+  For the quadratic law that forgoes the fused *model* kernel:
+  measured 3-4x slower on an fp32 GPU model at
   2e6 points (3.0 vs 0.75-0.91 ms). The hybrid laws' photometry
   runs in their z-input kernel on every graph, this one included.
 * ``u`` may be a list, a numpy array, or an mx.array vector.
@@ -200,8 +238,11 @@ Args:
         for 8.9e-8 against 101 for 1.7e-5 on a 29-minute exposure);
         ``"supersample"`` -- ``n_sub`` uniform nodes, batman's rule;
         ``"none"`` -- instantaneous.
-    n_gl: Gauss-Legendre nodes per sub-interval. The window always has
-        five sub-intervals, so the cost is 5 * n_gl evaluations.
+    n_gl: Gauss-Legendre nodes per sub-interval. The window is split
+        into five sub-intervals at the contacts, most of them empty:
+        an exposure with no contact inside takes n_gl evaluations, one
+        holding all four 5 * n_gl. The float32 kernels skip the empty
+        sub-intervals; the float64 graph evaluates all five.
     n_sub: number of nodes for ``"supersample"``.
     ld_basis: return the limb-darkening *basis* instead of one
         limb-darkened curve (off by default; see below). ``u1``/``u2``
@@ -211,7 +252,7 @@ Args:
         its shape weights, ``(n_w,)`` shared or ``(n, n_w)`` per chain
         (see ``elome.hybrid``); same kernels' structure, no
         elliptic integrals. With ``ld_basis=True`` a hybrid law returns
-        its (n, m, 1 + n_w) shape-basis columns B = [E0, T_1..T_n],
+        its (n, m, 1 + n_w) shape-basis columns B = [E0, S_1..S_n],
         and ``flux - 1 == (B @ c)/(N @ c)`` with ``c = (1, -w)``,
         ``N = hybrid.hybrid_norms(law)``.
     large_occultor: a hybrid law with ``r`` that may exceed 1, given
@@ -249,10 +290,10 @@ Args:
         With secosw/sesinw, even 0, q is held to the cubic's branch
         through 0: -0.131 < q < 0.470, and q (1 + 3 q)(1 - q) /
         (1 - e)^3 in (-0.09, 0.6). cos i < 1; mass_ratio finite and not
-        negative, its offset under a tenth of the periastron distance
-        (``oblate_tau._tidal_domain``). Outside, numbers raise and
-        arrays give NaN. An h_f goes through ``tidal_q_from_hf``. Primary transits, hybrid
-        laws. The same kernels and graph as f=, at about the same cost.
+        negative, its offset under a tenth of the periastron distance.
+        Outside, numbers raise and arrays give NaN. An h_f goes through
+        ``tidal_q_from_hf``. Primary transits, hybrid laws. The same
+        kernels and graph as f=, at about the same cost.
     ring_in, ring_out, ring_f, ring_tau: a ring in the planet's
         equatorial plane (``elome.rings``): inner and outer radii in
         units of ``r``, projected flattening ring_f = 1 - |cos i| of the
@@ -337,7 +378,7 @@ Newton through the anchored solve), so every split sits on its kink.
 ### `flux_dev_metal`
 
 ```python
-flux_dev_metal(z: mx.array, r, u1=None, u2=None, *, ld_basis: bool = False, limb_dark: str = 'quadratic', u=None) -> mx.array
+flux_dev_metal(z: mx.array, r, u1=None, u2=None, *, ld_basis: bool = False, limb_dark: str = 'quadratic', u=None, large_occultor=None) -> mx.array
 ```
 
 ```text
@@ -361,7 +402,8 @@ with c = (1 - u1 - u2, u1 + 2 u2, -u2) and N = (pi, 2 pi/3, pi/2).
 ``u1``/``u2`` are ignored there. See ``flux_dev_from_tau``.
 
 ``limb_dark="hybrid2" | "hybrid4" | "hybrid5"`` with ``u`` the shape
-weights selects a hybrid law, as in ``flux_dev_from_tau``.
+weights selects a hybrid law, as in ``flux_dev_from_tau``, and so does
+``large_occultor`` for an array ``r`` that may exceed 1.
 ```
 
 ### `contact_offsets_oblate`
@@ -649,11 +691,15 @@ and the sky-projected obliquity ``lam`` in degrees.
 PARAM_NAMES = ['t0_off', 'p_off', 'r', 'b', 'a', 'q1', 'q2', 'df0']
 ```
 
+The circular quadratic models' parameter order (`make_quad_transit_flux`).
+
 ### `anvil.PARAM_NAMES_ECC`
 
 ```python
 PARAM_NAMES_ECC = ['t0_off', 'p_off', 'r', 'b', 'a', 'q1', 'q2', 'secosw', 'sesinw', 'df0']
 ```
+
+The eccentric quadratic models' parameter order (`make_ecc_transit_flux`): `secosw`, `sesinw` before `df0`.
 
 ### `anvil.make_transit_target`
 
@@ -668,7 +714,7 @@ Build an anvil fitting problem from REAL photometry.
 analytic graph off the GPU), "analytic" (alias "graph") or "autodiff",
 for circular and eccentric models alike.
 
-This is the entry point for mission data (Kepler, TESS, ...). It owns
+This is the entry point for real photometry. It owns
 the conditioning that the float32 sampling path depends on, so a
 caller never has to rediscover it:
 
@@ -721,8 +767,14 @@ Args:
         defaults cap r at 0.5, b at 1.2 and a at 200; an occultor
         larger than the star (a white-dwarf host) needs them widened,
         e.g. ``{"r": (1.0, 12.0), "b": (0.0, 13.0), "a": (1.5, 1000.0)}``.
-        The model takes any r > 0 (fp32 error grows ~ r^2; see the
-        docs on occultors larger than the star).
+        The model takes any r > 0. Beyond r = 1 the quadratic law's
+        fp32 error grows ~ r^2, while a hybrid law stays at fp32
+        rounding (an upper bound above 1 builds in its large-occultor
+        form); a spotted star loses fp32 accuracy there. See the docs
+        on occultors larger than the star.
+    policy: the anvil ``PrecisionPolicy`` of the chunked float32
+        likelihood (None: anvil's default).
+    core: as above.
     strength: barrier weight for the eccentric constraints.
     transittype: "primary" (a transit), "secondary" (a secondary
         eclipse alone: no limb darkening) or "both" (a transit and an
@@ -865,6 +917,8 @@ unrelated package of the same name) re-raises that error.
 ```python
 DEFAULT_BOUNDS = {'t0_off': (-0.5, 0.5), 'p_off': (-0.05, 0.05), 'r': (0.005, 0.5), 'b': (0.0, 1.2), 'a': (1.5, 200.0), 'q1': (0.0, 1.0), 'q2': (0.0, 1.0), 'df0': (-0.01, 0.01), 'secosw': (-0.95, 0.95), 'sesinw': (-0.95, 0.95), 'q3': (0.0, 1.0), 'q4': (0.0, 1.0), 'q5': (0.0, 1.0), 'lon': (-180.0, 180.0), 'sinlat': (-1.0, 1.0), 'rad': (1.0, 30.0), 'contrast': (0.0, 1.0), 'cos_istar': (0.0, 1.0), 'lam': (-180.0, 180.0), 'tocc_off': (-0.5, 0.5), 'fp': (0.0, 0.01)}
 ```
+
+The parameter boxes `make_transit_target` uses unless `bounds=` overrides them.
 
 ## Limb darkening
 
@@ -1057,11 +1111,15 @@ hybrid4's ``mix`` is its curvature basis (``hybrid4_basis``).
 HYBRID2 = HybridLaw(name='hybrid2', eps=(0.36,), shapes=((1.0, -1.0, 0.0),), mix=None)
 ```
 
+The hybrid2 law: one shape term and one pole.
+
 ### `HYBRID4`
 
 ```python
 HYBRID4 = HybridLaw(name='hybrid4', eps=(0.028601207249486824, 0.38582417584735224), shapes=((1.0, 0.0, -1.0), (1.0, -2.0, 1.0)), mix=((0.5, 0.5, 0.0, 0.0), (0.0, 1.0, 0.0, 0.0), (0.0006260842489149928, 0.0014040137554114226, 1.020963273947444, -0.022993371951770075), (-0.08116019831892918, -0.2568535772254558, -0.0005906631447752816, 1.3386044386891605)))
 ```
+
+The hybrid4 law: two shape terms and two poles, its weights in the curvature basis `HYBRID4_BASIS`.
 
 ### `HYBRID5`
 
@@ -1069,17 +1127,23 @@ HYBRID4 = HybridLaw(name='hybrid4', eps=(0.028601207249486824, 0.385824175847352
 HYBRID5 = HybridLaw(name='hybrid5', eps=(0.0015965451792942786, 0.04127504477274302, 0.38743471584956696), shapes=((1.0, 0.0, -1.0), (1.0, -2.0, 1.0)), mix=None)
 ```
 
+The hybrid5 law: two shape terms and three poles.
+
 ### `HYBRID2_EPS`
 
 ```python
 HYBRID2_EPS = 0.36
 ```
 
+hybrid2's pole.
+
 ### `HYBRID4_EPS`
 
 ```python
 HYBRID4_EPS = (0.028601207249486824, 0.38582417584735224)
 ```
+
+hybrid4's poles (`hybrid.ladder(2, 25/16)`).
 
 ### `HYBRID4_BASIS`
 
@@ -1094,11 +1158,15 @@ HYBRID4_BASIS = array([[ 5.00000000e-01,  5.00000000e-01,  0.00000000e+00,
          1.33860444e+00]])
 ```
 
+hybrid4's curvature basis (`hybrid4_basis`): the mix from its weights to the shape and pole terms.
+
 ### `HYBRID_LAWS`
 
 ```python
 HYBRID_LAWS = {'hybrid2': HybridLaw(name='hybrid2', eps=(0.36,), shapes=((1.0, -1.0, 0.0),), mix=None), 'hybrid4': HybridLaw(name='hybrid4', eps=(0.028601207249486824, 0.38582417584735224), shapes=((1.0, 0.0, -1.0), (1.0, -2.0, 1.0)), mix=((0.5, 0.5, 0.0, 0.0), (0.0, 1.0, 0.0, 0.0), (0.0006260842489149928, 0.0014040137554114226, 1.020963273947444, -0.022993371951770075), (-0.08116019831892918, -0.2568535772254558, -0.0005906631447752816, 1.3386044386891605))), 'hybrid5': HybridLaw(name='hybrid5', eps=(0.0015965451792942786, 0.04127504477274302, 0.38743471584956696), shapes=((1.0, 0.0, -1.0), (1.0, -2.0, 1.0)), mix=None)}
 ```
+
+The registry of hybrid laws by name; every entry point accepts these names.
 
 ### `hybrid_norms`
 
@@ -1535,7 +1603,7 @@ kepler_E(M: mx.array, e, n_iter: int = 5) -> mx.array
 ```text
 Eccentric anomaly E(M, e), Danby starter + fixed Halley steps.
 
-Verification/back-compat path (the production solver is ``kepler``).
+A simple reference solver; the light-curve code uses ``kepler``.
 ```
 
 ### `kepler.kepler`

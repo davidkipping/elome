@@ -114,6 +114,10 @@ ellipse. Leave `f` as `None` for a spherical planet.
 ## Where next
 
 - **Spherical planets:** {doc}`../spherical/index`.
-- **Oblate planets:** {doc}`../oblate/index`.
+- **Oblate and tidally locked planets:** {doc}`../oblate/index`.
+- **Ringed planets:** {doc}`../rings/index`.
+- **Starspots:** {doc}`../spots/index`.
+- **Long exposures** (Kepler long cadence, full-frame images):
+  {doc}`../guides/exposures`.
 - **Fitting with a sampler:** {doc}`../spherical/fitting` and the
   {doc}`../tutorials/index`.

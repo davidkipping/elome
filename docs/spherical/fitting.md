@@ -8,15 +8,20 @@ Elómë is the fastest code you have or the slowest.
 
 ## The model a sampler sees
 
-`elome.anvil` provides two ready-made models in the contract samplers
-want: `model_fn(v, x)` maps a `(n_chains, n_params)` array of parameters
-and the data's times to a `(n_chains, m)` array of flux deviations, in
-one fused Metal kernel, with analytic gradients.
+`elome.anvil` provides ready-made models in the contract samplers want:
+`model_fn(v, x)` maps a `(n_chains, n_params)` array of parameters and
+the data's times to a `(n_chains, m)` array of flux deviations, in one
+fused Metal kernel, with analytic gradients.
 
 | builder | parameters, in order |
 |---|---|
 | `make_quad_transit_flux(period_ref)` | `t0_off, p_off, r, b, a, q1, q2, df0` (8, circular) |
 | `make_ecc_transit_flux(period_ref)` | `t0_off, p_off, r, b, a, q1, q2, secosw, sesinw, df0` (10, eccentric) |
+| `make_hybrid_transit_flux(period_ref, limb_dark=...)` | a hybrid law, optionally eccentric, spotted, and with exposures |
+| `make_eclipse_flux(period_ref, transittype=...)` | a secondary eclipse, or a transit and an eclipse together ({doc}`../guides/sampler-api`) |
+
+`elome.anvil.transit_param_names(...)` gives the parameter order for any
+combination of the last two builders' options.
 
 The order is `elome.anvil.PARAM_NAMES` and `PARAM_NAMES_ECC`: in the
 eccentric model `secosw` and `sesinw` come *before* `df0`.
@@ -39,14 +44,32 @@ of the eccentric one, and chains at $e = 0$ skip the Kepler solve.
 curve: model, likelihood, parameter boxes and reporting:
 
 ```python
+import numpy as np
+import mlx.core as mx
 from elome.anvil import make_transit_target, import_engine
+from elome.ld import u_to_q_np
 engine, _ = import_engine()
 
 tt = make_transit_target(t, y, yerr,          # BJD/BTJD/BKJD; flux near 1
-                         t0_guess=..., period_guess=...)
-u0 = ...                                       # (n_chains, 8) starting points
+                         t0_guess=t0_guess, period_guess=period_guess)
+
+# starting points: a physical guess, mapped into the sampler's space, jittered
+q1, q2 = u_to_q_np(0.4, 0.25)
+v0 = tt.model_params(t0=t0_guess, period=period_guess, r=0.1, b=0.3, a=9.0,
+                     q1=float(q1), q2=float(q2))
+u_start = tt.transform.from_model_np(v0)
+rng = np.random.default_rng(1)
+u0 = mx.array((u_start + 1e-3 * rng.standard_normal((1024, u_start.size)))
+              .astype(np.float32))           # (n_chains, 8)
+
 res = engine.run(engine.ChEESHMC(tt.target, max_leapfrog=384),
                  tt.target, u0, n_warmup=300, n_samples=200)
+
+# the samples, back in physical units and the input time system
+phys = tt.transform.to_physical(
+    tt.transform.model_np(res.get_chain(flat=True).astype(np.float64)))
+for name, col in zip(tt.param_names, phys.T):
+    print(f"{name:>7s} = {col.mean():.8g} +/- {col.std():.2g}")
 ```
 
 It owns the conditioning that the float32 path depends on, so that you
@@ -60,6 +83,11 @@ never have to rediscover it:
   `bounds=`);
 - reporting values back on the input time system;
 - with `eccentric=True`, the joint-constraint barrier described below.
+
+The default quadratic target is instantaneous: it does not integrate over
+exposures, and `exp_time=` raises. For long-cadence data, which an
+instantaneous model fits with a bias (see {doc}`../guides/exposures`),
+use a hybrid law with `exp_time=` (next section).
 
 `tt.model_params(t0=..., period=..., r=..., ...)` converts physical values
 into the model's parameter vector. `tt.x64`, `tt.y_fit` and `tt.model_fn`
@@ -174,7 +202,7 @@ from elome.orbit import epoch_center_times
 model = make_quad_transit_flux(period_ref)        # fused Metal kernel inside
 x64 = epoch_center_times(t, t0_ref, period_ref)   # float64 host preprocessing
 loglike = ChunkedGaussianLogLike(model, x64, y - 1.0, yerr)  # fp32-safe sums
-loglike_c = mx.compile(lambda v: loglike(v))      # ~2x: fuses the reduction
+loglike_c = mx.compile(lambda v: loglike(v))      # ~1.5x: fuses the reduction
 
 lo = np.array([-0.5, -0.05, 0.01, 0.0, 2.0, 0.0, 0.0, -0.01])
 hi = np.array([ 0.5,  0.05, 0.50, 0.9, 50., 1.0, 1.0,  0.01])

@@ -186,7 +186,7 @@ def _kepler_E_vjp(primals, cotangents, outputs):
 def kepler_E(M: mx.array, e, n_iter: int = 5) -> mx.array:
     """Eccentric anomaly E(M, e), Danby starter + fixed Halley steps.
 
-    Verification/back-compat path (the production solver is ``kepler``).
+    A simple reference solver; the light-curve code uses ``kepler``.
     """
     M = M - _TWO_PI * mx.round(M / _TWO_PI)
     sM, _ = sincos(M)

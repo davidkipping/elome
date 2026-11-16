@@ -34,7 +34,8 @@ The same as for a spherical planet:
   sampler API (`flux_dev_from_tau`);
 - circular and eccentric orbits;
 - exposure integration, including the contact rule;
-- secondary eclipses, with the planet a uniform disc, in `TransitModel`;
+- secondary eclipses, with the planet a uniform disc, in `TransitModel`
+  and `flux_dev_from_tau`;
 - float64 and float32, with analytic gradients in every parameter,
   `f` and `theta` included.
 

@@ -51,7 +51,7 @@ and the API reference.
 ## Citation
 
 If Elómë contributes to your research, please cite the Elómë paper
-(Kipping, in preparation, *Journal of Open Source Software*). If you use
+(Kipping, in preparation). If you use
 the hybrid limb-darkening laws, oblate or ringed planets or starspots, please
 also cite the
 hybrid-law papers, also in preparation; see

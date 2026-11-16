@@ -20,7 +20,7 @@ each configuration in its own process on a quiet machine
 | gradients | analytic, every parameter | none | none | automatic (JAX) | analytic in $b$ and $r$ |
 | hardware, precision | Apple GPU (float32), CPU (float64) | CPU, float64 | CPU (float64), OpenCL GPU (float32) | CPU or GPU (JAX), float32 or float64 | CPU, float64 |
 | many parameter sets | native batch | loop | native batch | `jax.vmap` | loop |
-| also | secondary eclipses, oblate and ringed planets | secondary eclipses | eclipses, phase curves, timing variations, gravity darkening | several planets, timing variations, radial velocities, stellar maps | the backend of exoplanet |
+| also | secondary eclipses, oblate, tidally locked and ringed planets, starspots | secondary eclipses | eclipses, phase curves, timing variations, gravity darkening | several planets, timing variations, radial velocities, stellar maps | the backend of exoplanet |
 | platforms | macOS on Apple silicon; float64 also Linux | any | any | any | any |
 
 The hybrid laws, which match real stars' limb darkening as well as the
@@ -96,7 +96,7 @@ Elómë's throughput stays at about 50,000 light curves per second from
 
 **Value and gradient** of a scalar loss on one light curve, in every
 parameter each code exposes (only Elómë and jaxoplanet are
-differentiable):
+differentiable in every parameter):
 
 | code | $N = 10^4$ | $N = 10^5$ |
 |---|---:|---:|

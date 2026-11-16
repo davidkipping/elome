@@ -34,8 +34,9 @@ to rounding.
 
 ## Gradients
 
-Of the spherical codes only Elómë and jaxoplanet are differentiable,
-and Elómë's gradients are analytic, fused into Metal kernels. For the gradient of a chunked
+Of the spherical codes only Elómë and jaxoplanet are differentiable in
+every parameter (exoplanet-core has gradients in $b$ and $r$), and
+Elómë's gradients are analytic, fused into Metal kernels. For the gradient of a chunked
 log-likelihood at 1024 chains × 65,536 points, compiled, in float32
 (`benchmarks/bench_vjp.py`, which records them in `benchmarks/vjp.json`):
 

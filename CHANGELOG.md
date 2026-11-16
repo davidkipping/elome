@@ -126,11 +126,20 @@ every release is tagged `vX.Y.Z` in git.
   Metal kernels and MLX graph alike, and at float64's rounding in float64.
   The new form is built into the kernels and the float64 graph only
   where `r` may exceed 1, so planets smaller than their star run exactly
-  the code they ran before. TransitModel decides from `rp`, and the anvil
-  targets from their bounds on `r`. A direct call with `r` as an array
-  opts in with `large_occultor=True`: `flux_dev_from_tau`,
-  `flux_dev_hybrid`, `shape_cols`, `make_hybrid_transit_flux` and
-  `make_eclipse_flux` take it.
+  the code they ran before. TransitModel decides from `rp`, the anvil
+  targets from their bounds on `r`, and a call with `r` as a Python
+  number from its value, on every route. A direct call with `r` as an
+  array opts in with `large_occultor=True`: `flux_dev_from_tau`,
+  `flux_dev_metal`, `flux_dev_hybrid`, `shape_cols`,
+  `make_hybrid_transit_flux` and `make_eclipse_flux` take it. Ringed
+  planets and spotted stars do not have the new form: beyond `rp = 1`
+  they need float64.
+- **A NaN or infinite `t0`, `inc` or `w` now raises** in `light_curve`
+  and `light_curves`, as a bad `rp`, `a` or `per` did, and so does a
+  NaN `fp` for a secondary eclipse. The float32 kernels returned an
+  ordinary-looking transit for them, where float64 returned NaN. Under
+  `mx.compile` or `mx.vmap`, where values cannot be read, the result is
+  NaN.
 - Two numbers in the sampler guide's starspot notes rendered with a
   stray tab in place of `\times`.
 - **anvil, spotted stars on eccentric orbits: the star-alone term's
@@ -173,6 +182,16 @@ every release is tagged `vX.Y.Z` in git.
   not 3–9×10⁻⁶. The polynomial law in float32 is unusable for large
   occultors (2×10⁻² at `rp = 20`). The page now recommends a hybrid law
   in float32, or float64.
+- **Corrections and gaps across the guides.** The fitting page's first
+  example now runs from data to posterior samples, and says that the
+  default quadratic target is instantaneous. The gradients guide says
+  that `light_curve_mx` returns one value per sub-exposure with
+  `supersample_factor`. The sampler-API table lists the ring arguments
+  and `large_occultor`. `TransitParams` documents every field, and
+  `TransitModel` its `use_metal` keyword and `n_gl` default. Pages that
+  contradicted each other on the anvil targets, gradients in other
+  codes, eclipses in the sampler API and the tutorials' figures now
+  agree.
 
 ## [0.22.1] — 2026-10-23
 

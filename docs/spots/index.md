@@ -80,4 +80,5 @@ What differs:
 3. {doc}`accuracy-and-fitting`: what to expect in each precision, and
    what is specific to fitting spots.
 4. The shared guides: {doc}`../guides/exposures`,
-   {doc}`../guides/batching`, {doc}`../guides/gradients-and-precision`.
+   {doc}`../guides/batching`, {doc}`../guides/gradients-and-precision`,
+   {doc}`../guides/sampler-api`.

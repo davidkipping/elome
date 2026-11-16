@@ -101,7 +101,8 @@ below.
 
 `tidal_q` always sets the shape. Two other quantities are separate from it:
 
-- **`mass_ratio`**, $M_p/M_\star$, is an optional input to the model, and only
+- **`mass_ratio`**, $q_m = M_p/M_\star$, is an optional input to the model
+  (`TransitParams.mass_ratio`, or `mass_ratio=` in the sampler API), and only
   adds the small offset described below.
 - **$h_f$** is not an input to the model. It is a conversion between $q$ and
   $h_f$ that always needs a mass ratio, whether or not the model used one.
@@ -110,11 +111,11 @@ So there are three ways to set up a call:
 
 | Inputs | Model | $h_f$ |
 |---|---|---|
-| `tidal_q` | shape only | `tidal_hf_from_q`, with $\mu$ from elsewhere |
+| `tidal_q` | shape only | `tidal_hf_from_q`, with $q_m$ from elsewhere |
 | `tidal_q`, `mass_ratio` | shape and offset | `tidal_hf_from_q` |
-| $h_f$ and $\mu$, through `tidal_q_from_hf` | shape and offset | given |
+| $h_f$ and $q_m$, through `tidal_q_from_hf` | shape and offset | given |
 
-The last, for MLX arrays, is differentiable in $h_f$ and $\mu$:
+The last, for MLX arrays, is differentiable in $h_f$ and $q_m$:
 
 ```python
 hf, mu = mx.array(1.5, dtype=mx.float32), mx.array(1.2e-3, dtype=mx.float32)
@@ -174,25 +175,25 @@ gives the same ellipsoid.
 shape follows from it:
 
 - **The shape follows the separation at fixed volume.** With $r$ the
-  star-planet distance and $\mu = M_p/M_\star$,
+  star-planet distance and $q_m = M_p/M_\star$ the mass ratio,
 
   $$
-  q(1 + 3q)(1 - q) = \frac{h_f}{2\mu}\frac{R_V^3}{r^3},
+  q(1 + 3q)(1 - q) = \frac{h_f}{2q_m}\frac{R_V^3}{r^3},
   $$
 
-  which is `ellc`'s $q = h_f r_2^3 / (2\mu r^3)$ with $r_2$ taken from the
+  which is `ellc`'s $q = h_f r_2^3 / (2q_m r^3)$ with $r_2$ taken from the
   volume. On a circular orbit $q$ is constant, and on an eccentric one it is
   solved at every instant.
 - **`elome.tidal_q_from_hf(hf, mu, a, rv)`** gives $q$ from $h_f$ at $r = a$,
   and `elome.tidal_hf_from_q` the reverse. The commonly printed first-order
-  relation $h_f = 2q\,\mu\,(a/R_V)^3$ uses $R_V$ where this one uses $r_2$. The
+  relation $h_f = 2q\,q_m\,(a/R_V)^3$ uses $R_V$ where this one uses $r_2$. The
   two differ by $(1+3q)(1-q)$.
 - **`mass_ratio` is optional**, and is needed only for the third-order tide:
   `ellc` moves the ellipsoid's centre towards the star by
-  $D = r_2^5/(\mu a^4)$, with $\Delta_3 = 1$ and no dependence on $r$. That moves
+  $D = r_2^5/(q_m a^4)$, with $\Delta_3 = 1$ and no dependence on $r$. That moves
   the planet's barycentric position, so the sky position scales by
-  $1 - D/((1+\mu)r)$. On a circular orbit this is exactly the same model at
-  $a \to a - D/(1+\mu)$ with the same inclination, so `mass_ratio=None` fits
+  $1 - D/((1+q_m)r)$. On a circular orbit this is exactly the same model at
+  $a \to a - D/(1+q_m)$ with the same inclination, so `mass_ratio=None` fits
   the same light curves with a slightly different $a$.
 
 Three conventions differ but do not change the model:
@@ -221,7 +222,7 @@ hybrid law. `ellc` has no twist, so `theta` is 0 in any comparison.
 ## Accuracy and cost
 
 The light curve agrees with an independent quadrature of the projected
-ellipse at each phase, built from the 3-D ellipsoid, and fp32 stays within
-0.15 ppm of fp64. A call costs about what an oblate one of the same
+ellipse at each phase, built from the 3-D ellipsoid, and float32 stays within
+0.15 ppm of float64. A call costs about what an oblate one of the same
 flattening costs. See {doc}`accuracy-and-cost` for the oblate figures, which
 apply here.

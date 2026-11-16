@@ -677,7 +677,7 @@ def make_transit_target(t, y, yerr, t0_guess, period_guess,
     analytic graph off the GPU), "analytic" (alias "graph") or "autodiff",
     for circular and eccentric models alike.
 
-    This is the entry point for mission data (Kepler, TESS, ...). It owns
+    This is the entry point for real photometry. It owns
     the conditioning that the float32 sampling path depends on, so a
     caller never has to rediscover it:
 
@@ -730,8 +730,14 @@ def make_transit_target(t, y, yerr, t0_guess, period_guess,
             defaults cap r at 0.5, b at 1.2 and a at 200; an occultor
             larger than the star (a white-dwarf host) needs them widened,
             e.g. ``{"r": (1.0, 12.0), "b": (0.0, 13.0), "a": (1.5, 1000.0)}``.
-            The model takes any r > 0 (fp32 error grows ~ r^2; see the
-            docs on occultors larger than the star).
+            The model takes any r > 0. Beyond r = 1 the quadratic law's
+            fp32 error grows ~ r^2, while a hybrid law stays at fp32
+            rounding (an upper bound above 1 builds in its large-occultor
+            form); a spotted star loses fp32 accuracy there. See the docs
+            on occultors larger than the star.
+        policy: the anvil ``PrecisionPolicy`` of the chunked float32
+            likelihood (None: anvil's default).
+        core: as above.
         strength: barrier weight for the eccentric constraints.
         transittype: "primary" (a transit), "secondary" (a secondary
             eclipse alone: no limb darkening) or "both" (a transit and an

@@ -1,9 +1,10 @@
 # Companions larger than their star
 
 A planet transiting a white dwarf can be several times larger than its
-star (WD 1856+534 b has $R_p/R_\star = 7.28$). Every entry point accepts
-`rp > 1`, with every limb-darkening law, in both precisions, with
-gradients.
+star (WD 1856+534 b has $R_p/R_\star = 7.28$). For a spherical planet
+every entry point accepts `rp > 1`, with every limb-darkening law, in
+both precisions, with gradients. A ringed planet or a spotted star with
+`rp > 1` needs float64 (below).
 
 A fourth regime then appears beside no overlap, partial overlap and a
 planet fully inside the disc: **total occultation**, $z \le r_p - 1$
@@ -78,11 +79,17 @@ table. With the polynomial law, use float64.
 - **The hybrid laws' large-occultor form** is built into the Metal
   kernels and the float64 graph only where `r` may exceed 1, because
   planets smaller than their star would pay for it (up to 6% in some
-  gradient kernels). `TransitModel` decides from `rp`, and
-  `make_transit_target` from its bounds on `r`. A direct call with `r`
-  as an array (`flux_dev_from_tau`, `flux_dev_hybrid`,
-  `make_hybrid_transit_flux`) needs `large_occultor=True`. Without it,
-  the error beyond `rp = 1` grows as for the polynomial law.
+  gradient kernels). `TransitModel` decides from `rp`,
+  `make_transit_target` from its bounds on `r`, and a call with `r` as a
+  Python number from its value. A direct call with `r` as an array needs
+  `large_occultor=True`: `flux_dev_from_tau`, `flux_dev_metal`,
+  `flux_dev_hybrid`, `shape_cols`, `make_hybrid_transit_flux` and
+  `make_eclipse_flux` take it. Without it, the error beyond `rp = 1`
+  grows as for the polynomial law.
+- **Ringed planets and spotted stars** do not have the large-occultor
+  form in their float32 kernels. Beyond `rp = 1` their float32 error
+  grows quickly with `rp`: for hybrid4 about $10^{-3}$ at `rp = 7.28`
+  and over $0.2$ at `rp = 20`. Use float64 for them.
 - **`rp = 1` exactly** is a degenerate point, where the contacts meet at
   $z = 0$. The result there is good to $5\times10^{-9}$ in float64 and
   $10^{-4}$ in float32, and finite everywhere.

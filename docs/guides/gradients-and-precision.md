@@ -4,8 +4,12 @@
 
 `light_curve_mx(params)` returns the flux as an MLX array. It is
 differentiable in every `TransitParams` field you set to an `mx.array`
-(`t0`, `per`, `rp`, `a`, `inc`, `ecc`, `w`, `fp`, the entries of `u`, and
-`f` and `theta` for an oblate planet). Python numbers stay constants:
+(`t0`, `per`, `rp`, `a`, `inc`, `ecc`, `w`, `fp`, the entries of `u`;
+`f`, `theta`, `tidal_q` and `mass_ratio` for an oblate or tidally locked
+planet; the ring fields; the spots and the star's spin for a spotted
+star). Python numbers stay constants. Continuing from the
+{doc}`../getting-started/quickstart` (`params`, `t`, the fake data `y`),
+with `yerr` the data's errors:
 
 ```python
 import mlx.core as mx
@@ -23,6 +27,11 @@ with mx.stream(mx.cpu):
 - **It is the same model.** With all-Python parameters the result is
   `light_curve`'s, bit for bit, through the same compiled graphs.
   Differentiating any field other than `ecc` costs nothing extra.
+- **Supersampling returns the raw grid.** With `supersample_factor > 1`
+  the result has `n_times * factor` entries, one per sub-exposure;
+  reshape it to `(n_times, factor)` and average over the second axis to
+  get `light_curve`'s values. The contact rule (`integration="contact"`)
+  returns one value per time, already integrated.
 - **Eccentricity is safe at zero.** An array-valued `ecc` enters through
   $(e, \omega)$ in a form whose derivative in $e$ is finite and correct at
   $e = 0$ (one-sided, since $e \ge 0$), with $\partial/\partial\omega = 0$

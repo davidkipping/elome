@@ -37,7 +37,7 @@ is genuinely faster: batch harder, or use the float64 path.
 `TransitModel.light_curves` evaluates many parameter sets on the model's
 times in one dispatch, and returns a `(n_sets, len(t))` array. Pass a
 sequence of `TransitParams`, or one `TransitParams` whose fields are
-arrays:
+arrays. With `params` and `t` as in the {doc}`../getting-started/quickstart`:
 
 ```python
 import mlx.core as mx

@@ -3,7 +3,7 @@
 Everything in {doc}`../spherical/fitting` about samplers applies:
 batch every chain into one call, bound the parameters with priors, and
 compile the likelihood. The ready-made anvil targets are for spherical
-planets with the quadratic law. For an oblate planet, build the
+planets (the quadratic or a hybrid law). For an oblate planet, build the
 likelihood on `flux_dev_from_tau` with `f` and `theta`, which runs every
 chain in one GPU launch with analytic gradients in every input:
 

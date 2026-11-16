@@ -139,6 +139,27 @@ def _from_source(path):
     return None, None
 
 
+# one line under each module constant, which has no docstring of its own
+VALUE_NOTES = {
+    "elome.anvil.PARAM_NAMES": "The circular quadratic models' parameter "
+    "order (`make_quad_transit_flux`).",
+    "elome.anvil.PARAM_NAMES_ECC": "The eccentric quadratic models' parameter "
+    "order (`make_ecc_transit_flux`): `secosw`, `sesinw` before `df0`.",
+    "elome.anvil.DEFAULT_BOUNDS": "The parameter boxes `make_transit_target` "
+    "uses unless `bounds=` overrides them.",
+    "elome.HYBRID2": "The hybrid2 law: one shape term and one pole.",
+    "elome.HYBRID4": "The hybrid4 law: two shape terms and two poles, its "
+    "weights in the curvature basis `HYBRID4_BASIS`.",
+    "elome.HYBRID5": "The hybrid5 law: two shape terms and three poles.",
+    "elome.HYBRID2_EPS": "hybrid2's pole.",
+    "elome.HYBRID4_EPS": "hybrid4's poles (`hybrid.ladder(2, 25/16)`).",
+    "elome.HYBRID4_BASIS": "hybrid4's curvature basis (`hybrid4_basis`): "
+    "the mix from its weights to the shape and pole terms.",
+    "elome.HYBRID_LAWS": "The registry of hybrid laws by name; every entry "
+    "point accepts these names.",
+}
+
+
 def entry(path):
     obj = resolve(path)
     if type(obj).__name__ == "custom_function":
@@ -158,6 +179,8 @@ def entry(path):
     lines = [f"### `{short}`", ""]
     if is_value and not inspect.isclass(obj):
         lines += ["```python", f"{head} = {obj!r}", "```", ""]
+        if path in VALUE_NOTES:
+            lines += [VALUE_NOTES[path], ""]
         doc = None
     else:
         sig = signature(head, obj)

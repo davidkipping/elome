@@ -52,5 +52,6 @@ evaluates them all. See {doc}`../guides/batching`.
 - Angles are **degrees** in `TransitParams` (`inc`, `w`, `theta`) and
   **radians** in the array API (`theta` in `flux_dev_from_tau`).
 - The array API describes the orbit by the impact parameter `b` rather
-  than the inclination. For eccentric orbits it uses
+  than the inclination, $b = a\cos i\,(1 - e^2)/(1 + e\sin\omega)$
+  (just $a\cos i$ on a circular orbit). For eccentric orbits it uses
   $(\sqrt{e}\cos\omega, \sqrt{e}\sin\omega)$, which samplers handle well.

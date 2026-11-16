@@ -1,7 +1,7 @@
 """Elómë quickstart — the batman tutorial, plus what batman can't
 do: gradients.
 
-Run:  ../anvil/.venv/bin/python examples/quickstart.py
+Run:  python examples/quickstart.py
 """
 
 import mlx.core as mx

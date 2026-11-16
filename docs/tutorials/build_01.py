@@ -54,7 +54,8 @@ Two dtype/device regimes matter, and Elómë picks between them for you:
 | `float64` (default) | CPU | plotting, single curves, reference checks |
 | `float32` | GPU, fused Metal kernel | sampling — thousands of parameter sets |
 
-The float64 path is the accurate one (~1e-13 against an mpmath oracle). The
+The float64 path is the accurate one (float64 rounding, ~2e-16, against a
+30-digit direct integral). The
 float32 path is the fast one and is what a sampler uses.
 """)
 
@@ -87,7 +88,7 @@ Build a `TransitParams`, hand it and a time array to `TransitModel`, call
 
 The parameters: `t0` time of inferior conjunction, `per` period, `rp` planet
 radius in stellar radii, `a` semi-major axis in stellar radii, `inc`
-inclination in degrees, `ecc`/`w` eccentricity and longitude of periastron,
+inclination in degrees, `ecc`/`w` eccentricity and argument of periastron,
 `u` limb-darkening coefficients, `limb_dark` which law they belong to.
 """)
 
@@ -99,7 +100,7 @@ params.rp = 0.1             # Rp / R*
 params.a = 8.8              # a / R*
 params.inc = 87.07          # inclination [deg]
 params.ecc = 0.0            # circular for now
-params.w = 90.0             # longitude of periastron [deg]
+params.w = 90.0             # argument of periastron [deg]
 params.u = [0.4, 0.25]      # quadratic limb darkening
 params.limb_dark = "quadratic"
 
@@ -118,8 +119,9 @@ if HAVE_PLT:
 md("""
 `TransitModel` precomputes everything that depends on the *time grid*, so you
 build it once and vary parameters freely between calls — the batman workflow.
-Only the limb-darkening **law** (and, for polynomial laws, its order) is fixed
-per model.
+The limb-darkening **law** (and, for polynomial laws, its order), the transit
+type, and the planet's kind (oblate, ringed, spotted and how many spots) are
+fixed per model; every parameter value can change.
 """)
 
 code("""
@@ -175,7 +177,8 @@ if HAVE_PLT:
 md(r"""
 ## 3. Limb darkening
 
-Three classic laws plus an arbitrary-order polynomial:
+Three classic laws plus an arbitrary-order polynomial (the hybrid laws are
+shown in the third tutorial):
 
 | `limb_dark` | `u` | intensity profile |
 |---|---|---|
@@ -184,7 +187,7 @@ Three classic laws plus an arbitrary-order polynomial:
 | `"quadratic"` | `[u1, u2]` | 1 - u1 (1-mu) - u2 (1-mu)^2 |
 | `"polynomial"` | `[u1, ..., uN]` | 1 - sum_n u_n (1-mu)^n, **any N** |
 
-The polynomial law uses ALFM19's M_n recursion and is accurate to ~1e-15 at
+The polynomial law uses the M_n recursion of Agol, Luger & Foreman-Mackey (2020) and is accurate to ~1e-15 at
 N = 8 against direct numerical integration. Note that `batman`'s
 *non*-polynomial laws (`nonlinear`, `squareroot`, `logarithmic`) are outside
 this formulation and are not supported — you get a clear error, not a silent
@@ -461,8 +464,8 @@ the pitfalls section).
 
 **Warmup and trajectory length are coupled**, which is easy to get wrong: long
 trajectories need enough warmup to adapt a step size that can support them.
-Building this notebook, 200 warmup iterations at `max_leapfrog=384` produced
-**3,120 divergences and R-hat 1.22**; 300 warmup on the same problem produced
+On this problem, 200 warmup iterations at `max_leapfrog=384` give
+**thousands of divergences and R-hat 1.22**, and 300 give
 **zero divergences and R-hat 1.002**. If you see many divergences, lengthening
 warmup is the first thing to try — before you touch the model.
 """)
@@ -598,8 +601,8 @@ md(r"""
 ## 8. Three things that bite people
 
 **1. Never loop where you can batch.** A GPU dispatch costs the same whether
-it carries one curve or four thousand. Section 5 measured a ~100x penalty for
-looping. If you write your own sampler, hand the model every parameter set you
+it carries one curve or four thousand. Section 5 measured the penalty
+for looping: tens of times. If you write your own sampler, hand the model every parameter set you
 have in one call.
 
 **2. Use `float32` only for sampling, and let the library condition your
