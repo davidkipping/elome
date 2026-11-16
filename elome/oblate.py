@@ -33,8 +33,11 @@ Three regimes, as masks:
 
 Below a flattening f_sw (1e-10 fp64, 1e-5 fp32) the value is the spherical
 closed forms': the quartic's leading coefficient S2 ~ r^2 f / 2 vanishes
-there and two roots run to 0 and infinity, and the flattening's effect,
-~1e-3 f, is below rounding. Its slope is not 0, though (fits start at
+there and two roots run to 0 and infinity, and the flattening's effect is
+at most ~0.15 f (r near 1; 1e-3 f at r = 0.1, 1e-5 f at r = 0.01): 1.4e-11
+at f_sw. The switch is not lower because the ellipse's own forms fail
+there, at an f that depends on r and position (1e-14 for r = 0.01, 1e-16
+for r = 0.9). Its slope is not 0, though (fits start at
 f = 0): d/df there is the ellipse's at f = f_sw, an O(f_sw) bias. A root
 beyond |z| = 2 is taken through its partner 1/conj(z) inside the disc: a
 nearly circular outline's far root is ~1/S2, whose tangents overflow.
