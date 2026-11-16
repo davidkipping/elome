@@ -14,7 +14,8 @@ benchmarks write (tau_kernel.json, hybrid_kernels.json,
 oblate_kernels.json, spot_kernels.json, eclipse_kernels.json,
 eclipse_exposure.json: bench_tau_kernel.py, bench_hybrid.py,
 bench_oblate.py, bench_spots.py, bench_eclipse.py,
-bench_eclipse_exposure.py), and the cross-code comparison tables (spherical, oblate and
+bench_eclipse_exposure.py), the large-occultor accuracy tables to
+large_occultor.json (bench_large_occultor.py), and the cross-code comparison tables (spherical, oblate and
 ringed planets, starspots) back to the results files the comparison runs
 write (precision*.json, speed.json, batch_scaling.json,
 oblate_compare/results_oblate.json, ring_compare/results_ring.json,
@@ -88,9 +89,11 @@ def check():
     n_ker, bad_ker, pages_ker = check_kernels()
     n_sp, bad_sp, pages_sp = check_spots()
     n_ec, bad_ec, pages_ec = check_eclipses()
-    bad += bad_cmp + bad_ker + bad_sp + bad_ec
-    n_cmp += n_ker + n_sp + n_ec
-    pages = len(set(expect) | pages_cmp | pages_ker | pages_sp | pages_ec)
+    n_lo, bad_lo, pages_lo = check_large_occultors()
+    bad += bad_cmp + bad_ker + bad_sp + bad_ec + bad_lo
+    n_cmp += n_ker + n_sp + n_ec + n_lo
+    pages = len(set(expect) | pages_cmp | pages_ker | pages_sp | pages_ec
+                | pages_lo)
     print("\n".join(bad) if bad else f"docs agree with the measurements "
           f"({sum(map(len, expect.values())) + n_cmp} numbers on {pages} pages)")
     return not bad
@@ -255,6 +258,24 @@ def check_kernels():
          "quadratic law's", dearer == ["hybrid5"]),
     ]
     n, bad = _check_pages(pages, claims)
+    return n, bad, set(pages)
+
+
+def check_large_occultors():
+    """(numbers checked, failures, pages) for the rp > 1 accuracy tables:
+    float64 against the direct integral, float32 against float64."""
+    lo = json.load(open(os.path.join(HERE, "large_occultor.json")))
+    hyb = ("hybrid2", "hybrid4", "hybrid5")
+
+    def rows(prec):
+        e = lo[prec]
+        return {f"{r:g}": [e["quadratic"][str(r)], e["polynomial"][str(r)],
+                           max(e[h][str(r)] for h in hyb)]
+                for r in lo["radii"]}
+    pages = {"spherical/large-occultors.md": (
+        {"float64, against": rows("float64"),
+         "float32, partial overlap": rows("float32")}, [])}
+    n, bad = _check_pages(pages)
     return n, bad, set(pages)
 
 

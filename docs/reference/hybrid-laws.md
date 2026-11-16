@@ -172,7 +172,10 @@ thousands.
 For a spherical planet every column has a short closed form in the
 quantities the standard (Agol, Luger & Foreman-Mackey 2020) solution
 already computes. The even powers $\mu^0$, $\mu^2$, $\mu^4$ come from its
-even recursion. A pole term is an arc term plus an arctangent or
+even recursion. For a companion larger than its star that recursion
+cancels badly, so they come instead from Green's theorem taken about the
+star's centre, whose terms stay of order 1 at any size (see
+{doc}`../spherical/large-occultors`). A pole term is an arc term plus an arctangent or
 logarithm of rational functions of the separation $z$ and radius $r$,
 switching to a short series where the two forms meet. Neither needs an
 elliptic integral, which is why `hybrid2` and `hybrid4` are cheaper than

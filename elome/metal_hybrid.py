@@ -21,7 +21,9 @@ three laws are three instantiations of the same source.
 No column needs an elliptic integral: per point the kernel evaluates the
 lens geometry (two atan2, one sqrt, as the quadratic core), the even
 recursion M_0 -> M_2 -> M_4 (rational), and per pole one atan2 or log and
-two sqrt. The quadratic core's 8-iteration cel3 recursion is gone.
+two sqrt. The quadratic core's 8-iteration cel3 recursion is gone. A large
+occultor (r > 1) takes the even columns from hybrid._even_terms_big
+instead: two more atan2 and an 8-term series.
 """
 
 from __future__ import annotations
@@ -34,7 +36,8 @@ import mlx.core as mx
 import numpy as np
 
 from . import metal as M
-from .hybrid import combine_cols, flux_dev_hybrid, get_law, shape_cols
+from .hybrid import (I3_TERMS, _may_be_large, combine_cols, declared,
+                     flux_dev_hybrid, get_law, i3_series, shape_cols)
 
 __all__ = ["flux_dev_from_tau_hybrid", "flux_dev_metal_hybrid"]
 
@@ -129,6 +132,7 @@ inline void mp_hyb_gen(float z, float r, thread float *G,
     Gr[2] = -r * (a2 * i0 + 2.0f * ab * i1 + b2 * i2);
     Gz[2] = r * (a2 * i1 + 2.0f * ab * i2 + b2 * i3);
 
+CONST_LARGE
     // pole columns (hybrid.py's _pole_terms)
     for (int q = 0; q < HYB_K; ++q) {
         float e = HYB_POLE[q];
@@ -262,14 +266,66 @@ inline float mp_hyb_cols_bd(float z, float r, thread const float *wct,
 }
 """
 
+#: the large-occultor even columns, spliced into mp_hyb_gen at CONST_LARGE
+#: only for a kernel that may see r > 1 (hybrid.large_occultors): every
+#: other kernel is the source without it, byte for byte, so planets smaller
+#: than their star never pay for it (inlined, its code cost the gradient
+#: kernels up to 6% at r < 1; out of line, 20-40%)
+_HYB_LARGE = r"""    // a large occultor: the recursion and the boundary rule above cancel
+    // like r^5 (alpha ~ -2 r^2), so the even columns come from Green's
+    // theorem about the star's centre, every term O(1)
+    // (hybrid._even_terms_big, which the comments there derive)
+    if (r > 1.0f) {
+        float e = r - 1.0f, d = r - z, d2 = d * d, rd = r * d;
+        float fq = 4.0f * z * r, h = 2.0f * z * r;
+        float k0 = metal::precise::atan2(kite, e * (r + 1.0f) + z2);
+        float k1 = metal::precise::atan2(
+            kite, r < 2.0f ? z2 - e * (r + 1.0f) : 1.0f - d * (r + z));
+        float t = kite / ((e + z) * ((r + 1.0f) + z));   // tan(k0 / 2)
+        float x = 0.5f * k0, x2 = x * x;
+        float I3 = (CONST_I3) * (x2 * x2 * x2 * x);
+        float w = 1.0f / (1.0f + t * t);
+        float S2 = t * t * w, SC = t * w;
+        float I2 = (6.0f * I3 + S2 * S2 * SC) / 5.0f;
+        float I1 = (4.0f * I2 + S2 * SC) / 3.0f;
+        float M0b = 2.0f * k0, M1b = 4.0f * I1, M2b = 4.0f * I2, M3b = 4.0f * I3;
+        float T1 = rd * M0b + h * M1b;
+        float T2 = d2 * rd * M0b + (d2 * h + fq * rd) * M1b + fq * h * M2b;
+        float T3 = d2 * d2 * rd * M0b + (d2 * d2 * h + 2.0f * d2 * fq * rd) * M1b
+                 + (2.0f * d2 * fq * h + fq * fq * rd) * M2b + fq * fq * h * M3b;
+        G[0] = -(k1 + 0.5f * T1);
+        G[1] = -(2.0f * k1 + 2.0f * T1 - T2) / 4.0f;
+        G[2] = -(2.0f * k1 + 3.0f * T1 - 3.0f * T2 + T3) / 6.0f;
+        float Ab = (1.0f - d) * (1.0f + d), qA = fq * Ab;
+        float C0 = M0b - 2.0f * M1b, C1 = M1b - 2.0f * M2b, C2 = M2b - 2.0f * M3b;
+        Gr[0] = -r * M0b;                          Gz[0] = r * C0;
+        Gr[1] = -r * (Ab * M0b - fq * M1b);        Gz[1] = r * (Ab * C0 - fq * C1);
+        Gr[2] = -r * (Ab * Ab * M0b - 2.0f * qA * M1b + fq * fq * M2b);
+        Gz[2] = r * (Ab * Ab * C0 - 2.0f * qA * C1 + fq * fq * C2);
+    }
+
+"""
+
 #: the markers _HYB_FN must not contain once instantiated
 _FN_MARKERS = ("CONST_", "YSW", "KITE_FLOOR")
 
 
-def _hyb_header(law) -> str:
+def _horner_x2(coefs) -> str:
+    """sum_m c_m x2^m as a Horner expression in x2."""
+    src = _f(coefs[-1])
+    for c in reversed(coefs[:-1]):
+        src = f"{_f(c)} + x2 * ({src})"
+    return src
+
+
+def _hyb_header(law, large: bool = False) -> str:
     law = get_law(law)
     S = law.generator_matrix()
-    src = (_HYB_FN.replace("CONST_K", str(len(law.eps)))
+    large_src = (_HYB_LARGE.replace(
+        "CONST_I3", _horner_x2(i3_series(I3_TERMS[mx.float32])))
+        if large else "")
+    src = (_HYB_FN.replace("CONST_LARGE\n", large_src)
+                  .replace("CONST_K", str(len(law.eps)))
                   .replace("CONST_NW", str(law.n_w))
                   .replace("CONST_NCOL", str(law.n_col))
                   .replace("CONST_NGEN", str(S.shape[1]))
@@ -442,14 +498,14 @@ def _law_tag(law):
     return f"{safe}_{digest}"
 
 
-def _get_kernels(law, orbit: str, basis: bool):
+def _get_kernels(law, orbit: str, basis: bool, large: bool = False):
     law = get_law(law)
-    key = ("hyb", law.definition, orbit, basis)
+    key = ("hyb", law.definition, orbit, basis) + (("large",) if large else ())
     if key not in M._kernels:
         hdr = M._HEADER + M._phot_header()
         if orbit == "ecc":
             hdr += M._ecc_header()
-        hdr += _hyb_header(law)
+        hdr += _hyb_header(law, large)
         ins = (["taui", "perin", "ain"] + M._TAU_ORBITS[orbit]["inputs"]
                + ["rin"] + ([] if basis else ["win"])
                + ["cs", "xg", "wg", "expt", "mode", "ngl", "nsub", "npts"])
@@ -458,7 +514,8 @@ def _get_kernels(law, orbit: str, basis: bool):
         else:
             fwd = _fwd_body()
             vjp = _vjp_body(_nslot(law, orbit, False))
-        tag = f"{_law_tag(law)}_{orbit}{'_b' if basis else ''}"
+        tag = (f"{_law_tag(law)}_{orbit}{'_b' if basis else ''}"
+               f"{'_large' if large else ''}")
         M._kernels[key] = (
             mx.fast.metal_kernel(
                 name=f"mp_htau_fwd_{tag}", input_names=ins,
@@ -471,13 +528,14 @@ def _get_kernels(law, orbit: str, basis: bool):
     return M._kernels[key]
 
 
-def _make_core(law, exp_time, mode, n_gl, n_sub, orbit, basis):
+def _make_core(law, exp_time, mode, n_gl, n_sub, orbit, basis, large=False):
     """custom_function over the hybrid tau kernels. Primals:
     (tau2d, period, a, shape, r, [w2d,] cs) -- as metal._make_tau_core_g,
-    with the (n, n_w) weights in place of u1, u2."""
+    with the (n, n_w) weights in place of u1, u2. ``large``: the kernels
+    with the r > 1 form (_HYB_LARGE)."""
     law = get_law(law)
     key = ("hyb", law.definition, orbit, bool(basis), float(exp_time), int(mode),
-           int(n_gl), int(n_sub))
+           int(n_gl), int(n_sub)) + (("large",) if large else ())
     if key in M._tau_cores:
         return M._tau_cores[key]
     from .exposure import gauss_legendre
@@ -493,7 +551,7 @@ def _make_core(law, exp_time, mode, n_gl, n_sub, orbit, basis):
         tau2d = primals[0]
         n, m = tau2d.shape
         xg, wg = _static(tau2d.dtype)
-        k = _get_kernels(law, orbit, basis)[0]
+        k = _get_kernels(law, orbit, basis, large)[0]
         return k(inputs=[*primals, xg, wg, exp_time, mode, n_gl, n_sub,
                          int(m)],
                  output_shapes=[(n, m, ncol) if basis else (n, m)],
@@ -506,7 +564,7 @@ def _make_core(law, exp_time, mode, n_gl, n_sub, orbit, basis):
         n, m = tau2d.shape
         cols = (m + 31) // 32
         xg, wg = _static(tau2d.dtype)
-        k = _get_kernels(law, orbit, basis)[1]
+        k = _get_kernels(law, orbit, basis, large)[1]
         gtau, gpar = k(
             inputs=[*primals, xg, wg, exp_time, mode, n_gl, n_sub, ct,
                     int(m)],
@@ -627,9 +685,17 @@ def _canon_w(u, n, n_w, dtype, name):
 
 @M.fp64_on_cpu
 def flux_dev_from_tau_hybrid(tau, period, a, b, r, law, u, exp_time, mode,
-                             n_gl, n_sub, basis=False, k=None, h=None):
+                             n_gl, n_sub, basis=False, k=None, h=None,
+                             large_occultor=None):
     """``metal.flux_dev_from_tau`` for a hybrid law (that function validates
     the keywords and delegates here)."""
+    with declared(large_occultor):
+        return _from_tau_hybrid(tau, period, a, b, r, law, u, exp_time, mode,
+                                n_gl, n_sub, basis, k, h)
+
+
+def _from_tau_hybrid(tau, period, a, b, r, law, u, exp_time, mode, n_gl,
+                     n_sub, basis, k, h):
     law = get_law(law)
     if tau.ndim not in (1, 2):
         raise ValueError(f"tau must be (m,) or (n, m); got {tau.shape}")
@@ -657,7 +723,8 @@ def flux_dev_from_tau_hybrid(tau, period, a, b, r, law, u, exp_time, mode,
         else:
             shape, cs = b_c, M._contact_taus(r_c, a_c, b_c, per_c, n)
         core = _make_core(law, exp_time, mode, n_gl, n_sub,
-                          "ecc" if ecc else "circ", basis)
+                          "ecc" if ecc else "circ", basis,
+                          _may_be_large(r) is not False)
         ws = () if basis else (w2d,)
         out = core(tau2d, per_c, a_c, shape, r_c, *ws, cs)
     else:
@@ -709,12 +776,12 @@ _ZH_VJP_B = _ZH_HEAD + """
 """
 
 
-def _get_z_kernels(law, basis: bool):
+def _get_z_kernels(law, basis: bool, large: bool = False):
     law = get_law(law)
-    key = ("hybz", law.definition, basis)
+    key = ("hybz", law.definition, basis) + (("large",) if large else ())
     if key not in M._kernels:
-        hdr = M._HEADER + _hyb_header(law)
-        tag = f"{_law_tag(law)}{'_b' if basis else ''}"
+        hdr = M._HEADER + _hyb_header(law, large)
+        tag = f"{_law_tag(law)}{'_b' if basis else ''}{'_large' if large else ''}"
         if basis:
             fwd = mx.fast.metal_kernel(
                 name=f"mp_hz_fwd_{tag}", input_names=["zin", "rin", "npts"],
@@ -738,9 +805,9 @@ def _get_z_kernels(law, basis: bool):
     return M._kernels[key]
 
 
-def _z_core(law, basis: bool):
+def _z_core(law, basis: bool, large: bool = False):
     law = get_law(law)
-    key = ("hybz", law.definition, bool(basis))
+    key = ("hybz", law.definition, bool(basis)) + (("large",) if large else ())
     if key in M._tau_cores:
         return M._tau_cores[key]
     ncol, n_w = law.n_col, law.n_w
@@ -749,7 +816,7 @@ def _z_core(law, basis: bool):
         @mx.custom_function
         def core(z2d, r):
             n, m = z2d.shape
-            k = _get_z_kernels(law, True)[0]
+            k = _get_z_kernels(law, True, large)[0]
             return k(inputs=[z2d, r, int(m)], output_shapes=[(n, m, ncol)],
                      output_dtypes=[mx.float32], grid=(m, n, 1),
                      threadgroup=(256, 1, 1))[0]
@@ -759,7 +826,7 @@ def _z_core(law, basis: bool):
             z2d, r = primals
             ct = cotangent if isinstance(cotangent, mx.array) else cotangent[0]
             n, m = z2d.shape
-            gz, gr = _get_z_kernels(law, True)[1](
+            gz, gr = _get_z_kernels(law, True, large)[1](
                 inputs=[z2d, r, ct, int(m)], output_shapes=[(n, m)] * 2,
                 output_dtypes=[mx.float32] * 2, grid=(m, n, 1),
                 threadgroup=(256, 1, 1))
@@ -768,7 +835,7 @@ def _z_core(law, basis: bool):
         @mx.custom_function
         def core(z2d, r, w2d):
             n, m = z2d.shape
-            k = _get_z_kernels(law, False)[0]
+            k = _get_z_kernels(law, False, large)[0]
             return k(inputs=[z2d, r, w2d, int(m)], output_shapes=[(n, m)],
                      output_dtypes=[mx.float32], grid=(m, n, 1),
                      threadgroup=(256, 1, 1))[0]
@@ -778,7 +845,7 @@ def _z_core(law, basis: bool):
             z2d, r, w2d = primals
             ct = cotangent if isinstance(cotangent, mx.array) else cotangent[0]
             n, m = z2d.shape
-            gz, gr, gw = _get_z_kernels(law, False)[1](
+            gz, gr, gw = _get_z_kernels(law, False, large)[1](
                 inputs=[z2d, r, w2d, ct, int(m)],
                 output_shapes=[(n, m), (n, m), (n, m, n_w)],
                 output_dtypes=[mx.float32] * 3, grid=(m, n, 1),
@@ -789,11 +856,17 @@ def _z_core(law, basis: bool):
 
 
 @M.fp64_on_cpu
-def flux_dev_metal_hybrid(z, r, law, u, basis=False):
+def flux_dev_metal_hybrid(z, r, law, u, basis=False, large_occultor=None):
     """``metal.flux_dev_metal`` for a hybrid law: (n, m) or (m,) points,
     r per chain; F - 1, or with ``basis`` the z.shape + (1 + n_w,)
     shape-basis columns. z's dtype is the computation's; fp64 takes
-    hybrid.py's graph on the CPU stream (metal.fp64_on_cpu)."""
+    hybrid.py's graph on the CPU stream (metal.fp64_on_cpu).
+    ``large_occultor``: as for metal.flux_dev_from_tau."""
+    with declared(large_occultor):
+        return _metal_hybrid(z, r, law, u, basis)
+
+
+def _metal_hybrid(z, r, law, u, basis):
     law = get_law(law)
     if z.ndim not in (1, 2):
         raise ValueError(f"z must be (m,) or (n, m); got {z.shape}")
@@ -808,7 +881,7 @@ def flux_dev_metal_hybrid(z, r, law, u, basis=False):
         z2d = mx.broadcast_to(z2d, (n, z2d.shape[1]))
     w2d = None if basis else _canon_w(u, n, law.n_w, z.dtype, law.name)
     if z.dtype == mx.float32 and M._gpu_stream_active() and M.metal_available():
-        core = _z_core(law, basis)
+        core = _z_core(law, basis, _may_be_large(r) is not False)
         out = core(z2d, rc) if basis else core(z2d, rc, w2d)
     elif basis:
         out = shape_cols(z2d, rc[:, None], law)

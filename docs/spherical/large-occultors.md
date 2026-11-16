@@ -25,19 +25,40 @@ flux = elome.TransitModel(p, t).light_curve(p)        # float64: exact
 
 ## Accuracy
 
-Against a direct integral of the occulted intensity:
+The largest error in the flux, by law (`benchmarks/bench_large_occultor.py`).
 
-| `rp` | float64 (quadratic / polynomial / hybrid) | float32, partial overlap |
-|---|---|---|
-| 1.5 | $2\times10^{-16}$ | $8\times10^{-8}$ |
-| 7.28 | $6\times10^{-15}$ / $7\times10^{-14}$ / $1\times10^{-14}$ | $3$–$9\times10^{-6}$ |
-| 20 | $8\times10^{-14}$ / $2\times10^{-11}$ / $1\times10^{-13}$ | $10^{-4}$ |
-| 50 | $3\times10^{-12}$ / $10^{-9}$ / $4\times10^{-12}$ | $2\times10^{-3}$ |
+float64, against a 30-digit direct integral of the occulted intensity,
+at 41 separations for each radius, in total occultation, partial overlap
+and none:
 
-Total occultation is exact in both precisions. In partial overlap the
-float32 error grows as $r_p^2$, because terms of size $\sim r_p$ cancel
-to order 1. **Use float64 above $r_p \approx 10$**, or budget for the
-error in the table.
+| `rp` | quadratic | polynomial | hybrid laws |
+|---|---|---|---|
+| 1.5 | $2.2\times10^{-16}$ | $2.2\times10^{-16}$ | $4.4\times10^{-16}$ |
+| 7.28 | $1.6\times10^{-14}$ | $1.5\times10^{-13}$ | $2.2\times10^{-16}$ |
+| 20 | $2.0\times10^{-13}$ | $2.9\times10^{-11}$ | $3.3\times10^{-16}$ |
+| 50 | $5.0\times10^{-12}$ | $3.7\times10^{-9}$ | $3.3\times10^{-16}$ |
+
+float32, partial overlap, at 2,001 separations for each radius, against
+float64 on the same inputs (the Metal kernels; the polynomial law, which
+has none, on the MLX graph):
+
+| `rp` | quadratic | polynomial | hybrid laws |
+|---|---|---|---|
+| 1.5 | $2.6\times10^{-7}$ | $1.9\times10^{-7}$ | $3.1\times10^{-7}$ |
+| 7.28 | $1.5\times10^{-5}$ | $1.8\times10^{-4}$ | $2.8\times10^{-7}$ |
+| 20 | $1.9\times10^{-4}$ | $2.3\times10^{-2}$ | $3.1\times10^{-7}$ |
+| 50 | $3.5\times10^{-3}$ | 2.4 | $2.6\times10^{-7}$ |
+
+The hybrid laws (hybrid5 with weights that give it a $\mu^4$ term) stay
+at float32's and float64's rounding at every size: their terms remain of
+order 1 for any `rp`. Total occultation is exact in both precisions. In
+partial overlap the other two laws lose accuracy as `rp` grows, because
+terms of size $\sim r_p$ cancel to order 1. The quadratic law's float32
+error grows as $r_p^2$, and the polynomial law's grows much faster.
+
+**For a large occultor in float32, use a hybrid law.** With the quadratic
+law, use float64 above $r_p \approx 10$, or budget for the error in the
+table. With the polynomial law, use float64.
 
 ## Things to know
 
@@ -52,7 +73,16 @@ error in the table.
   (`elome.anvil.DEFAULT_BOUNDS`). For a
   WD 1856+534 b-like system pass wider ones, for example
   `bounds={"r": (1.0, 12.0), "b": (0.0, 13.0), "a": (1.5, 1000.0)}` to
-  `make_transit_target`.
+  `make_transit_target`. An upper bound on `r` above 1 also switches on
+  the hybrid laws' large-occultor form (below).
+- **The hybrid laws' large-occultor form** is built into the Metal
+  kernels and the float64 graph only where `r` may exceed 1, because
+  planets smaller than their star would pay for it (up to 6% in some
+  gradient kernels). `TransitModel` decides from `rp`, and
+  `make_transit_target` from its bounds on `r`. A direct call with `r`
+  as an array (`flux_dev_from_tau`, `flux_dev_hybrid`,
+  `make_hybrid_transit_flux`) needs `large_occultor=True`. Without it,
+  the error beyond `rp = 1` grows as for the polynomial law.
 - **`rp = 1` exactly** is a degenerate point, where the contacts meet at
   $z = 0$. The result there is good to $5\times10^{-9}$ in float64 and
   $10^{-4}$ in float32, and finite everywhere.

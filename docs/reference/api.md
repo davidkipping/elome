@@ -155,7 +155,7 @@ Per-chain parameters in, per-chain light curves out, with analytic gradients. Se
 ### `flux_dev_from_tau`
 
 ```python
-flux_dev_from_tau(tau: mx.array, period, a, b, r, u1=None, u2=None, *, exp_time: float = 0.0, integration: str = 'contact', n_gl: int = 5, n_sub: int = 1, ld_basis: bool = False, secosw=None, sesinw=None, limb_dark: str = 'quadratic', u=None, f=None, theta=None, ring_in=None, ring_out=None, ring_f=None, ring_tau=None, spots=None, spot_time=None, prot=None, istar=None, lam=None, transittype: str = 'primary', fp=None, tidal_q=None, mass_ratio=None) -> mx.array
+flux_dev_from_tau(tau: mx.array, period, a, b, r, u1=None, u2=None, *, exp_time: float = 0.0, integration: str = 'contact', n_gl: int = 5, n_sub: int = 1, ld_basis: bool = False, secosw=None, sesinw=None, limb_dark: str = 'quadratic', u=None, f=None, theta=None, ring_in=None, ring_out=None, ring_f=None, ring_tau=None, spots=None, spot_time=None, prot=None, istar=None, lam=None, transittype: str = 'primary', fp=None, tidal_q=None, mass_ratio=None, large_occultor=None) -> mx.array
 ```
 
 ```text
@@ -214,6 +214,12 @@ Args:
         its (n, m, 1 + n_w) shape-basis columns B = [E0, T_1..T_n],
         and ``flux - 1 == (B @ c)/(N @ c)`` with ``c = (1, -w)``,
         ``N = hybrid.hybrid_norms(law)``.
+    large_occultor: a hybrid law with ``r`` that may exceed 1, given
+        as an array (a scalar decides for itself): True builds in the
+        large-occultor form of its columns, accurate at any r. The
+        default leaves it out, for speed: beyond r = 1 the float32
+        error then grows as r^5 (hybrid4: 6e-4 at r = 7.28).
+        TransitModel and anvil's targets set it themselves.
     f, theta: an oblate planet (``elome.oblate``): projected
         flattening f = 1 - B/A and the sky angle of its long axis from
         the direction of motion at transit, scalars or (n,). ``r`` is
@@ -518,7 +524,7 @@ circular model does.
 ### `anvil.make_hybrid_transit_flux`
 
 ```python
-make_hybrid_transit_flux(period_ref: float, limb_dark: str = 'hybrid4', eccentric: bool = False, n_spots: int = 0, exp_time: float = 0.0, integration: str = 'contact', n_gl: int = 5, n_sub: int = 1, relative: bool = True)
+make_hybrid_transit_flux(period_ref: float, limb_dark: str = 'hybrid4', eccentric: bool = False, n_spots: int = 0, exp_time: float = 0.0, integration: str = 'contact', n_gl: int = 5, n_sub: int = 1, relative: bool = True, large_occultor: bool = False)
 ```
 
 ```text
@@ -548,12 +554,18 @@ cadence, a spot rotating onto the disc mid-exposure).
 False: relative to the unspotted star (``flux_dev_from_tau``'s
 normalisation), which leaves ``df0`` to absorb the spots' visible
 deficit, a ridge HMC samples poorly.
+
+``large_occultor``: whether r may exceed 1 (``make_transit_target``
+sets it from its box on r), passed to ``flux_dev_from_tau``: only
+then do the kernels and the float64 graph carry the large-occultor
+form of the columns, which costs them a little at r < 1 and without
+which their error grows as r^5 beyond r = 1.
 ```
 
 ### `anvil.make_eclipse_flux`
 
 ```python
-make_eclipse_flux(period_ref: float, transittype: str = 'secondary', limb_dark: str = 'quadratic', eccentric: bool = False, ecc=None, w=None, timing: str = 'transit', rstar=None, exp_time: float = 0.0, integration: str = 'contact', n_gl: int = 5, n_sub: int = 1)
+make_eclipse_flux(period_ref: float, transittype: str = 'secondary', limb_dark: str = 'quadratic', eccentric: bool = False, ecc=None, w=None, timing: str = 'transit', rstar=None, exp_time: float = 0.0, integration: str = 'contact', n_gl: int = 5, n_sub: int = 1, large_occultor: bool = False)
 ```
 
 ```text
@@ -596,6 +608,9 @@ time; None leaves it out (TransitModel's geometry). Times in days.
 Exposures: ``exp_time`` (days) > 0 integrates the transit and the
 eclipse alike by ``integration`` (``n_gl``, ``n_sub``): the contact
 rule splits the eclipse at its own contacts.
+
+``large_occultor``: whether r may exceed 1, for a hybrid law's transit
+(``make_hybrid_transit_flux``).
 ```
 
 ### `anvil.transit_param_names`
@@ -1179,7 +1194,7 @@ with respect to the limb darkening).
 ### `flux_dev_hybrid`
 
 ```python
-flux_dev_hybrid(z: mx.array, r, w, law) -> mx.array
+flux_dev_hybrid(z: mx.array, r, w, law, large_occultor=None) -> mx.array
 ```
 
 ```text
@@ -1190,18 +1205,24 @@ mx.array of shape (n_w,) -- traced, so gradients flow to the weights --
 or (n_sets, n_w) batched, in which case each weight is a column that
 broadcasts against z's leading (n_sets, ...) axes, exactly as
 ``flux_dev_poly`` handles its coefficients.
+
+``large_occultor``: whether r may exceed 1, for an array ``r`` (a host
+r decides for itself). True evaluates the even columns' large-occultor
+form, accurate at any r, beside the r < 1 one; the default leaves it
+out, for speed, and loses ~r^5 eps beyond r = 1 (``large_occultors``).
 ```
 
 ### `shape_cols`
 
 ```python
-shape_cols(z: mx.array, r, law) -> mx.array
+shape_cols(z: mx.array, r, law, large_occultor=None) -> mx.array
 ```
 
 ```text
 The shape-basis columns B = [E0, S_1..S_n] (S_j the law's shapes:
 for hybrid4 its curvature basis), stacked on a trailing axis: shape
 z.shape + (1 + n_w,). Deviation form; 0 out of transit.
+``large_occultor``: as for flux_dev_hybrid.
 ```
 
 ### `flux_dev_oblate`

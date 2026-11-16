@@ -49,7 +49,9 @@ integrals -- **no column needs an elliptic integral**:
 
 * even powers mu^0, mu^2, mu^4 come from s_0, s_2 and the ALFM19 *even*
   recursion M_0 -> M_2 -> M_4 (``poly.py``'s recursion restricted to even
-  n, which never touches the elliptic M_1, M_3);
+  n, which never touches the elliptic M_1, M_3) -- for a large occultor
+  (r > 1), where that recursion cancels like r^5, from Green's theorem
+  about the star's centre instead (``_even_terms_big``);
 * a pole term's occulted flux follows from Green's theorem with the
   potential h(s) = 1/(2p(p - s)), p = 1 + eps, s = r_sky^2: the stellar
   limb arc gives kap1 / (p eps), and the planet arc reduces to
@@ -96,6 +98,8 @@ the even columns, sin and sin 2 of kap0. All of it is checked against a
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import math
 from dataclasses import dataclass
 
@@ -137,6 +141,68 @@ HYBRID4_ALPHA = 25.0 / 16.0
 #: y^6/13 (1e-19 in fp64 at 1e-3; 1.2e-9 in fp32 at 0.05, and its
 #: derivative at 6 y^5/13 = 1.4e-7). The Metal kernels use the fp32 rule.
 Y_SW = {mx.float64: 1e-3, mx.float32: 0.05}
+
+
+def i3_series(n: int) -> list:
+    """The first n Taylor coefficients a_m of I3(x) = int_0^x sin^6 t dt
+    = x^7 sum_m a_m x^(2m), from sin^6 t = (10 - 15 cos 2t + 6 cos 4t
+    - cos 6t) / 32."""
+    out = []
+    for m in range(n):
+        k = 6 + 2 * m
+        c = (-15.0 * 2.0 ** k + 6.0 * 4.0 ** k - 6.0 ** k) / 32.0
+        out.append((-1) ** (k // 2) * c / math.factorial(k) / (k + 1))
+    return out
+
+
+#: terms of the I3 series by precision, for x = kap0/2 < pi/4 (r > 1): the
+#: relative truncation error at pi/4 is 2e-7 (fp32, 8 terms) and 2e-16
+#: (fp64, 14), checked against a 40-digit quadrature. The Metal kernels
+#: use the fp32 count.
+I3_TERMS = {mx.float32: 8, mx.float64: 14}
+
+#: whether the graph or kernel being built may see r > 1; see
+#: large_occultors (_UNDECLARED: nobody said)
+_UNDECLARED = object()
+_LARGE = contextvars.ContextVar("elome_hybrid_large", default=_UNDECLARED)
+
+
+@contextlib.contextmanager
+def large_occultors(flag):
+    """Declare, for the hybrid graphs and kernels built inside, whether r
+    may exceed 1.
+
+    The large-occultor form of the even columns (``_even_terms_big``) costs
+    the fp64 graph a third more time when evaluated beside the recursion,
+    and the Metal kernels that carry it up to 6% at r < 1, so it is built
+    in only where r may exceed 1. A host r decides for itself. For an
+    array r: True or None (unknown) build it in -- the graph selects per
+    lane, the kernels branch per lane -- and False, or no declaration at
+    all, leaves it out, which loses ~r^5 eps at r > 1. A caller that
+    caches compiled traces keys them on the flag (TransitModel).
+    """
+    token = _LARGE.set(flag)
+    try:
+        yield
+    finally:
+        _LARGE.reset(token)
+
+
+def declared(large_occultor):
+    """The public ``large_occultor=`` keyword: large_occultors(True or
+    False), or no declaration for None (decide as without it)."""
+    return (contextlib.nullcontext() if large_occultor is None
+            else large_occultors(bool(large_occultor)))
+
+
+def _may_be_large(r):
+    """Whether to build in the large-occultor form: True, None (unknown:
+    per lane) or False. From the host value of r, else from
+    large_occultors; False when nothing is declared."""
+    if isinstance(r, mx.array):
+        flag = _LARGE.get()
+        return False if flag is _UNDECLARED else flag
+    return bool(np.max(np.asarray(r, dtype=np.float64)) > 1.0)
 
 
 def ladder(K: int, alpha_eff: float = 1.0) -> tuple:
@@ -344,6 +410,7 @@ def lens_geometry(z: mx.array, r):
     dtype = z.dtype
     eps = dtype_eps(dtype)
     tiny = 1e-30 if dtype == mx.float32 else 1e-280
+    large = _may_be_large(r)
 
     z = mx.abs(z)
     zero = z * 0.0 + r * 0.0
@@ -381,7 +448,7 @@ def lens_geometry(z: mx.array, r):
     cosk = mx.where(m_lens, (r2 + z2 - 1.0) / twozr, -one)
     return dict(z=z, r=r, r2=r2, z2=z2, zero=zero, one=one, tiny=tiny,
                 m_none=m_none, m_comp=m_comp, m_part=m_part, m_tot=m_tot,
-                m_lens=m_lens,
+                m_lens=m_lens, large=large,
                 A=A, Bp=Bp, sqarea=sqarea, kite=kite, kap0=kap0, kap1=kap1,
                 sink=sink, cosk=cosk)
 
@@ -431,6 +498,90 @@ def _even_terms(g):
     dE1_dr, dE1_dz = -r * (alpha * i0 + beta * i1), r * (alpha * i1 + beta * i2)
     dE2_dr = -r * (a2 * i0 + 2.0 * ab * i1 + b2 * i2)
     dE2_dz = r * (a2 * i1 + 2.0 * ab * i2 + b2 * i3)
+    E = (E0, E1, E2)
+    dE = ((dE0_dz, dE0_dr), (dE1_dz, dE1_dr), (dE2_dz, dE2_dr))
+    if g["large"] is False:
+        return E, dE
+
+    # r > 1: alpha ~ -2 r^2 there, and the recursion's and the boundary
+    # rule's terms reach r^4..r^6 for O(1) results (fp32 loses 1e-2 at
+    # r = 7.28, fp64 1e-7 at r = 50); the large-occultor form takes over
+    big = r > 1.0
+    Eb, dEb = _even_terms_big(g)
+    E = tuple(mx.where(big, b, a) for a, b in zip(E, Eb))
+    dE = tuple((mx.where(big, bz, az), mx.where(big, br, ar))
+               for (az, ar), (bz, br) in zip(dE, dEb))
+    return E, dE
+
+
+def _even_terms_big(g):
+    """``_even_terms`` for a large occultor (selected where r > 1), with
+    every term O(1) at any r.
+
+    Green's theorem with the radial primitive about the STAR's centre,
+    F = (1 - mu^(2n+2)) / (2(n+1)), which is bounded on the whole boundary,
+    gives the occulted flux of mu^(2n) as
+
+        O_n = [2 kap1 - sum_{j=1}^{n+1} C(n+1, j) (-1)^j T_j] / (2(n+1)),
+        T_j = int_{-kap0}^{kap0} rho^(2(j-1)) (r^2 - z r cos phi) dphi,
+
+    with phi on the planet from the direction of the star's centre. With
+    d = r - z, q = 4 z r and s = sin(phi/2), rho^2 = d^2 + q s^2 and
+    r^2 - z r cos phi = r d + (q/2) s^2, so each T_j is a polynomial in
+    d, r d, q times the moments M_k = int s^(2k) dphi, and on the planet
+    arc mu^2 = A - q s^2 with A = (1 - d)(1 + d), which gives the boundary
+    rule's partials the same way. Here |d| < 1, the arc is short
+    (kap0 < pi/2) and q^k M_k = O(1). M_3 = 4 I3(kap0/2) by its series;
+    M_2, M_1 by the downward recurrence
+    I_{k-1} = (2k I_k + sin^(2k-1) cos) / (2k - 1) of the half-arc
+    integrals, whose terms are positive; sin and cos of kap0/2 from
+    tan(kap0/2) = kite / ((z + r)^2 - 1). kap0, kap1 and that tangent
+    take r^2 - 1 as (r - 1)(r + 1), exact for r > 1: the geometry's own
+    r^2 + z^2 - 1 loses 2e-4 in fp32 just above r = 1.
+    """
+    z, r, z2, kite = g["z"], g["r"], g["z2"], g["kite"]
+    big = r > 1.0
+    e = r - 1.0
+    d = r - z
+    q = 4.0 * z * r
+    h = 2.0 * z * r
+    k0 = mx.arctan2(kite, e * (r + 1.0) + z2)
+    # 1 + z^2 - r^2: cancels like r^2 - 1 just above r = 1, like r^2 - z^2
+    # at large r
+    k1 = mx.arctan2(kite, mx.where(r < 2.0, z2 - e * (r + 1.0),
+                                   1.0 - d * (r + z)))
+    t = kite / mx.where(big, (e + z) * ((r + 1.0) + z), 1.0)  # tan(k0/2)
+    x = 0.5 * k0
+    x2 = x * x
+    a = i3_series(I3_TERMS.get(z.dtype, I3_TERMS[mx.float64]))
+    acc = a[-1] + 0.0 * x2
+    for c in reversed(a[:-1]):
+        acc = acc * x2 + c
+    I3 = acc * (x2 * x2 * x2 * x)
+    w = 1.0 / (1.0 + t * t)
+    S2, SC = t * t * w, t * w                    # sin^2, sin cos of k0/2
+    I2 = (6.0 * I3 + S2 * S2 * SC) / 5.0
+    I1 = (4.0 * I2 + S2 * SC) / 3.0
+    M0, M1, M2, M3 = 2.0 * k0, 4.0 * I1, 4.0 * I2, 4.0 * I3
+
+    d2 = d * d
+    rd = r * d
+    T1 = rd * M0 + h * M1
+    T2 = d2 * rd * M0 + (d2 * h + q * rd) * M1 + q * h * M2
+    T3 = (d2 * d2 * rd * M0 + (d2 * d2 * h + 2.0 * d2 * q * rd) * M1
+          + (2.0 * d2 * q * h + q * q * rd) * M2 + q * q * h * M3)
+    E0 = -(k1 + 0.5 * T1)
+    E1 = -(2.0 * k1 + 2.0 * T1 - T2) / 4.0
+    E2 = -(2.0 * k1 + 3.0 * T1 - 3.0 * T2 + T3) / 6.0
+
+    # int mu^(2n) and int mu^(2n) cos phi over the arc (cos = 1 - 2 s^2)
+    A = (1.0 - d) * (1.0 + d)
+    C0, C1, C2 = M0 - 2.0 * M1, M1 - 2.0 * M2, M2 - 2.0 * M3
+    qA = q * A
+    dE0_dr, dE0_dz = -r * M0, r * C0
+    dE1_dr, dE1_dz = -r * (A * M0 - q * M1), r * (A * C0 - q * C1)
+    dE2_dr = -r * (A * A * M0 - 2.0 * qA * M1 + q * q * M2)
+    dE2_dz = r * (A * A * C0 - 2.0 * qA * C1 + q * q * C2)
     return (E0, E1, E2), ((dE0_dz, dE0_dr), (dE1_dz, dE1_dr), (dE2_dz, dE2_dr))
 
 
@@ -577,23 +728,27 @@ def _shape_terms(z, r, law):
 
 
 @fp64_on_cpu(any_arg=True)
-def shape_cols(z: mx.array, r, law) -> mx.array:
+def shape_cols(z: mx.array, r, law, large_occultor=None) -> mx.array:
     """The shape-basis columns B = [E0, S_1..S_n] (S_j the law's shapes:
     for hybrid4 its curvature basis), stacked on a trailing axis: shape
-    z.shape + (1 + n_w,). Deviation form; 0 out of transit."""
-    cols, _, _ = _shape_terms(z, r, get_law(law))
+    z.shape + (1 + n_w,). Deviation form; 0 out of transit.
+    ``large_occultor``: as for flux_dev_hybrid."""
+    with declared(large_occultor):
+        cols, _, _ = _shape_terms(z, r, get_law(law))
     return mx.stack(cols, axis=-1)
 
 
-def shape_partials(z: mx.array, r, law):
+def shape_partials(z: mx.array, r, law, large_occultor=None):
     """(dB/dz, dB/dr), each z.shape + (1 + n_w,): the analytic partials of
-    ``shape_cols`` (the reference for the kernel VJP)."""
-    _, dz, dr = _shape_terms(z, r, get_law(law))
+    ``shape_cols`` (the reference for the kernel VJP).
+    ``large_occultor``: as for flux_dev_hybrid."""
+    with declared(large_occultor):
+        _, dz, dr = _shape_terms(z, r, get_law(law))
     return mx.stack(dz, axis=-1), mx.stack(dr, axis=-1)
 
 
 @fp64_on_cpu(any_arg=True)
-def flux_dev_hybrid(z: mx.array, r, w, law) -> mx.array:
+def flux_dev_hybrid(z: mx.array, r, w, law, large_occultor=None) -> mx.array:
     """F - 1 for a hybrid law with shape weights ``w``.
 
     ``w`` may be a host sequence (folded into float64 constants), an
@@ -601,9 +756,15 @@ def flux_dev_hybrid(z: mx.array, r, w, law) -> mx.array:
     or (n_sets, n_w) batched, in which case each weight is a column that
     broadcasts against z's leading (n_sets, ...) axes, exactly as
     ``flux_dev_poly`` handles its coefficients.
+
+    ``large_occultor``: whether r may exceed 1, for an array ``r`` (a host
+    r decides for itself). True evaluates the even columns' large-occultor
+    form, accurate at any r, beside the r < 1 one; the default leaves it
+    out, for speed, and loses ~r^5 eps beyond r = 1 (``large_occultors``).
     """
     law = get_law(law)
-    cols, _, _ = _shape_terms(z, r, law)
+    with declared(large_occultor):
+        cols, _, _ = _shape_terms(z, r, law)
     return combine_cols(cols, w, law)
 
 

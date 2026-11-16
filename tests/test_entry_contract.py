@@ -70,6 +70,9 @@ KERNEL_ENTRIES = {
 }
 # Occultors larger than the star: a total occultation through
 # every kernel family, so each calling form also runs the r > 1 branches.
+# The hybrid entries declare it (large_occultor=True), as a caller with r
+# as an array must: a scalar r decides for itself, so without it the
+# compiled call, its r traced, would take the r < 1 form and the eager one not.
 ZW = np.linspace(0.0, 9.0, 64)                      # total, partial, none
 GEO_WD = [("period", 1.4079), ("a", 336.0), ("b", 3.0), ("r", 7.28)]
 TAU_WD = np.linspace(-0.012, 0.012, 64)
@@ -79,12 +82,13 @@ KERNEL_ENTRIES.update({
     "z/ld_basis r>1": (el.flux_dev_metal, "z", ZW, [("r", 7.28)],
                        {"ld_basis": True}, "zb"),
     "z-hybrid-entry r>1": (flux_dev_metal_hybrid, "z", ZW,
-                           [("r", 7.28), ("law", "hybrid4"), ("u", W4)], {},
-                           "zh"),
+                           [("r", 7.28), ("law", "hybrid4"), ("u", W4)],
+                           {"large_occultor": True}, "zh"),
     "tau/quad_contact r>1": (el.flux_dev_from_tau, "tau", TAU_WD,
                              GEO_WD + QUAD, {"exp_time": 0.0014}, "tq"),
     "tau/hybrid_ecc r>1": (el.flux_dev_from_tau, "tau", TAU_WD, GEO_WD,
-                           dict(HYB, secosw=0.3, sesinw=0.2), "th"),
+                           dict(HYB, secosw=0.3, sesinw=0.2,
+                                large_occultor=True), "th"),
 })
 # Oblate planets (f=, theta=): their own kernel family (metal_oblate).
 OBL = dict(HYB, f=0.2, theta=0.5)
@@ -114,8 +118,8 @@ GRAPH_ENTRIES = {
 GRAPH_ENTRIES.update({
     "flux_dev r>1": (el.flux_dev, "z", ZW, [("r", 7.28)] + QUAD, {}, None),
     "flux_dev_hybrid r>1": (el.flux_dev_hybrid, "z", ZW,
-                            [("r", 7.28), ("w", W4), ("law", "hybrid4")], {},
-                            None),
+                            [("r", 7.28), ("w", W4), ("law", "hybrid4")],
+                            {"large_occultor": True}, None),
 })
 ALL = {**KERNEL_ENTRIES, **GRAPH_ENTRIES}
 

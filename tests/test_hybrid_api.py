@@ -246,8 +246,8 @@ def test_one_set_on_1d_z_is_one_kernel_row(wshape):
     w = mx.array(np.reshape(WEIGHTS["hybrid4"], wshape), dtype=mx.float32)
     shapes, orig = [], MH._z_core
 
-    def spy(law, basis):
-        core = orig(law, basis)
+    def spy(law, basis, *large):
+        core = orig(law, basis, *large)
 
         def wrapped(z2d, rc, *a):
             shapes.append((z2d.shape, rc.shape) + tuple(x.shape for x in a))

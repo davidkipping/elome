@@ -247,7 +247,8 @@ def make_hybrid_transit_flux(period_ref: float, limb_dark: str = "hybrid4",
                              eccentric: bool = False, n_spots: int = 0,
                              exp_time: float = 0.0,
                              integration: str = "contact", n_gl: int = 5,
-                             n_sub: int = 1, relative: bool = True):
+                             n_sub: int = 1, relative: bool = True,
+                             large_occultor: bool = False):
     """Engine-contract batched model for a hybrid limb-darkening law:
     v = (n_chains, d) with ``transit_param_names(limb_dark, eccentric,
     n_spots)`` and x = (2, m) epoch-centered times -- (3, m) with spots,
@@ -274,6 +275,12 @@ def make_hybrid_transit_flux(period_ref: float, limb_dark: str = "hybrid4",
     False: relative to the unspotted star (``flux_dev_from_tau``'s
     normalisation), which leaves ``df0`` to absorb the spots' visible
     deficit, a ridge HMC samples poorly.
+
+    ``large_occultor``: whether r may exceed 1 (``make_transit_target``
+    sets it from its box on r), passed to ``flux_dev_from_tau``: only
+    then do the kernels and the float64 graph carry the large-occultor
+    form of the columns, which costs them a little at r < 1 and without
+    which their error grows as r^5 beyond r = 1.
     """
     from .metal import flux_dev_from_tau
     period_ref = float(period_ref)
@@ -313,7 +320,8 @@ def make_hybrid_transit_flux(period_ref: float, limb_dark: str = "hybrid4",
                 tt, period, v[:, 4], v[:, 3], v[:, 2], limb_dark=limb_dark,
                 u=_w_from_q(limb_dark, v[:, iq:iq + n_q]), exp_time=exp,
                 integration=integration if exp > 0.0 else "none",
-                n_gl=n_gl, n_sub=n_sub, **{**kw, **over})
+                n_gl=n_gl, n_sub=n_sub, large_occultor=large_occultor,
+                **{**kw, **over})
         if K and relative:
             # the star alone: the same times on the star's clock, the planet
             # at the opposite conjunction (behind the star, which hides it),
@@ -359,7 +367,8 @@ def make_eclipse_flux(period_ref: float, transittype: str = "secondary",
                       limb_dark: str = "quadratic", eccentric: bool = False,
                       ecc=None, w=None, timing: str = "transit", rstar=None,
                       exp_time: float = 0.0, integration: str = "contact",
-                      n_gl: int = 5, n_sub: int = 1):
+                      n_gl: int = 5, n_sub: int = 1,
+                      large_occultor: bool = False):
     """Engine-contract batched model with a secondary eclipse: v =
     (n_chains, d) with ``transit_param_names(limb_dark, eccentric,
     transittype=, timing=)`` and x the float64-conditioned times: (2, m)
@@ -399,6 +408,9 @@ def make_eclipse_flux(period_ref: float, transittype: str = "secondary",
     Exposures: ``exp_time`` (days) > 0 integrates the transit and the
     eclipse alike by ``integration`` (``n_gl``, ``n_sub``): the contact
     rule splits the eclipse at its own contacts.
+
+    ``large_occultor``: whether r may exceed 1, for a hybrid law's transit
+    (``make_hybrid_transit_flux``).
     """
     from .metal import _INT_MODES, flux_dev_from_tau
     period_ref = float(period_ref)
@@ -471,6 +483,8 @@ def make_eclipse_flux(period_ref: float, transittype: str = "secondary",
                 ld = dict(u1=u1, u2=u2)
             else:
                 ld = dict(limb_dark=limb_dark, u=_w_from_q(limb_dark, q))
+            if limb_dark != "quadratic":
+                ld["large_occultor"] = large_occultor
             dev = dev + flux_dev_from_tau(tau, period, a, b, r, **exp_kw,
                                           **ld, **orb)
         return v[:, -1:] + dev / (1.0 + fp[:, None])
@@ -804,12 +818,13 @@ def make_transit_target(t, y, yerr, t0_guess, period_guess,
         model_fn = make_eclipse_flux(
             period_ref, transittype, limb_dark, eccentric=eccentric, ecc=ecc,
             w=w, timing=timing, rstar=rstar, exp_time=exp_time,
-            integration=integration, n_gl=n_gl, n_sub=n_sub)
+            integration=integration, n_gl=n_gl, n_sub=n_sub,
+            large_occultor=lims["r"][1] > 1.0)
     elif hybrid:
         model_fn = make_hybrid_transit_flux(
             period_ref, limb_dark, eccentric=eccentric, n_spots=n_spots,
             exp_time=exp_time, integration=integration, n_gl=n_gl,
-            n_sub=n_sub, relative=relative)
+            n_sub=n_sub, relative=relative, large_occultor=lims["r"][1] > 1.0)
     elif eccentric:
         model_fn = make_ecc_transit_flux(period_ref=period_ref, core=core)
     else:

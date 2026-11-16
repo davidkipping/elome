@@ -115,6 +115,22 @@ every release is tagged `vX.Y.Z` in git.
   unchanged.
 
 ### Fixed
+- **The hybrid laws for companions larger than their star.** For
+  `rp > 1` the recursion behind the μ⁰, μ², μ⁴ columns cancelled terms
+  of order r⁴ to r⁶. In float32 a hybrid4 light curve was off by
+  6×10⁻⁴ at `rp = 7.28` and 6×10⁻² at `rp = 20`, and hybrid5 with
+  unequal first two weights by as much. Gradients were affected the same
+  way, and float64 lost up to 10⁻⁷ at `rp = 50`. Those columns now come
+  from Green's theorem taken about the star's centre, whose terms stay
+  of order 1. Every hybrid law is within 3×10⁻⁷ in float32 at any `rp`,
+  Metal kernels and MLX graph alike, and at float64's rounding in float64.
+  The new form is built into the kernels and the float64 graph only
+  where `r` may exceed 1, so planets smaller than their star run exactly
+  the code they ran before. TransitModel decides from `rp`, and the anvil
+  targets from their bounds on `r`. A direct call with `r` as an array
+  opts in with `large_occultor=True`: `flux_dev_from_tau`,
+  `flux_dev_hybrid`, `shape_cols`, `make_hybrid_transit_flux` and
+  `make_eclipse_flux` take it.
 - Two numbers in the sampler guide's starspot notes rendered with a
   stray tab in place of `\times`.
 - **anvil, spotted stars on eccentric orbits: the star-alone term's
@@ -146,6 +162,12 @@ every release is tagged `vX.Y.Z` in git.
   which path needs what. The float32 tests run on the default device
   instead of naming the GPU, and without the kernels hold the MLX
   graph's compiled result to its own float32 error against float64.
+- **Large occultors: accuracy by law** (`benchmarks/bench_large_occultor.py`).
+  The table is now per law, measured on 2,001 separations rather than
+  four. The quadratic law in float32 is off by 1.5×10⁻⁵ at `rp = 7.28`,
+  not 3–9×10⁻⁶. The polynomial law in float32 is unusable for large
+  occultors (2×10⁻² at `rp = 20`). The page now recommends a hybrid law
+  in float32, or float64.
 
 ## [0.22.1] — 2026-10-23
 

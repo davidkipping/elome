@@ -1788,7 +1788,8 @@ def flux_dev_from_tau(tau: mx.array, period, a, b, r, u1=None, u2=None, *,
                       ring_out=None, ring_f=None, ring_tau=None, spots=None,
                       spot_time=None, prot=None, istar=None,
                       lam=None, transittype: str = "primary",
-                      fp=None, tidal_q=None, mass_ratio=None) -> mx.array:
+                      fp=None, tidal_q=None, mass_ratio=None,
+                      large_occultor=None) -> mx.array:
     """F - 1 from time-since-mid-transit, with the exposure integrated
     *inside* the kernel.
 
@@ -1844,6 +1845,12 @@ def flux_dev_from_tau(tau: mx.array, period, a, b, r, u1=None, u2=None, *,
             its (n, m, 1 + n_w) shape-basis columns B = [E0, T_1..T_n],
             and ``flux - 1 == (B @ c)/(N @ c)`` with ``c = (1, -w)``,
             ``N = hybrid.hybrid_norms(law)``.
+        large_occultor: a hybrid law with ``r`` that may exceed 1, given
+            as an array (a scalar decides for itself): True builds in the
+            large-occultor form of its columns, accurate at any r. The
+            default leaves it out, for speed: beyond r = 1 the float32
+            error then grows as r^5 (hybrid4: 6e-4 at r = 7.28).
+            TransitModel and anvil's targets set it themselves.
         f, theta: an oblate planet (``elome.oblate``): projected
             flattening f = 1 - B/A and the sky angle of its long axis from
             the direction of motion at transit, scalars or (n,). ``r`` is
@@ -2065,7 +2072,8 @@ def flux_dev_from_tau(tau: mx.array, period, a, b, r, u1=None, u2=None, *,
         from .metal_hybrid import flux_dev_from_tau_hybrid
         return flux_dev_from_tau_hybrid(
             tau, period, a, b, r, limb_dark, u, float(exp_time), mode,
-            int(n_gl), int(n_sub), bool(ld_basis), secosw, sesinw)
+            int(n_gl), int(n_sub), bool(ld_basis), secosw, sesinw,
+            large_occultor=large_occultor)
     if u is not None:
         raise ValueError("u= is for the hybrid laws; the quadratic law "
                          "takes u1, u2")

@@ -53,7 +53,7 @@ from .metal import _gpu_stream_active, flux_dev_metal, metal_available
 from .metal_hybrid import flux_dev_metal_hybrid
 from .anchored import anchor_constants_ew, separation_anchored
 from .hybrid import LAWS as _HYBRID_LAWS, find_law as _hybrid_law
-from .hybrid import flux_dev_hybrid
+from .hybrid import flux_dev_hybrid, large_occultors
 from .vjp import flux_dev_analytic
 from .poly import flux_dev_poly
 from .exposure import (contact_geometry, contact_offsets,
@@ -597,7 +597,8 @@ class TransitModel:
         self._t_ref = (0.0 if self.dtype == mx.float64
                        else float(0.5 * (t_super.min() + t_super.max())))
         self._t_mx = mx.array(t_super - self._t_ref, dtype=self.dtype)
-        self._compiled = {}
+        self._compiled_sets = {}
+        self._large = None
 
     @property
     def use_metal(self) -> bool:
@@ -610,8 +611,30 @@ class TransitModel:
         # the graph core, per law and orbit), so a change drops them all
         value = bool(value)
         if value != self._use_metal:
-            self._compiled = {}
+            self._compiled_sets = {}
         self._use_metal = value
+
+    @property
+    def _compiled(self):
+        """The compiled graphs for the large_occultors flag of the latest
+        evaluation (_model_eval and light_curves set it, and declare it
+        while they trace): a hybrid law's graph is traced with or without
+        the large-occultor form of its even columns, and the two must
+        never share a trace."""
+        return self._compiled_sets.setdefault(self._large, {})
+
+    def _large_flag(self, rp):
+        """The large_occultors flag for this evaluation: may r exceed 1?
+        Declared only for a hybrid law on a spherical planet (the one model
+        with an r > 1 form), and None when rp is traced."""
+        if (self._hlaw is None or self._oblate or self._ringed
+                or self._spotted or rp is None):
+            return None
+        if isinstance(rp, mx.array):
+            rp = _scalar_value(rp) if rp.ndim == 0 else None
+            if rp is None:
+                return None
+        return bool(np.max(np.asarray(rp, dtype=np.float64)) > 1.0)
 
     def _require(self, get, names):
         """Raise for a parameter left as None: batched or not, a missing
@@ -906,6 +929,12 @@ class TransitModel:
         return fn
 
     def _model_eval(self, params, uv, grad=True) -> mx.array:
+        """_model_eval_set under the large_occultors flag of params.rp."""
+        self._large = self._large_flag(params.rp)
+        with large_occultors(self._large):
+            return self._model_eval_set(params, uv, grad)
+
+    def _model_eval_set(self, params, uv, grad=True) -> mx.array:
         """One parameter set -> flux, through the compiled graphs. The one
         path behind light_curve and light_curve_mx; ``grad=False`` (from
         light_curve, whose numpy result no gradient can reach) lets a route
@@ -1650,7 +1679,8 @@ class TransitModel:
 
         stream = self._stream
         ctx = mx.stream(stream) if stream is not None else _nullcontext()
-        with ctx:
+        self._large = self._large_flag(cols["rp"])
+        with ctx, large_occultors(self._large):
             t0, per = col(cols["t0"] - self._t_ref), col(cols["per"])
             rp, a = col(cols["rp"]), col(cols["a"])
             ecc = cols["ecc"]

@@ -26,8 +26,9 @@ mpm.mp.dps = 20
 KERNEL = metal_available()
 U = (0.4, 0.25)
 UP = (0.3, 0.2, -0.1, 0.05)
+# every law with mu^4 content: hybrid5's mu^4 coefficient is w_1 - w_2
 W = {"hybrid2": (0.3, 0.2), "hybrid4": (0.2, 0.2, 0.1, 0.1),
-     "hybrid5": (0.2, 0.2, 0.1, 0.1, 0.1)}
+     "hybrid5": (0.3, 0.1, 0.1, 0.05, 0.15)}
 RS = (1.2, 3.0, 7.28, 20.0, 50.0)
 
 
@@ -117,14 +118,15 @@ def kernel32(z, r, law):
 TOL64 = {1.2: 1e-14, 3.0: 1e-14, 7.28: 1e-13, 20.0: 1e-12, 50.0: 1e-11}
 TOL64_POLY = {1.2: 1e-14, 3.0: 1e-13, 7.28: 1e-12, 20.0: 1e-10,
               50.0: 1e-8}
-# hybrid weights with mu^4 content: the even recursion's mu^4 column loses
-# digits with r as the polynomial law's does (measured 1.4e-8 at r = 50 for
-# a mu^4 coefficient of 0.2, in any basis); hybrid5's test weights carry
-# none (their 1 - mu^4 and (1 - mu^2)^2 terms cancel it)
-TOL64_MU4 = {1.2: 1e-14, 3.0: 3e-14, 7.28: 2e-12, 20.0: 3e-10, 50.0: 5e-8}
-# fp32 kernels: the partial-overlap error grows ~ r^2 (terms of size ~r
-# cancel to O(1)); about 2x the measured worst case
+# the hybrid laws' columns stay O(1) term by term at any r
+# (hybrid._even_terms_big): 3e-16 measured
+TOL64_HYB = 2e-15
+# fp32 quadratic kernel: the partial-overlap error grows ~ r^2 (terms of
+# size ~r cancel to O(1)); about 2x the measured worst case
 TOL32 = {1.2: 5e-7, 3.0: 1e-6, 7.28: 2e-5, 20.0: 3e-4, 50.0: 5e-3}
+# fp32 hybrid kernels: flat in r; 9e-7 measured at r = 50, most of it the
+# fp32 rounding of z ~ 50 (2e-7 on fp32 inputs, below)
+TOL32_HYB = 2e-6
 
 
 @pytest.mark.parametrize("r", RS)
@@ -134,24 +136,39 @@ def test_fp64_graph_matches_the_oracle(r, law):
     zs = zgrid(r)
     ref = np.array([oracle(z, r, law) for z in zs])
     got = graph64(zs, r, law)
-    if law == "poly4":
-        tol = TOL64_POLY[r]
-    elif law in LAWS and w_to_c(law, W[law])[0][2] != 0.0:
-        tol = TOL64_MU4[r]
-    else:
-        tol = TOL64[r]
+    tol = {"quadratic": TOL64[r], "poly4": TOL64_POLY[r]}.get(law, TOL64_HYB)
     assert np.abs(got - ref).max() < tol
 
 
 @pytest.mark.skipif(not KERNEL, reason="Metal unavailable")
 @pytest.mark.parametrize("r", RS)
-@pytest.mark.parametrize("law", ["quadratic", "hybrid2", "hybrid5"])
+@pytest.mark.parametrize("law", ["quadratic", "hybrid2", "hybrid4",
+                                 "hybrid5"])
 def test_fp32_kernels_match_the_oracle(r, law):
     zs = zgrid(r)
     ref = np.array([oracle(z, r, law) for z in zs])
     got = kernel32(zs, r, law)
     assert np.isfinite(got).all()
-    assert np.abs(got - ref).max() < TOL32[r]
+    assert np.abs(got - ref).max() < (TOL32[r] if law == "quadratic"
+                                      else TOL32_HYB)
+
+
+@pytest.mark.parametrize("r", (1.001, 1.2, 3.0, 7.28, 20.0, 50.0))
+@pytest.mark.parametrize("law", list(W))
+def test_fp32_hybrid_on_a_dense_grid(r, law):
+    """The whole partial overlap, 801 points on fp32 inputs, against the
+    fp64 graph (exact to 3e-16 above): the kernel, and the MLX graph that
+    runs without Metal. The even recursion once lost 6e-4 here at
+    r = 7.28 and 6e-2 at r = 20 (hybrid4, both routes)."""
+    rf = float(np.float32(r))
+    z = np.linspace(rf - 1, rf + 1, 803)[1:-1].astype(np.float32)
+    ref = graph64(z.astype(np.float64), rf, law)
+    with mx.stream(mx.gpu if KERNEL else mx.cpu):
+        g = np.asarray(el.flux_dev_hybrid(f32(z), rf, list(W[law]), law),
+                       dtype=np.float64)
+    assert np.abs(g - ref).max() < 1e-6
+    if KERNEL:
+        assert np.abs(kernel32(z, rf, law) - ref).max() < 1e-6
 
 
 @pytest.mark.parametrize("r", RS)
@@ -365,7 +382,7 @@ def test_inner_contacts_sit_at_r_minus_one():
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("r", (1.5, 7.28, 20.0))
-@pytest.mark.parametrize("law", ("quadratic", "hybrid5"))
+@pytest.mark.parametrize("law", ("quadratic", "hybrid4", "hybrid5"))
 def test_graph_gradients_match_finite_differences(r, law):
     """Partial overlap, off the z == r tie (MLX's autodiff splits the
     gradient exactly there, for any r)."""
@@ -404,6 +421,106 @@ def test_kernel_vjp_matches_fp64_autodiff(b):
     for a, b_ in zip(g32, g64):
         a, b_ = float(np.asarray(a)), float(np.asarray(b_))
         assert abs(a - b_) <= 2e-3 * abs(b_)
+
+
+@pytest.mark.parametrize("dtype", (mx.float64, mx.float32))
+def test_array_r_takes_the_large_form_only_when_declared(dtype):
+    """An array r says nothing about its size: without large_occultor the
+    graph and the kernels are exactly the r < 1 ones (planets smaller than
+    their star pay nothing), with it they are accurate at any r."""
+    if dtype == mx.float32 and not KERNEL:
+        pytest.skip("Metal unavailable")
+    from elome.metal_hybrid import _hyb_header
+    stream = mx.cpu if dtype == mx.float64 else mx.gpu
+    z = np.linspace(6.4, 8.2, 401)
+    w = list(W["hybrid4"])
+    ref = graph64(z, 7.28, "hybrid4")            # a host r: decides itself
+    with mx.stream(stream):
+        zz, rr = mx.array(z, dtype=dtype), mx.array([7.28], dtype=dtype)
+        if dtype == mx.float32:
+            run = lambda **k: flux_dev_metal_hybrid(zz, rr, "hybrid4", w, **k)
+        else:
+            run = lambda **k: el.flux_dev_hybrid(zz, rr, w, "hybrid4", **k)
+        plain, small, big = (np.asarray(run(**k), dtype=np.float64) for k in
+                             ({}, {"large_occultor": False},
+                              {"large_occultor": True}))
+    assert np.array_equal(plain, small)
+    tol = 1e-15 if dtype == mx.float64 else 1e-6
+    assert np.abs(big - ref).max() < tol < np.abs(small - ref).max()
+    assert "if (r > 1.0f)" not in _hyb_header("hybrid4")
+    assert "if (r > 1.0f)" in _hyb_header("hybrid4", large=True)
+
+
+def test_transit_model_keeps_large_and_small_traces_apart():
+    """The fp64 graph leaves out the large-occultor form when r is known
+    to be <= 1 (hybrid.large_occultors): one model taken from r = 0.1 to
+    r = 20 and back must trace both, never reuse the small one."""
+    from elome.hybrid import large_occultors
+    p = _params(0.1, 0.3, law="hybrid4")
+    t = np.linspace(-0.003, 0.003, 401)
+    m = el.TransitModel(p, t)
+    small = m.light_curve(p)
+    assert small.min() < 0.99
+    q = _params(20.0, 19.5, law="hybrid4")      # partial overlap throughout
+    big = m.light_curve(q) - 1.0
+    z = _z_of_t(t, 19.5)
+    assert ((z > 19.0) & (z < 21.0)).all()
+    assert np.abs(big - graph64(z, 20.0, "hybrid4")).max() < 1e-14
+    for i in (0, 200, 400):     # (the model's z ~ 20 rounds apart from z's)
+        assert abs(big[i] - oracle(z[i], 20.0, "hybrid4")) < 2e-14
+    # what the old trace would have given: the recursion's loss at r = 20
+    with mx.stream(mx.cpu), large_occultors(False):
+        old = np.asarray(el.flux_dev_hybrid(f64(z), f64(20.0),
+                                            list(W["hybrid4"]), "hybrid4"))
+    assert np.abs(old - big).max() > 1e-11
+    assert np.array_equal(m.light_curve(p), small)
+
+
+def test_anvil_hybrid_target_declares_large_occultors():
+    """make_transit_target turns the large-occultor form on from its box
+    on r, and leaves no declaration behind."""
+    A = pytest.importorskip("elome.anvil")
+    from elome.hybrid import _LARGE, _UNDECLARED
+    seen = []
+    real = A.make_hybrid_transit_flux
+
+    def spy(*a, **k):
+        seen.append(k.get("large_occultor"))
+        return real(*a, **k)
+    A.make_hybrid_transit_flux, keep = spy, real
+    try:
+        t = np.linspace(-0.01, 0.01, 101)
+        A.make_transit_target(t, np.ones_like(t), 1e-3, 0.0, P_,
+                              limb_dark="hybrid4")
+        A.make_transit_target(t, np.ones_like(t), 1e-3, 0.0, P_,
+                              limb_dark="hybrid4", bounds={"r": (1.0, 30.0)})
+    finally:
+        A.make_hybrid_transit_flux = keep
+    assert seen == [False, True]
+    assert _LARGE.get() is _UNDECLARED
+
+
+@pytest.mark.skipif(not KERNEL, reason="Metal unavailable")
+@pytest.mark.parametrize("r", (1.2, 7.28, 50.0))
+def test_hybrid_kernel_vjp_matches_the_fp64_partials(r):
+    """The basis kernel's z and r partials (boundary rule) against the fp64
+    analytic ones, over the partial overlap. The even columns' partials
+    once lost 1.8e-2 at r = 7.28 and 38 at r = 50. (Just above r = 1 the
+    pole columns' z partials, on the shared lens geometry, lose 3e-5.)"""
+    from elome.hybrid import shape_partials
+    law = "hybrid4"
+    rf = float(np.float32(r))
+    z = np.linspace(rf - 1, rf + 1, 803)[1:-1].astype(np.float32)
+    ct = np.random.default_rng(1).normal(size=(z.size, 5)).astype(np.float32)
+    gz, gr = mx.grad(lambda z, rr: mx.sum(flux_dev_metal_hybrid(
+        z, rr, law, None, basis=True, large_occultor=True) * mx.array(ct)),
+        argnums=(0, 1))(f32(z), f32(rf))
+    with mx.stream(mx.cpu):
+        dz, dr = (np.asarray(x) for x in shape_partials(
+            f64(z), rf, law))
+    assert np.abs(np.asarray(gz) - (dz * ct).sum(-1)).max() < 2e-5
+    ref = (dr * ct).sum()
+    assert abs(float(np.asarray(gr)) - ref) < 1e-6 * np.abs(dr * ct).sum()
 
 
 # ---------------------------------------------------------------------------
