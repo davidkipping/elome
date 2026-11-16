@@ -115,6 +115,12 @@ every release is tagged `vX.Y.Z` in git.
   unchanged.
 
 ### Fixed
+- **A ring whose inner edge lies on the planet's outline** (`ring_in = 1`
+  on a spherical planet, or `ring_in = 1/sqrt(1 - f)` with `ring_f = f`
+  on an oblate one, both allowed values) counted their shared boundary
+  twice: a face-on opaque ring from 1 to 2 was 2.9×10⁻² off the planet
+  twice as large, in both precisions. The two outlines are now one
+  boundary, counted once.
 - **The hybrid laws for companions larger than their star.** For
   `rp > 1` the recursion behind the μ⁰, μ², μ⁴ columns cancelled terms
   of order r⁴ to r⁶. In float32 a hybrid4 light curve was off by

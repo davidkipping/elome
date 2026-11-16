@@ -76,6 +76,11 @@ _sg = mx.stop_gradient
 # _BIG -- its neglected share is ~1/_BIG, below rounding, while _BIG^4
 # stays finite in the precision
 _S1_CENTRED = {mx.float64: 1e-28, mx.float32: 1e-8}
+# a planet outline and a ring edge whose num and den (_pair) are both
+# within rounding of 0 coincide (ring_in = 1 on a spherical planet, or
+# ring_in = 1/sqrt(1 - f) with ring_f = f): their shared boundary must be
+# counted once (_inside)
+_TIE = {mx.float64: 1e-14, mx.float32: 1e-6}
 _BIG = {mx.float64: 1e30, mx.float32: 1e8}
 _TINY = {mx.float64: 1e-300, mx.float32: 1e-30}
 # stand-in for the ellipse crossing solve on lanes where the outline is a
@@ -221,15 +226,19 @@ def _pair(ak, bk, aj, bj):
     return num, den, cross, phi
 
 
-def _inside(num, den, cross, cos2, sin2):
+def _inside(num, den, cross, cos2, sin2, tie, tol):
     """Whether k's point at own parameter phi is inside j. With corners,
     the sign of F = num cos^2 - den sin^2 there (the arc lies between
     corners, so away from them) -- without forming num + den, which a
     nearly edge-on ring makes a sum of terms 1e8 apart, rounding away the
     short arcs it cuts from the planet's outline; without corners, the
     whole outline is on one side, read at cos^2 = 1/2 -- never a point near
-    a tangency."""
-    return mx.where(cross, num * cos2 < den * sin2, num < den)
+    a tangency. Coincident outlines (|num|, |den| <= tol) take ``tie``:
+    the planet counts as the larger, so an edge's point is inside it and
+    its point outside the edge, and the boundary is counted once."""
+    same = (mx.abs(num) <= tol) & (mx.abs(den) <= tol)
+    return mx.where(same, tie,
+                    mx.where(cross, num * cos2 < den * sin2, num < den))
 
 
 def _arcs(bps, valid):
@@ -329,7 +338,8 @@ def _region_cols(x0, y0, conics, T, law, dt):
                 f_in, f_out = mx.ones(LO.shape, dtype=mx.bool_), mx.zeros(LO.shape, dtype=mx.bool_)
             elif (k, j) in pairs:
                 num, den, cr, _ = pairs[(k, j)]
-                f_in = f_out = _inside(num[..., None], den[..., None], cr[..., None], cos2, sin2)
+                f_in = f_out = _inside(num[..., None], den[..., None], cr[..., None], cos2,
+                                       sin2, j == 0, _TIE[dt])
             else:                                   # edge vs edge: by size
                 f_in = f_out = mx.full(LO.shape, j > k, dtype=mx.bool_)
             flags_in.append(f_in)

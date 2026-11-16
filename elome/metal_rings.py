@@ -175,7 +175,10 @@ inline void rg_pair(float ak, float bk, float aj, float bj, thread float *num,
     *ph = metal::precise::atan2(metal::precise::sqrt(fabs(*num)),
                                 metal::precise::sqrt(fabs(*den)));
 }
-inline bool rg_inside(float num, float den, bool cr, float c2, float s2) {
+// coincident outlines (rings._TIE): the planet counts as the larger
+inline bool rg_inside(float num, float den, bool cr, float c2, float s2,
+                      bool tie) {
+    if (fabs(num) <= 1e-6f && fabs(den) <= 1e-6f) return tie;
     return cr ? (num * c2 < den * s2) : (num < den);
 }
 // blocked fraction a + b T for flags [planet, inner, outer]
@@ -418,7 +421,8 @@ inline void rg_outline(int k, T x0, T y0, T A, T B, thread const rg_geo &G,
         for (int j = 0; j < 3; ++j) {
             bool v;
             if (j == k) { fin[j] = true; fout[j] = false; continue; }
-            if (k == 0 || j == 0) v = rg_inside(num[j], den[j], cr[j], cmid * cmid, smid * smid);
+            if (k == 0 || j == 0) v = rg_inside(num[j], den[j], cr[j], cmid * cmid,
+                                                smid * smid, j == 0);
             else v = j > k;
             fin[j] = v; fout[j] = v;
         }

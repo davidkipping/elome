@@ -168,6 +168,32 @@ def test_light_curve_mx_differentiates_in_the_ring():
             assert abs(g[k].item() - fd) < 1e-6 * max(abs(fd), 1e-3), k
 
 
+@pytest.mark.parametrize("dtype,tol", [(mx.float64, 1e-14), (mx.float32, 3e-7)])
+@pytest.mark.parametrize("ring_tau", [None, 0.5])
+def test_ring_edge_on_the_planet_outline(dtype, tol, ring_tau):
+    """An inner edge that coincides with the planet's outline -- ring_in =
+    1 on a spherical planet, ring_in = 1/sqrt(1 - f) with ring_f = f on an
+    oblate one -- shares one boundary, counted once (it was counted twice,
+    2.9e-2 off). An opaque face-on ring from 1 to 2 is a planet twice as
+    large; the oblate tie agrees with a nudged inner edge."""
+    if dtype == mx.float32 and not el.metal_available():
+        pytest.skip("Metal unavailable")
+    run = lambda p: el.TransitModel(p, T, dtype=dtype).light_curve(p)
+    if ring_tau is None:
+        p = P(ring_in=1.0, ring_out=2.0, ring_f=0.0, theta=0.0)
+        disc = P(rp=0.16)
+        disc.theta = disc.ring_in = disc.ring_out = disc.ring_f = None
+        ref = el.TransitModel(disc, T).light_curve(disc)      # float64
+        assert np.abs(run(p) - ref).max() < tol
+    f = 0.19
+    tie = P(f=f, ring_f=f, ring_in=1.0 / math.sqrt(1.0 - f), ring_tau=ring_tau)
+    off = P(f=f, ring_f=f, ring_in=(1.0 + 1e-9) / math.sqrt(1.0 - f), ring_tau=ring_tau)
+    sph = P(ring_in=1.0, ring_f=0.3, ring_tau=ring_tau)
+    sph_off = P(ring_in=1.0 + 1e-9, ring_f=0.3, ring_tau=ring_tau)
+    assert np.abs(run(tie) - run(off)).max() < max(tol, 1e-9)
+    assert np.abs(run(sph) - run(sph_off)).max() < max(tol, 1e-9)
+
+
 @pytest.mark.parametrize("kw", [{}, {"integration": "contact", "exp_time": EXP}],
                          ids=["none", "contact"])
 def test_fp32_model_matches_fp64(kw):
