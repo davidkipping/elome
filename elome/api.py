@@ -136,9 +136,10 @@ def _is_mooned(params) -> bool:
 
 
 # a batched field left None: its value (fp, theta, a ringed planet's f: 0;
-# ring_tau: an opaque ring; istar: equator-on; spot_epoch: t0, filled in
-# by _stack_params)
+# ring_tau: an opaque ring; istar: equator-on; spot_epoch: t0 and moon_inc:
+# inc, filled in by _stack_params; the other moon fields 0)
 _BATCH_DEFAULTS = {"ring_tau": math.inf, "istar": 90.0}
+_SET_FALLBACK = {"spot_epoch": "t0", "moon_inc": "inc"}
 
 
 def _is_oblate(params) -> bool:
@@ -630,7 +631,8 @@ class TransitModel:
             ("f", "theta") + _RING_FIELDS if self._ringed
             else ("tidal_q", "theta", "mass_ratio") if self._tidal
             else ("f", "theta") if self._oblate
-            else _SPOT_FIELDS if self._spotted else ())
+            else _SPOT_FIELDS if self._spotted
+            else _MOON_FIELDS if self._mooned else ())
         self._n_spots = 0
         if self._tidal:
             if _is_oblate(params) or self._ringed or self._spotted:
@@ -1904,6 +1906,45 @@ class TransitModel:
         gmask = _geometry_mask(traced, vals, dt) if traced else None
         return self._apply_masks(f, gmask)
 
+    def _moon_curves(self, cols, u_np):
+        """light_curves for a planet with a moon: _moon_eval's route with
+        (n_sets,) columns, every set in one pass (moons_tau's lanes)."""
+        from .moons import anchored_constants, check_moon, moon_orbit
+        from .moons_tau import flux_dev_moon_t, sample_count
+        dt = self.dtype
+        t0r, perr, mperr, d_np, k_np, turns = self._moon_ref
+        check_moon(cols["moon_r"], cols["moon_a"], cols["moon_q"], cols["moon_ecc"])
+        n = cols["t0"].size
+
+        def c(x):
+            return mx.array(np.asarray(x, np.float64), dtype=dt)
+        rad = lambda name: c(np.radians(cols[name]))
+        rp_np = cols["rp"]
+        P = dict(t0_off=c(cols["t0"] - t0r), p_off=c(cols["per"] - perr),
+                 per=c(cols["per"]), a=c(cols["a"]), inc=rad("inc"), rp=c(rp_np),
+                 rs=c(rp_np * cols["moon_r"]), a_ps=c(rp_np * cols["moon_a"]),
+                 q=c(cols["moon_q"]), m_off=c(cols["moon_per"] - mperr),
+                 moon_inc=rad("moon_inc"), node=rad("moon_node"), phase=rad("moon_phase"),
+                 ecc=anchored_constants(c(cols["ecc"]), rad("w"), dt),
+                 orbit=moon_orbit(c(cols["moon_ecc"]), rad("moon_w"), dt),
+                 per_ref=perr, mper_ref=mperr)
+        e = cols["ecc"]
+        P["speed"] = float(np.max(_TWO_PI_ * cols["a"] / cols["per"]
+                                  * np.sqrt((1.0 + e) / (1.0 - e))))
+        if self._hlaw is not None:
+            kind = ("hybrid", self._hlaw, c(u_np))
+        else:
+            kind = ("quad",) + tuple(c(v) for v in _ld_coeffs_batch(self.limb_dark, u_np))
+        exp_time, n_sample = 0.0, None
+        if self.integration == "contact":
+            exp_time = self.exp_time
+            n_sample = max(sample_count(exp_time, cols["a"][i], cols["per"][i], rp_np[i],
+                                        rp_np[i] * cols["moon_a"][i], cols["moon_per"][i],
+                                        rp_np[i] * cols["moon_r"][i], e[i],
+                                        cols["moon_ecc"][i]) for i in range(n))
+        return 1.0 + flux_dev_moon_t(d_np, k_np, turns, P, kind, bool(np.any(rp_np > 1.0)),
+                                     exp_time, self.n_gl, n_sample, n_sets=n)
+
     def _check_shape_kind(self, params):
         """Oblate or spherical, ringed or not, is fixed per model (separate
         graphs)."""
@@ -1993,8 +2034,9 @@ class TransitModel:
                 # only optional fields are None here: fp of a primary
                 # transit, theta, f of a ringed planet, ring_tau (opaque)
                 dflt = _BATCH_DEFAULTS.get(k, 0.0)
-                if k == "spot_epoch":
-                    vals = [p.t0 if v is None else v for p, v in zip(seq, vals)]
+                if k in _SET_FALLBACK:
+                    vals = [getattr(p, _SET_FALLBACK[k]) if v is None else v
+                            for p, v in zip(seq, vals)]
                 cols[k] = np.array([dflt if v is None else float(v)
                                     for v in vals], dtype=np.float64)
             if self._spotted:
@@ -2043,8 +2085,8 @@ class TransitModel:
         cols = {}
         for k in self._batch_keys:
             v = getattr(p, k)
-            if k == "spot_epoch" and v is None:
-                v = p.t0
+            if k in _SET_FALLBACK and v is None:
+                v = getattr(p, _SET_FALLBACK[k])
             v = _BATCH_DEFAULTS.get(k, 0.0) if v is None else v
             cols[k] = np.broadcast_to(
                 np.atleast_1d(np.asarray(v, dtype=np.float64)),
@@ -2079,13 +2121,19 @@ class TransitModel:
         For fitting with thousands of chains prefer ``elome.anvil``,
         which owns the likelihood and the float32 conditioning as well.
         """
-        if self._mooned:
-            raise NotImplementedError("light_curves does not take a planet "
-                                      "with a moon yet: call light_curve per "
-                                      "parameter set")
         cols, u_np = self._stack_params(params_seq)
         n = cols["t0"].size
         dt = self.dtype
+        if self._mooned:
+            ctx = (mx.stream(self._stream) if self._stream is not None
+                   else _nullcontext())
+            with ctx:
+                res = np.array(self._moon_curves(cols, u_np), dtype=np.float64)
+            if (self.supersample_factor > 1
+                    and self.integration == "supersample"):
+                res = res.reshape(n, self.t.size,
+                                  self.supersample_factor).mean(axis=2)
+            return res
 
         def col(a):
             return mx.array(np.asarray(a, np.float64).reshape(n, 1), dtype=dt)

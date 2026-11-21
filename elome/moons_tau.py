@@ -193,10 +193,12 @@ def _nodes(events, ok, hw, n_k, n_gl, dtype):
 
 def _photometry(pos, P, kind, large, dt, k, turns, T):
     """Per-node contributions on points (m,) at offsets T (m, n): the shape
-    columns (hybrid; a list) or F - 1 (quadratic)."""
+    columns (hybrid; a list) or F - 1 (quadratic). P and kind may hold
+    per-point (m, 1) columns (``_lanes``)."""
     e = lambda v: mx.broadcast_to(v[:, None], T.shape)
     xp, yp, fp, xm, ym, fm, _ = pos(e(dt), e(k), e(turns), T)
     rp, rs = P["rp"], P["rs"]
+    full = lambda v: mx.broadcast_to(v, T.shape)
     with declared(large):
         if kind[0] == "hybrid":
             law = kind[1]
@@ -208,7 +210,7 @@ def _photometry(pos, P, kind, large, dt, k, turns, T):
                     + moons.disc_flux_quad(xm, ym, rs, u1, u2, fm)]
     # the lens, where the discs overlap with both on the star (host choice)
     gx = [np.array(_sg(v)) for v in (xp, yp, xm, ym)]
-    grp, grs = float(np.max(np.array(_sg(rp)))), float(np.max(np.array(_sg(rs))))
+    grp, grs = (np.broadcast_to(np.array(_sg(v)), T.shape) for v in (rp, rs))
     zp_, zm_ = np.hypot(gx[0], gx[1]), np.hypot(gx[2], gx[3])
     dd = np.hypot(gx[2] - gx[0], gx[3] - gx[1])
     need = (np.array(fp) & np.array(fm) & (dd < (grp + grs) * (1.0 + 1e-9))
@@ -216,20 +218,38 @@ def _photometry(pos, P, kind, large, dt, k, turns, T):
     idx = np.nonzero(need)[0]
     if idx.size:
         ix = mx.array(idx.astype(np.int32))
-        flat = lambda v: mx.take(v.reshape(-1), ix)
+        flat = (lambda v: mx.take(full(v).reshape(-1), ix)
+                if isinstance(v, mx.array) and v.ndim else v)
         L = [flat(v) for v in (xp, yp, xm, ym)]
+        lrp, lrs = flat(rp), flat(rs)
         if kind[0] == "hybrid":
-            lens = moons.lens_shape_cols(L[0], L[1], rp, L[2], L[3], rs, kind[1])
+            lens = moons.lens_shape_cols(L[0], L[1], lrp, L[2], L[3], lrs, kind[1])
         else:
-            lens = [moons.lens_flux_quad(L[0], L[1], rp, L[2], L[3], rs, kind[1], kind[2])]
+            lens = [moons.lens_flux_quad(L[0], L[1], lrp, L[2], L[3], lrs, flat(kind[1]),
+                                         flat(kind[2]))]
         cols = [(c.reshape(-1).at[ix].add(lc)).reshape(T.shape) for c, lc in zip(cols, lens)]
     return cols
 
 
+def _map_sets(v, fn):
+    """fn applied to every per-set array (ndim >= 1) in v: an array, a tuple
+    of them (the anchored constants, the moon's orbit) or a host value."""
+    if isinstance(v, mx.array):
+        return fn(v) if v.ndim else v
+    if isinstance(v, tuple):
+        return tuple(_map_sets(c, fn) for c in v)
+    return v
+
+
+def _lanes(P, fn):
+    return {key: _map_sets(v, fn) for key, v in P.items()}
+
+
 def flux_dev_moon_t(dt, k, turns, P, kind, large=False, exp_time=0.0, n_gl=7,
-                    n_sample=None):
-    """F - 1 of a planet and its moon at host times (dt, k, turns), float64
-    arrays (m,) from ``orbit.epoch_center_times`` and ``moons.moon_turns_ref``
+                    n_sample=None, n_sets=None):
+    """F - 1 of a planet and its moon at times (dt, k, turns), (m,) each --
+    host float64 arrays, or mx arrays (anvil's rows) -- from
+    ``orbit.epoch_center_times`` and ``moons.moon_turns_ref``
     against the references in P. P: the graph parameters -- t0_off, p_off,
     per, a, inc [rad], ecc (``moons.anchored_constants`` or None), rp, rs,
     a_ps (stellar radii), q, m_off, moon_inc, node, phase [rad], orbit
@@ -237,29 +257,51 @@ def flux_dev_moon_t(dt, k, turns, P, kind, large=False, exp_time=0.0, n_gl=7,
     (the references) and speed (the barycentre's largest sky speed, an
     upper bound). kind: ("hybrid", law, w) or ("quad", u1, u2). ``large``: rp
     may exceed 1. ``exp_time`` > 0: the contact rule, ``n_gl`` nodes per
-    piece, ``n_sample`` event samples per exposure (None: 64)."""
+    piece, ``n_sample`` event samples per exposure (None: 64).
+
+    ``n_sets``: many parameter sets at the same times, each value in P and
+    kind (n_sets,) -- (n_sets, n_w) for the hybrid weights -- or shared (a
+    0-d array or host value), and the result (n_sets, m). Each evaluated
+    (set, point) pair is a lane, its parameters gathered to (lanes, 1)
+    columns, so one pass serves every set; the host choices (reach, the
+    lens's nodes, the number of splits) are taken over all of them."""
     dtype = P["a"].dtype if isinstance(P["a"], mx.array) else mx.float64
     m = dt.shape[0]
-    pos = _geometry(P)
-    frozen = _geometry(_frozen(P))
+    n = 1 if n_sets is None else int(n_sets)
     hw0 = 0.5 * exp_time
-    dt_m, k_m, tu_m = (mx.array(v, dtype=dtype) for v in (dt, k, turns))
-    # the points either body can reach the star from, in their exposure
-    reach = (1.0 + 2.0 * float(np.max(np.array(_sg(P["a_ps"]))))
-             + float(np.max(np.array(_sg(P["rp"])))) + float(np.max(np.array(_sg(P["rs"]))))
+    dt_m, k_m, tu_m = (v.astype(dtype) if isinstance(v, mx.array) else mx.array(v, dtype=dtype)
+                       for v in (dt, k, turns))
+    # the lanes either body can reach the star from, in their exposure
+    hmax = lambda v: float(np.max(np.array(_sg(v)))) if isinstance(v, mx.array) else float(v)
+    reach = (1.0 + 2.0 * hmax(P["a_ps"]) + hmax(P["rp"]) + hmax(P["rs"])
              + P["speed"] * 2.0 * hw0)
-    zB = np.array(frozen(dt_m, k_m, tu_m, 0.0)[6])
+    col = _lanes(_frozen(P), lambda v: v.reshape(-1, 1))           # (n, 1) columns
+    tau = dt_m[None] - (col["t0_off"] + k_m[None] * col["p_off"])
+    XB, YB, _ = moons.barycentre_sky((_TWO_PI / col["per"]) * tau, col["a"], col["inc"],
+                                     col["ecc"])
+    zB = np.broadcast_to(np.array(mx.sqrt(XB * XB + YB * YB)), (n, m)).reshape(-1)
     sel = np.nonzero(zB < reach)[0]
     out_cols = None
     if sel.size:
         six = mx.array(sel.astype(np.int32))
-        d_s, k_s, t_s = (mx.take(v, six) for v in (dt_m, k_m, tu_m))
+        pix = mx.array((sel % m).astype(np.int32))
+        if n_sets is None:
+            PL, lkind = P, kind
+        else:
+            sx = mx.array((sel // m).astype(np.int32))
+            gather = lambda v: mx.take(v, sx, axis=0)[:, None]
+            PL = _lanes(P, gather)
+            lkind = kind if kind[0] == "hybrid" else (kind[0],) + tuple(
+                _map_sets(v, gather) for v in kind[1:])
+        pos = _geometry(PL)
+        frozen = _geometry(_frozen(PL))
+        d_s, k_s, t_s = (mx.take(v, pix) for v in (dt_m, k_m, tu_m))
         if exp_time > 0.0:
             hw = mx.full(d_s.shape, hw0, dtype=dtype)
-            g_frozen = _event_g(frozen, _frozen(P), dtype)
+            g_frozen = _event_g(frozen, _frozen(PL), dtype)
             ev, ok, ff = _events(g_frozen, d_s, k_s, t_s, hw, int(n_sample or 64), dtype)
             n_k = int(np.max(np.sum(np.array(ok), axis=-1))) if ok.size else 0
-            ev, ok = _live(ev, ok, ff, _event_g(pos, P, dtype), g_frozen, d_s, k_s, t_s, hw,
+            ev, ok = _live(ev, ok, ff, _event_g(pos, PL, dtype), g_frozen, d_s, k_s, t_s, hw,
                            dtype)
             T, W = _nodes(ev, ok, hw, n_k, n_gl, dtype)
         else:
@@ -270,12 +312,21 @@ def flux_dev_moon_t(dt, k, turns, P, kind, large=False, exp_time=0.0, n_gl=7,
         blocks = []
         for i in range(0, sel.size, step):
             j = slice(i, min(i + step, sel.size))
-            cols = _photometry(pos, P, kind, large, d_s[j], k_s[j], t_s[j], T[j])
+            if n_sets is None:
+                Pj, kj = PL, lkind
+            else:
+                Pj = _lanes(PL, lambda v: v[j])
+                kj = (lkind[0],) + tuple(_map_sets(v, lambda c: c[j]) for v in lkind[1:]) \
+                    if lkind[0] == "quad" else lkind
+            cols = _photometry(_geometry(Pj), Pj, kj, large, d_s[j], k_s[j], t_s[j], T[j])
             blocks.append([mx.sum(c * W[j], axis=-1) for c in cols])
         sub = [mx.concatenate([b[c] for b in blocks]) for c in range(len(blocks[0]))]
-        out_cols = [mx.zeros((m,), dtype=dtype).at[six].add(s) for s in sub]
+        out_cols = [mx.zeros((n * m,), dtype=dtype).at[six].add(s) for s in sub]
+        if n_sets is not None:
+            out_cols = [c.reshape(n, m) for c in out_cols]
+    shape = (m,) if n_sets is None else (n, m)
+    if out_cols is None:
+        return mx.zeros(shape, dtype=dtype)
     if kind[0] == "hybrid":
-        if out_cols is None:
-            return mx.zeros((m,), dtype=dtype)
         return combine_cols(out_cols, kind[2], kind[1])
-    return mx.zeros((m,), dtype=dtype) if out_cols is None else out_cols[0]
+    return out_cols[0]

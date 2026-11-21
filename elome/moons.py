@@ -85,9 +85,9 @@ from .rings import _SAMPLES, _TINY, _decisive
 from .trig import sincos
 
 __all__ = ["moon_turns_ref", "moon_phase", "moon_offset", "barycentre_sky",
-           "body_positions", "anchored_constants", "moon_orbit", "mutual_inclination",
-           "moon_period", "check_moon", "generator_cols_moon", "shape_cols_moon",
-           "flux_dev_moon", "flux_dev_moon_quad"]
+           "body_positions", "anchored_constants", "moon_orbit", "moon_orbit_kh",
+           "mutual_inclination", "moon_period", "check_moon", "generator_cols_moon",
+           "shape_cols_moon", "flux_dev_moon", "flux_dev_moon_quad"]
 
 _TWO_PI = 2.0 * math.pi
 _sg = mx.stop_gradient
@@ -164,6 +164,19 @@ def moon_orbit(ecc, w, dtype):
     one_m_kk = 2.0 * e / ((1.0 + e) * (1.0 + kk))
     delta = 2.0 * mx.arctan2(one_m_kk * s2 * c2, c2 * c2 + kk * s2 * s2)
     return consts, delta + consts[3]
+
+
+def moon_orbit_kh(k, h):
+    """``moon_orbit`` from (k, h) = sqrt(e_m) (cos w_m, sin w_m), a sampler's
+    pair: w_m from the guarded (sin w_m, cos w_m), as
+    ``anchored.anchor_constants`` forms it, so e_m = 0 stays an interior
+    point with finite gradients."""
+    e = k * k + h * h
+    pos = e > 0.0
+    den = mx.where(pos, mx.maximum(mx.sqrt(mx.maximum(e, 1e-30)), 1e-30), mx.ones_like(e))
+    w = mx.arctan2(mx.where(pos, h / den, mx.zeros_like(h)),
+                   mx.where(pos, k / den, mx.ones_like(k)))
+    return moon_orbit(e, w, e.dtype)
 
 
 def moon_offset(phi_m, a_ps, moon_inc, node, orbit=None):
@@ -596,10 +609,12 @@ def _lens_mu(m0, m2, m4, dt):
     b = mean + half
     ra, rb = mx.sqrt(a), mx.sqrt(b)
     uni = (2.0 / 3.0) * (a + ra * rb + b) / (ra + rb)
-    rv = mx.where(limb, var / (mean * mean), 1.0)           # E[x^2]/E[x]^2 - 1 > 1/3
-    k = mx.sqrt(1.0 + 1.0 / rv) - 2.0
-    bk = mean * (k + 2.0) / (k + 1.0)
-    pw = mx.sqrt(bk) * (k + 1.0) / (k + 1.5)
+    # q = E[x]^2 / var < 3 and k + 1 = sqrt(1 + q) - 1 without cancellation,
+    # E[sqrt x] = sqrt(E[x] (k + 1) (k + 2)) / (k + 3/2) without dividing by
+    # k + 1: a lens barely on the star (mean -> 0) takes k -> -1
+    q = mx.where(limb, mean * mean / mx.where(limb, var, 1.0), 1.0)
+    kp1 = q / (mx.sqrt(1.0 + q) + 1.0)
+    pw = mx.sqrt(mx.maximum(mean * kp1 * (kp1 + 1.0), tiny)) / (kp1 + 0.5)
     return mx.where(ok, m0s * mx.where(limb, pw, uni), 0.0)
 
 

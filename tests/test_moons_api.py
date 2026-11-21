@@ -195,5 +195,53 @@ def test_evaluation_checks():
                   "moon_phase", "moon_ecc", "moon_w"):
             setattr(q, k, None)
         m.light_curve(q)
-    with pytest.raises(NotImplementedError):
-        m.light_curves([p, p])
+    with pytest.raises(ValueError, match="outside the planet"):
+        m.light_curves([p, system(moon_a=1.2)])
+
+
+def sets(law):
+    """Four parameter sets around system(law): eccentric and circular,
+    a default moon_inc, a massless moon, a moon behind the planet."""
+    return [system(law),
+            system(law, ecc=0.0, moon_ecc=0.0, moon_inc=None, moon_q=0.0),
+            system(law, rp=0.1, moon_r=0.2, moon_a=4.5, moon_per=0.7, moon_phase=200.0,
+                   moon_node=-30.0, moon_w=120.0, per=30.001),
+            system(law, t0=0.21, inc=89.9, moon_inc=92.0, moon_ecc=0.2)]
+
+
+@pytest.mark.parametrize("law", [HYB, QUAD])
+@pytest.mark.parametrize("kw", [{}, dict(exp_time=EXP, integration="contact", n_gl=5),
+                                dict(exp_time=EXP, supersample_factor=3)])
+def test_light_curves_matches_light_curve_per_set(law, kw):
+    ps = sets(law)
+    t = windows(ps[0], step=EXP)
+    m = elome.TransitModel(ps[0], t, **kw)
+    F = m.light_curves(ps)
+    G = np.stack([m.light_curve(p) for p in ps])
+    assert F.shape == (len(ps), t.size)
+    assert np.abs(F - G).max() < 1e-14
+    assert np.all(F.min(axis=1) < 1.0 - 1e-3)
+
+
+def test_light_curves_takes_array_valued_params():
+    ps = sets(HYB)
+    t = windows(ps[0])
+    m = elome.TransitModel(ps[0], t)
+    q = copy.copy(ps[0])
+    for name in ("t0", "per", "rp", "inc", "ecc", "moon_r", "moon_a", "moon_per",
+                 "moon_q", "moon_node", "moon_phase", "moon_ecc", "moon_w"):
+        setattr(q, name, np.array([getattr(p, name) for p in ps], dtype=np.float64))
+    q.moon_inc = None                      # each set's own inc
+    ref = [copy.copy(p) for p in ps]
+    for r in ref:
+        r.moon_inc = r.inc
+    assert np.abs(m.light_curves(q) - m.light_curves(ref)).max() < 1e-15
+
+
+def test_light_curves_in_float32():
+    ps = [system(HYB, ecc=0.0, moon_ecc=0.0, t0=2459000.2),
+          system(HYB, ecc=0.0, moon_ecc=0.0, t0=2459000.2, moon_phase=120.0)]
+    t = windows(ps[0], epochs=(0, 40))
+    F64 = elome.TransitModel(ps[0], t).light_curves(ps)
+    F32 = elome.TransitModel(ps[0], t, dtype=mx.float32).light_curves(ps)
+    assert np.abs(F32 - F64).max() < 2e-7

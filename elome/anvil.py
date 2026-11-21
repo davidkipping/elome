@@ -5,7 +5,8 @@ a synthetic transit-fitting target.
     model_fn(v: (n_chains, 8), x: (2, m)) -> (n_chains, m) flux deviation
 and is pure elome (mlx + numpy only); ``make_hybrid_transit_flux`` is its
 counterpart for the hybrid limb-darkening laws, optionally on a spotted
-star. ``make_target`` assembles the
+star, and ``make_moon_transit_flux`` a planet with a moon. ``make_target``
+assembles the
 full sampling problem (chunked likelihood + transform + synthetic data);
 the engine is imported lazily, so the core package stays standalone.
 
@@ -48,7 +49,7 @@ __all__ = ["make_quad_transit_flux", "make_target", "QuadTransitTarget",
            "PenalizedLogLike", "PARAM_NAMES", "PARAM_NAMES_ECC",
            "make_transit_target", "TransitTarget", "DEFAULT_BOUNDS",
            "make_hybrid_transit_flux", "transit_param_names",
-           "make_eclipse_flux"]
+           "make_eclipse_flux", "make_moon_transit_flux"]
 
 PARAM_NAMES = ["t0_off", "p_off", "r", "b", "a", "q1", "q2", "df0"]
 
@@ -154,18 +155,23 @@ def _build_graph_model(period_ref: float, core):
 
 _HYBRID_LAWS = ("hybrid2", "hybrid4", "hybrid5")
 _SPOT_FIELDS = ("lon", "sinlat", "rad", "contrast")
+_MOON_NAMES = ("moon_r", "moon_a", "moon_p_off", "moon_q", "cos_moon_inc",
+               "moon_node", "moon_phase")
 _DEG = math.pi / 180.0
 
 
 def transit_param_names(limb_dark: str = "quadratic", eccentric: bool = False,
                         n_spots: int = 0, transittype: str = "primary",
-                        timing: str = "transit") -> list:
+                        timing: str = "transit", moon: bool = False,
+                        moon_eccentric: bool = False) -> list:
     """The model-space parameter vector's names, in order, for
     ``make_transit_target``'s options:
 
         t0_off, p_off, r, b, a, the limb darkening's q1..qn,
         [secosw, sesinw], [per spot j = 1..K: lonj, sinlatj, radj,
-        contrastj, then prot, cos_istar, lam], [fp], df0
+        contrastj, then prot, cos_istar, lam], [moon_r, moon_a, moon_p_off,
+        moon_q, cos_moon_inc, moon_node, moon_phase, [moon_secosw,
+        moon_sesinw]], [fp], df0
 
     With a secondary eclipse (``transittype`` "secondary" or "both";
     ``make_eclipse_flux``) the planet's flux ratio ``fp`` comes before
@@ -180,7 +186,15 @@ def transit_param_names(limb_dark: str = "quadratic", eccentric: bool = False,
     latitude as its sine (uniform over the sphere), its contrast the
     spot's intensity over the photosphere's; the star's rotation period
     ``prot`` in days, its spin axis's inclination as cos(istar) (isotropic)
-    and the sky-projected obliquity ``lam`` in degrees."""
+    and the sky-projected obliquity ``lam`` in degrees.
+
+    With ``moon`` (``make_moon_transit_flux``; a primary transit of an
+    unspotted star): the moon's radius and semi-major axis in planet radii,
+    its period's offset from ``moon_period_ref`` [days], its mass over the
+    planet's, cos of its orbit's sky inclination (isotropic with the node
+    uniform), the node and its phase at t0 in degrees (``TransitParams``'
+    moon fields), and with ``moon_eccentric`` its (sqrt(e) cos w, sqrt(e)
+    sin w)."""
     if transittype not in ("primary", "secondary", "both"):
         raise ValueError("transittype must be 'primary', 'secondary' or "
                          f"'both'; got {transittype!r}")
@@ -194,6 +208,11 @@ def transit_param_names(limb_dark: str = "quadratic", eccentric: bool = False,
     if eclipse and int(n_spots):
         raise ValueError("a secondary eclipse is for an unspotted star: "
                          "n_spots=0")
+    if moon_eccentric and not moon:
+        raise ValueError("moon_eccentric=True describes a moon: pass moon=True")
+    if moon and (eclipse or int(n_spots)):
+        raise ValueError("a moon is for a primary transit of an unspotted "
+                         "star: transittype='primary', n_spots=0")
     if transittype == "secondary" and limb_dark != "quadratic":
         raise ValueError("an eclipse alone has no limb darkening: limb_dark= "
                          "applies with transittype='both'")
@@ -221,6 +240,10 @@ def transit_param_names(limb_dark: str = "quadratic", eccentric: bool = False,
         names += [f"{f}{j}" for f in _SPOT_FIELDS]
     if n_spots:
         names += ["prot", "cos_istar", "lam"]
+    if moon:
+        names += list(_MOON_NAMES)
+        if moon_eccentric:
+            names += ["moon_secosw", "moon_sesinw"]
     if eclipse:
         names += ["fp"]
     return names + ["df0"]
@@ -344,6 +367,113 @@ def make_hybrid_transit_flux(period_ref: float, limb_dark: str = "hybrid4",
                 star = dev(behind)
             return v[:, -1:] + (dev(tau) - star) / (1.0 + star)
         return v[:, -1:] + dev(tau)
+
+    return flux_dev_fn
+
+
+# ---------------------------------------------------------------------------
+# a planet with a moon
+# ---------------------------------------------------------------------------
+
+def make_moon_transit_flux(period_ref: float, moon_period_ref: float,
+                           limb_dark: str = "quadratic", eccentric: bool = False,
+                           moon_eccentric: bool = False, exp_time: float = 0.0,
+                           integration: str = "contact", n_gl: int = 5,
+                           n_sub: int = 1, large_occultor: bool = False):
+    """Engine-contract batched model of a planet with a moon: v = (n_chains,
+    d) with ``transit_param_names(limb_dark, eccentric, moon=True,
+    moon_eccentric=moon_eccentric)`` and x = (3, m), the epoch-centered
+    times and orbit numbers and each point's reference turns of the moon,
+    ``moons.moon_turns_ref(k, period_ref, moon_period_ref)`` -- returning
+    df0 + (F - 1), (n_chains, m).
+
+    ``TransitModel``'s moon route (``moons_tau``), every chain in one pass:
+    the quadratic law (q1, q2) with its lens closure, or a hybrid law
+    through its q prior, exact. The barycentre follows (t0_off, p_off, b,
+    a[, secosw, sesinw]) as the planet does in the other models; the moon's
+    period is ``moon_period_ref`` + moon_p_off, its phase split from the
+    references in x, so float32 holds it far from t0. ``exp_time`` (days)
+    > 0 integrates each exposure by ``integration``: "contact" (split at
+    the kinks of each exposure, ``n_gl`` nodes per piece), "supersample"
+    (``n_sub`` uniform nodes) or "none". Evaluated eagerly: it raises under
+    ``mx.compile`` (run anvil with ``compile_step=False``).
+
+    ``large_occultor``: whether r may exceed 1, as
+    ``make_hybrid_transit_flux``'s.
+    """
+    period_ref, moon_period_ref = float(period_ref), float(moon_period_ref)
+    if limb_dark != "quadratic" and limb_dark not in _HYBRID_LAWS:
+        raise ValueError(f"limb_dark must be 'quadratic' or one of "
+                         f"{_HYBRID_LAWS}; got {limb_dark!r}")
+    if integration not in ("contact", "supersample", "none"):
+        raise ValueError("integration must be 'contact', 'supersample' or "
+                         f"'none'; got {integration!r}")
+    names = transit_param_names(limb_dark, eccentric, moon=True,
+                                moon_eccentric=moon_eccentric)
+    col = {n: i for i, n in enumerate(names)}
+    iq, n_q = col["q1"], sum(n[0] == "q" and n[1:].isdigit() for n in names)
+    exp_time = float(exp_time)
+    contact = exp_time > 0.0 and integration == "contact"
+    off = (np.linspace(-0.5 * exp_time, 0.5 * exp_time, int(n_sub))
+           if exp_time > 0.0 and integration == "supersample" and n_sub > 1
+           else np.zeros(1))
+    # a cos kept off +-1, where arccos's slope is infinite
+    lim = 1.0 - 1e-6
+    if limb_dark != "quadratic":
+        from .hybrid import get_law
+        law = get_law(limb_dark)
+
+    def flux_dev_fn(v: mx.array, x: mx.array) -> mx.array:
+        from .anchored import anchor_constants
+        from .moons import moon_orbit_kh
+        from .moons_tau import flux_dev_moon_t, sample_count
+        dt = v.dtype
+        n, m = v.shape[0], x.shape[1]
+        c = lambda name: v[:, col[name]]
+        r, b, a = v[:, 2], v[:, 3], v[:, 4]
+        if eccentric:
+            k, h, ci, e = _ecc_orbit_from_v(v, ik=col["secosw"])
+            ecc = anchor_constants(k, h)
+        else:
+            ci, ecc, e = b / a, None, mx.zeros_like(a)
+        orbit, e_m = None, mx.zeros_like(a)
+        if moon_eccentric:
+            km, hm, e_m = _shrink_kh(c("moon_secosw"), c("moon_sesinw"))
+            orbit = moon_orbit_kh(km, hm)
+        P = dict(t0_off=v[:, 0], p_off=v[:, 1], per=period_ref + v[:, 1], a=a,
+                 inc=mx.arccos(mx.clip(ci, -lim, lim)), ecc=ecc, rp=r,
+                 rs=r * c("moon_r"), a_ps=r * c("moon_a"), q=c("moon_q"),
+                 m_off=c("moon_p_off"),
+                 moon_inc=mx.arccos(mx.clip(c("cos_moon_inc"), -lim, lim)),
+                 node=c("moon_node") * _DEG, phase=c("moon_phase") * _DEG,
+                 orbit=orbit, per_ref=period_ref, mper_ref=moon_period_ref)
+        # host bounds over the chains: the barycentre's fastest sky speed,
+        # and the contact rule's event samples
+        hv = {key: np.array(mx.stop_gradient(val), dtype=np.float64) for key, val in dict(
+            a=a, per=P["per"], e=e, rp=r, rs=P["rs"], a_ps=P["a_ps"], e_m=e_m,
+            mper=moon_period_ref + P["m_off"]).items()}
+        P["speed"] = float(np.max(2.0 * math.pi * hv["a"] / hv["per"]
+                                  * np.sqrt((1.0 + hv["e"]) / (1.0 - hv["e"]))))
+        if limb_dark == "quadratic":
+            kind = ("quad",) + tuple(q_to_u(v[:, iq], v[:, iq + 1]))
+        else:
+            kind = ("hybrid", law, _w_from_q(limb_dark, v[:, iq:iq + n_q]))
+        n_sample = None
+        if contact:
+            n_sample = max(sample_count(exp_time, *(float(hv[key][i]) for key in (
+                "a", "per", "rp", "a_ps", "mper", "rs", "e", "e_m"))) for i in range(n))
+        rows = [x[0], x[1], x[2]]
+        if off.size > 1:
+            # supersampling: the nodes as further points (tau is unwrapped:
+            # an offset leaves k and the moon's turns alone)
+            rows = [mx.concatenate([rows[0] + float(o) for o in off]),
+                    mx.concatenate([rows[1]] * off.size),
+                    mx.concatenate([rows[2]] * off.size)]
+        dev = flux_dev_moon_t(*rows, P, kind, large_occultor,
+                              exp_time if contact else 0.0, n_gl, n_sample, n_sets=n)
+        if off.size > 1:
+            dev = mx.mean(dev.reshape(n, off.size, m), axis=1)
+        return v[:, -1:] + dev
 
     return flux_dev_fn
 
@@ -605,6 +735,13 @@ DEFAULT_BOUNDS = {
     # a secondary eclipse: the mid-occultation offset and the planet's
     # flux ratio
     "tocc_off": (-0.5, 0.5), "fp": (0.0, 0.01),
+    # a moon: the node's box holds a coplanar moon (node 0) and leaves out
+    # its mirror (node + 180, phase + 180), which gives the same light
+    # curve; moon_p_off has no default box
+    "moon_r": (0.0, 1.0), "moon_a": (2.0, 100.0), "moon_q": (0.0, 0.2),
+    "cos_moon_inc": (-1.0, 1.0), "moon_node": (-90.0, 90.0),
+    "moon_phase": (-180.0, 180.0), "moon_secosw": (-0.95, 0.95),
+    "moon_sesinw": (-0.95, 0.95),
 }
 
 
@@ -623,7 +760,8 @@ class TransitTarget:
     loglike: object               # ChunkedGaussianLogLike (maybe penalized)
     model_fn: object              # the batched (v, x) -> flux deviation
     x64: np.ndarray               # (2, n) epoch-centered times; (3, n)
-                                  # with spots or timing="occultation"
+                                  # with spots, a moon or
+                                  # timing="occultation"
     y_fit: np.ndarray             # y - 1
     yerr: np.ndarray
     t_ref: float                  # float64 time origin subtracted first
@@ -635,26 +773,32 @@ class TransitTarget:
     n_spots: int = 0
     #: the time (input system) the spots' longitudes refer to; None unspotted
     spot_epoch: float | None = None
-    #: pass to ``anvil.run(..., compile_step=)``: a spotted model is
-    #: evaluated eagerly and raises under ``mx.compile``
+    #: pass to ``anvil.run(..., compile_step=)``: a spotted model, or one
+    #: with a moon, is evaluated eagerly and raises under ``mx.compile``
     compile_step: bool = True
     #: "primary", "secondary" or "both"
     transittype: str = "primary"
     #: the sampled time: "transit" (t0_off) or "occultation" (tocc_off);
     #: t0_ref is then that event's reference
     timing: str = "transit"
+    #: with a moon, its period's reference [days] (moon_p_off's origin)
+    moon_period_ref: float | None = None
 
     def model_params(self, t0, period, **kw):
         """Physical values -> the model-space vector the sampler uses.
 
-        Handles the two offset parameters so callers never have to
-        remember which reference is subtracted from what. ``t0`` is the
-        sampled event's mid-time: mid-occultation for
-        ``timing="occultation"``.
+        Handles the offset parameters so callers never have to remember
+        which reference is subtracted from what. ``t0`` is the sampled
+        event's mid-time: mid-occultation for ``timing="occultation"``.
+        With a moon, ``moon_per=`` (days) gives ``moon_p_off``.
         """
         vals = dict(kw)
         vals[self.param_names[0]] = float(t0) - self.t_ref - self.t0_ref
         vals["p_off"] = float(period) - self.period_ref
+        if "moon_per" in vals:
+            if self.moon_period_ref is None:
+                raise ValueError("moon_per= is for a target with a moon")
+            vals["moon_p_off"] = float(vals.pop("moon_per")) - self.moon_period_ref
         vals.setdefault("df0", 0.0)
         missing = [n for n in self.param_names if n not in vals]
         if missing:
@@ -670,7 +814,8 @@ def make_transit_target(t, y, yerr, t0_guess, period_guess,
                         n_gl: int = 5, spot_epoch=None,
                         relative: bool = True, n_sub: int = 1,
                         transittype: str = "primary", timing: str = "transit",
-                        ecc=None, w=None, rstar=None):
+                        ecc=None, w=None, rstar=None, moon: bool = False,
+                        moon_period_guess=None, moon_eccentric: bool = False):
     """Build an anvil fitting problem from REAL photometry.
 
     ``core`` is "metal" (default: fused fp32 kernels, falling back to the
@@ -715,9 +860,10 @@ def make_transit_target(t, y, yerr, t0_guess, period_guess,
             Run anvil with ``compile_step=target.compile_step`` (False): a
             spotted model is evaluated eagerly.
         exp_time, integration, n_gl, n_sub: an exposure time (in t's
-            units) and its rule, for hybrid laws and eclipses: ``n_gl``
-            nodes per piece for "contact", ``n_sub`` for "supersample"
-            (``make_hybrid_transit_flux``, ``make_eclipse_flux``).
+            units) and its rule, for hybrid laws, eclipses and moons:
+            ``n_gl`` nodes per piece for "contact", ``n_sub`` for
+            "supersample" (``make_hybrid_transit_flux``,
+            ``make_eclipse_flux``, ``make_moon_transit_flux``).
         spot_epoch: when the spots' longitudes are measured (t's system);
             default the predicted mid-transit nearest the data's middle,
             which keeps the star's float32 phase accurate.
@@ -754,6 +900,14 @@ def make_transit_target(t, y, yerr, t0_guess, period_guess,
         rstar: with an eclipse, the star's radius in solar radii: adds the
             light-travel time across the orbit to the occultation time
             (``eclipse.light_travel_delay``). None leaves it out.
+        moon, moon_period_guess, moon_eccentric: fit a planet with a moon
+            (``make_moon_transit_flux``; either law, a primary transit of
+            an unspotted star), its period sampled as ``moon_p_off`` about
+            ``moon_period_guess`` (days, required), which has no default
+            box: give one in ``bounds``. ``moon_eccentric`` samples the
+            moon's (moon_secosw, moon_sesinw) too. The node's default box
+            leaves out the moon's mirror image (see DEFAULT_BOUNDS). Run
+            anvil with ``compile_step=target.compile_step`` (False).
     """
     engine, ChunkedGaussianLogLike = import_engine()
     t = np.asarray(t, dtype=np.float64)
@@ -784,17 +938,22 @@ def make_transit_target(t, y, yerr, t0_guess, period_guess,
 
     hybrid = limb_dark != "quadratic"
     names = transit_param_names(limb_dark, eccentric, n_spots,
-                                transittype=transittype, timing=timing)
+                                transittype=transittype, timing=timing,
+                                moon=moon, moon_eccentric=moon_eccentric)
     eclipse = transittype != "primary"
+    if moon and moon_period_guess is None:
+        raise ValueError("a fit with a moon needs moon_period_guess= (days)")
+    if not moon and moon_period_guess is not None:
+        raise ValueError("moon_period_guess= is for a fit with a moon "
+                         "(moon=True)")
     if not eclipse and (ecc is not None or w is not None or rstar is not None):
         raise ValueError("ecc=, w= and rstar= are for a fit with a secondary "
                          "eclipse (transittype='secondary' or 'both')")
-    if (hybrid or eclipse) and core != "metal":
+    if (hybrid or eclipse or moon) and core != "metal":
         raise ValueError("core selects the quadratic transit's implementation; "
-                         "a hybrid law or an eclipse runs flux_dev_from_tau "
-                         "(float32 on the GPU: the Metal kernels where there "
-                         "are any; float64: the graph)")
-    if not (hybrid or eclipse) and exp_time:
+                         "a hybrid law, an eclipse or a moon has one of its "
+                         "own")
+    if not (hybrid or eclipse or moon) and exp_time:
         raise ValueError("exp_time needs a hybrid law or an eclipse here; the "
                          "quadratic transit targets are instantaneous")
     lims = _param_bounds(names, bounds)
@@ -813,14 +972,26 @@ def make_transit_target(t, y, yerr, t0_guess, period_guess,
             ep = float(spot_epoch) - t_ref
         x64 = np.vstack([x64, (t_model - ep)[None, :]])
         spot_epoch = t_ref + ep
+    if moon:
+        from .moons import moon_turns_ref
+        x64 = np.vstack([x64, moon_turns_ref(x64[1], period_ref,
+                                             float(moon_period_guess))[None, :]])
     report = {names[0]: t_ref + t0_ref, "p_off": period_ref, "df0": 1.0}
+    if moon:
+        report["moon_p_off"] = float(moon_period_guess)
     transform = engine.Transform([
         engine.ParamSpec(n, lo=lims[n][0], hi=lims[n][1],
                             **({"report_offset": report[n]}
                                if n in report else {}))
         for n in names])
 
-    if eclipse:
+    if moon:
+        model_fn = make_moon_transit_flux(
+            period_ref, float(moon_period_guess), limb_dark, eccentric=eccentric,
+            moon_eccentric=moon_eccentric, exp_time=exp_time,
+            integration=integration, n_gl=n_gl, n_sub=n_sub,
+            large_occultor=lims["r"][1] > 1.0)
+    elif eclipse:
         model_fn = make_eclipse_flux(
             period_ref, transittype, limb_dark, eccentric=eccentric, ecc=ecc,
             w=w, timing=timing, rstar=rstar, exp_time=exp_time,
@@ -853,7 +1024,9 @@ def make_transit_target(t, y, yerr, t0_guess, period_guess,
         t0_ref=t0_ref, period_ref=period_ref, param_names=list(names),
         eccentric=eccentric, limb_dark=limb_dark, n_spots=int(n_spots),
         spot_epoch=spot_epoch if n_spots else None,
-        compile_step=not n_spots, transittype=transittype, timing=timing)
+        compile_step=not (n_spots or moon), transittype=transittype,
+        timing=timing,
+        moon_period_ref=float(moon_period_guess) if moon else None)
 
 
 def _param_bounds(names, bounds) -> dict:
@@ -891,6 +1064,18 @@ PARAM_NAMES_ECC = ["t0_off", "p_off", "r", "b", "a", "q1", "q2",
 E_MAX_NUMERICAL = 0.999
 
 
+def _shrink_kh(k_raw, h_raw, e_max: float = E_MAX_NUMERICAL):
+    """(k, h, e): (secosw, sesinw) shrunk radially onto the disc of radius
+    sqrt(e_max), the denominator set to 1 where inactive (the
+    masked-division rule)."""
+    e_raw = k_raw * k_raw + h_raw * h_raw
+    big = e_raw > e_max
+    den = mx.where(big, e_raw, mx.ones_like(e_raw))
+    sc = mx.where(big, mx.sqrt(e_max / den), mx.ones_like(e_raw))
+    k, h = k_raw * sc, h_raw * sc
+    return k, h, k * k + h * h
+
+
 def _ecc_orbit_from_v(v, e_max: float = E_MAX_NUMERICAL, ik: int = 7):
     """Sampler coordinates -> (k, h, ci, e) for the anchored orbit.
 
@@ -901,13 +1086,7 @@ def _ecc_orbit_from_v(v, e_max: float = E_MAX_NUMERICAL, ik: int = 7):
     denominator is set to 1 where inactive rather than floored, per the
     masked-division rule. ``ik`` is secosw's column (sesinw follows it).
     """
-    k_raw, h_raw = v[:, ik], v[:, ik + 1]
-    e_raw = k_raw * k_raw + h_raw * h_raw
-    big = e_raw > e_max
-    den = mx.where(big, e_raw, mx.ones_like(e_raw))
-    sc = mx.where(big, mx.sqrt(e_max / den), mx.ones_like(e_raw))
-    k, h = k_raw * sc, h_raw * sc
-    e = k * k + h * h
+    k, h, e = _shrink_kh(v[:, ik], v[:, ik + 1], e_max)
     # floor before the sqrt: d(sqrt)/de is infinite at e == 0, and
     # h * inf = NaN there. e = 0 is an interior point of the disc.
     sq = mx.sqrt(mx.maximum(e, 1e-30))
