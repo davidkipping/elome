@@ -169,6 +169,21 @@ Which arcs bound the lens is read at three points of each arc and held
 fixed, while the arcs' ends follow the parameters, so the gradients need
 no corner terms.
 
+The integrands are written in factored form, $r(r - z\cos\psi)$ times a
+polynomial in $\mu^2$ on the circle. Expanded about the star's centre,
+their coefficients would be of order 1 and cancel to order $r^2$ near
+the limb. Green's forms are also taken about a point near the lens, the
+unit vector $E$ towards it, rather than about the star's centre: each
+arc's integral, less $F(s)\,(E \times X)$ between its ends, which is an
+exact differential and cancels around the closed boundary. A rounding at
+an arc's end then costs its distance from $E$, about the lens's size,
+not its distance from the star's centre. Each corner's $\mu^2$ is
+computed once, so that the two arcs through it take the same $F$ there.
+The limb's angles are measured from $E$ too. Together these keep the
+lens's float32 rounding at its own scale, which matters for the
+quadratic law's closure (below), whose square root near the limb
+magnifies it.
+
 The quadratic law's $\mu^1$ term over the lens needs incomplete elliptic
 integrals. The lens's exact $\mu^0$, $\mu^2$ and $\mu^4$ moments fix the
 mean and variance of $\mu^2$ over it, and a distribution with those

@@ -326,7 +326,10 @@ _X_SER = {mx.float64: 1e-3, mx.float32: 0.05}
 def _meet(c1, c2, dt):
     """Where circle c1 = (x, y, R) meets c2: the two points (live), computed
     once so that every curve through a corner is split at the same point,
-    and whether they exist -- not within _THIN of a tangency."""
+    whether they exist -- not within _THIN of a tangency -- and each point's
+    offset from c1's centre and from c2's. A circle takes its angle from its
+    own offset, exactly on it by construction, not from the point less its
+    centre, a difference of O(1) coordinates."""
     (x1, y1, R1), (x2, y2, R2) = c1, c2
     dx, dy = x2 - x1, y2 - y1
     D2 = dx * dx + dy * dy
@@ -338,31 +341,43 @@ def _meet(c1, c2, dt):
     hh = mx.where(has, mx.sqrt(mx.where(has, hh2, 1.0)), 0.0)
     ux, uy = dx / D, dy / D
     bx, by = x1 + a * ux, y1 + a * uy
-    return [(bx - hh * uy, by + hh * ux), (bx + hh * uy, by - hh * ux)], has
+    a2 = a - D                                         # along c1 -> c2 from c2
+    pts = [(bx - hh * uy, by + hh * ux), (bx + hh * uy, by - hh * ux)]
+    off1 = [(a * ux - hh * uy, a * uy + hh * ux), (a * ux + hh * uy, a * uy - hh * ux)]
+    off2 = [(a2 * ux - hh * uy, a2 * uy + hh * ux), (a2 * ux + hh * uy, a2 * uy - hh * ux)]
+    return pts, has, (off1, off2)
 
 
-def _sorted_arcs(bps, valid, start, period):
+def _sorted_arcs(bps, valid, start, period, vals=None):
     """Sub-arcs between a closed curve's valid breakpoints (live angles,
     sorted by their frozen values), as (lo, hi, ok) lists of fixed length:
     the last wraps round by ``period``; with no breakpoint at all, one
-    whole turn from ``start``."""
+    whole turn from ``start``. ``vals``: a value per breakpoint, returned
+    too at each arc's two ends as (v_lo, v_hi) lists; meaningless for a
+    whole turn, which has no breakpoint."""
     K = len(bps)
     B = mx.stack(bps, -1)
     V = mx.stack(valid, -1)
     order = _sg(mx.argsort(mx.where(V, _sg(B), mx.inf), axis=-1))
     B = mx.take_along_axis(B, order, axis=-1)
+    W = None if vals is None else mx.take_along_axis(mx.stack(vals, -1), order, axis=-1)
     n = mx.sum(V.astype(mx.int32), axis=-1)
     first = B[..., 0]
-    los, his, oks = [], [], []
+    los, his, oks, vlo, vhi = [], [], [], [], []
     for i in range(K):
         lo = B[..., i]
-        hi = B[..., i + 1] if i + 1 < K else first
-        hi = mx.where(i + 1 < n, hi, first + period)
+        last = ~(i + 1 < n)
+        hi = mx.where(last, first + period, B[..., i + 1] if i + 1 < K else first)
         whole = (n == 0) & (i == 0)
         los.append(mx.where(whole, start, lo))
         his.append(mx.where(whole, start + period, hi))
         oks.append((i < n) | whole)
-    return los, his, oks
+        if W is not None:
+            vlo.append(W[..., i])
+            vhi.append(mx.where(last, W[..., 0], W[..., i + 1] if i + 1 < K else W[..., 0]))
+    if vals is None:
+        return los, his, oks
+    return los, his, oks, (vlo, vhi)
 
 
 def _J(psi, amb, apb, Q, dt):
@@ -397,35 +412,32 @@ def _J(psi, amb, apb, Q, dt):
     return mx.where(ser, f_ser, mx.where(pos, f_pos, f_neg))
 
 
-# mu^{2n}'s integrand h_n(s) (s + d) / 2, d = r^2 - z^2, as polynomial
-# coefficients in s: h_0 = 1/2, h_1 = (2 - s)/4, h_2 = (3 - 3s + s^2)/6
-def _even_poly(n, d):
-    if n == 0:
-        return [0.25 * d, 0.25 + 0.0 * d]
-    if n == 1:
-        return [0.25 * d, (2.0 - d) / 8.0, -0.125 + 0.0 * d]
-    return [0.25 * d, (1.0 - d) / 4.0, (d - 3.0) / 12.0, 1.0 / 12.0 + 0.0 * d]
-
-
-def _arc_cols(z, r, lo, hi, eps):
+def _arc_cols(z, r, lo, hi, eps, sc=None):
     """The generator columns [mu^0, mu^2, mu^4, poles...] of an arc [lo,
     hi] of a circle of radius r, centre z from the star's, psi from its
-    point nearest the star's centre, (lo, hi) in (-2 pi, 2 pi)."""
+    point nearest the star's centre, (lo, hi) in (-2 pi, 2 pi); ``sc``:
+    their (sin, cos), if already formed."""
     dt = lo.dtype
-    S, b, d = z * z + r * r, 2.0 * z * r, r * r - z * z
-    sl, cl = sincos(lo)
-    sh, chh = sincos(hi)
+    b = 2.0 * z * r
+    (sl, cl), (sh, chh) = sc if sc is not None else (sincos(lo), sincos(hi))
     # int cos^k: psi, sin, psi/2 + sin cos/2, sin - sin^3/3
     A = [hi - lo, sh - sl, 0.5 * (hi - lo) + 0.5 * (sh * chh - sl * cl),
          (sh - sl) - (sh * sh * sh - sl * sl * sl) / 3.0]
+    # mu^2 = t0 + b c on the circle, t0 = 1 - z^2 - r^2 formed without
+    # cancellation, and the integrand h_n(s) (x dy - y dx) / d psi = r (r -
+    # z c) h_n in factored form: expanded in s about the star's centre its
+    # coefficients are O(1) and cancel to O(r^2) near the limb, which left
+    # ~1e-7 of float32 rounding in every column whatever the lens's size
+    t0 = (1.0 - z) * (1.0 + z) - r * r
+    hs = [[0.5 + 0.0 * t0],
+          [0.25 * (1.0 + t0), 0.25 * b],
+          [(1.0 + t0 + t0 * t0) / 6.0, b * (1.0 + 2.0 * t0) / 6.0, b * b / 6.0]]
     cols = []
-    for n in range(3):
-        ps = _even_poly(n, d)
-        # (S - b c)^j -> coefficients in c
-        col = 0.0 * lo
-        for j, pj in enumerate(ps):
-            for kk in range(j + 1):
-                col = col + pj * math.comb(j, kk) * S ** (j - kk) * (-b) ** kk * A[kk]
+    for h in hs:
+        col = r * r * h[0] * A[0]
+        for k in range(1, len(h) + 1):
+            g = (r * r * h[k] if k < len(h) else 0.0) - r * z * h[k - 1]
+            col = col + g * A[k]
         cols.append(col)
     for e in eps:
         p = 1.0 + e
@@ -438,20 +450,49 @@ def _arc_cols(z, r, lo, hi, eps):
         reach = apb > 0.0
         amb, apb = mx.where(reach, amb, 0.5), mx.where(reach, apb, 1.0)
         J = _J(hi, amb, apb, amb * apb, dt) - _J(lo, amb, apb, amb * apb, dt)
-        cols.append(-(hi - lo) / (4.0 * p) + (p + d) / (4.0 * p) * J)
+        pd = (sp - z) * (sp + z) + r * r                  # p + r^2 - z^2, no cancellation
+        cols.append(-(hi - lo) / (4.0 * p) + pd / (4.0 * p) * J)
     return cols
+
+
+def _green_f(t, eps, ok):
+    """F of each column's Green form F(rho^2) (x dy - y dx), at mu^2 = t:
+    h_n for mu^0, mu^2, mu^4 and 1 / (2 p (mu^2 + e)) for each pole, p = 1 +
+    e (``ok`` False: a masked lane, given a benign denominator)."""
+    return ([0.5 + 0.0 * t, 0.25 * (1.0 + t), (1.0 + t + t * t) / 6.0]
+            + [1.0 / (2.0 * (1.0 + e) * mx.where(ok, t + e, 1.0)) for e in eps])
 
 
 def _lens_cols(circles, eps, dt):
     """Occulted generator columns (positive) [mu^0, mu^2, mu^4, poles...] of
     the lens of two circles on the star; circles = [(x0, y0, R), (x1, y1,
-    R1)], each (n,)."""
+    R1)], each (n,).
+
+    Green's forms are taken about E, the unit vector towards the lens, not
+    the star's centre: each arc's integral less [F(s) (E x X)] between its
+    ends, an exact differential that cancels round the closed boundary. A
+    rounding at an arc's end then costs its distance from E, about the
+    lens's size, rather than its distance from the star's centre, 1: in
+    float32 the latter left ~1e-7 in every column whatever the lens's
+    size, which the quadratic law's closure magnifies near the limb."""
     ncol = 3 + len(eps)
     occ = [0.0 * circles[0][0] for _ in range(ncol)]
     zero = 0.0 * circles[0][0]
     star = (zero, zero, zero + 1.0)
     limb = [_meet(circles[k], star, dt) for k in range(2)]
     corners = _meet(circles[0], circles[1], dt)
+    # E, frozen: along the two centres' sum. The limb's angles are measured
+    # from it too, so that the lens's are small (one near pi carries a
+    # float32 rounding of 2e-7)
+    ex, ey = (_sg(circles[0][j] + circles[1][j]) for j in range(2))
+    en = mx.sqrt(ex * ex + ey * ey)
+    far = en > _TINY[dt]
+    ex = mx.where(far, ex / mx.where(far, en, 1.0), 1.0)
+    ey = mx.where(far, ey / mx.where(far, en, 1.0), 0.0)
+    # mu^2 at each corner, once: the two arcs through it take the same F
+    # there, so their ends' terms cancel to the gap between them; computed
+    # per arc, F's rounding ~ eps / (mu^2 + e) would not cancel
+    corner_mu2 = [1.0 - (q[0] * q[0] + q[1] * q[1]) for q in corners[0]]
     limb_th, limb_ok = [], []
     for k in range(2):
         x0, y0, R = circles[k]
@@ -462,16 +503,17 @@ def _lens_cols(circles, eps, dt):
         # towards the star's centre from this one's (any direction if centred)
         ux = mx.where(cen, -1.0, -x0 / mx.where(cen, 1.0, z))
         uy = mx.where(cen, 0.0, -y0 / mx.where(cen, 1.0, z))
-        psi = lambda pt: mx.arctan2(ux * (pt[1] - y0) - uy * (pt[0] - x0),
-                                    ux * (pt[0] - x0) + uy * (pt[1] - y0))
-        pts, has = limb[k]
+        psi = lambda off: mx.arctan2(ux * off[1] - uy * off[0], ux * off[0] + uy * off[1])
+        pts, has, (loff, _) = limb[k]
         for pt in pts:
-            limb_th.append(mx.arctan2(pt[1], pt[0]))
+            limb_th.append(mx.arctan2(ex * pt[1] - ey * pt[0], ex * pt[0] + ey * pt[1]))
             limb_ok.append(has)
-        bps = [psi(pt) for pt in pts] + [psi(pt) for pt in corners[0]]
+        bps = [psi(o) for o in loff] + [psi(o) for o in corners[2][k]]
         bv = [has, has, corners[1], corners[1]]
-        los, his, oks = _sorted_arcs(bps, bv, -math.pi + 0.0 * z, _TWO_PI)
+        los, his, oks, (vlo, vhi) = _sorted_arcs(bps, bv, -math.pi + 0.0 * z, _TWO_PI,
+                                                 [zero, zero] + corner_mu2)
         LO, HI, OK = mx.stack(los, -1), mx.stack(his, -1), mx.stack(oks, -1)
+        VLO, VHI = mx.stack(vlo, -1), mx.stack(vhi, -1)
         # the wrapping arc into (-2 pi, 2 pi)
         shift = ((LO > 0.0) & (HI > math.pi)).astype(dt) * _TWO_PI   # not where(c, 2pi, 0): fp32
         LO, HI = LO - shift, HI - shift
@@ -488,10 +530,31 @@ def _lens_cols(circles, eps, dt):
             u_, v_ = (xs - ox[..., None]) / oR[..., None], (ys - oy[..., None]) / oR[..., None]
             m_other.append(1.0 - (u_ * u_ + v_ * v_))
         keep = OK & (_decisive(m_star) > 0.0) & (_decisive(m_other) > 0.0)
-        cols = _arc_cols(z[..., None], R[..., None], mx.where(keep, LO, 0.0),
-                         mx.where(keep, HI, 0.0), eps)
+        LO, HI = mx.where(keep, LO, 0.0), mx.where(keep, HI, 0.0)
+        z1, R1 = z[..., None], R[..., None]
+        sc = (sincos(LO), sincos(HI))
+        cols = _arc_cols(z1, R1, LO, HI, eps, sc)
+        # E x X and F at each end, X - E formed from the centre's offset
+        # from E and the arc's own radius, without O(1) coordinates
+        t0 = (1.0 - z1) * (1.0 + z1) - R1 * R1
+        cx, cy = (x0 - ex)[..., None], (y0 - ey)[..., None]
+        ux1, uy1 = ux[..., None], uy[..., None]
+
+        # a whole circle (no breakpoint) has its two ends at one point: any
+        # F, the same at both; mu^2 at psi = 0, >= 0 on a circle on the star
+        cut = (mx.sum(mx.stack(bv, -1).astype(mx.int32), axis=-1) > 0)[..., None]
+
+        def end(stc, v):
+            st, ct = stc
+            dx_ = cx + R1 * (ux1 * ct - uy1 * st)
+            dy_ = cy + R1 * (ux1 * st + uy1 * ct)
+            mu2 = mx.where(cut, v, t0 + 2.0 * z1 * R1)
+            return ex[..., None] * dy_ - ey[..., None] * dx_, _green_f(mu2, eps, keep)
+        e_hi, f_hi = end(sc[1], VHI)
+        e_lo, f_lo = end(sc[0], VLO)
         for idx in range(ncol):
-            occ[idx] = occ[idx] + mx.sum(mx.where(keep, cols[idx], 0.0), axis=-1)
+            col = cols[idx] - (f_hi[idx] * e_hi - f_lo[idx] * e_lo)
+            occ[idx] = occ[idx] + mx.sum(mx.where(keep, col, 0.0), axis=-1)
     # the limb's arcs inside both circles
     los, his, oks = _sorted_arcs(limb_th, limb_ok, 0.0 * zero, _TWO_PI)
     h1 = [1.0 / (2.0 * (n + 1.0)) for n in range(3)] + [1.0 / (2.0 * (1.0 + e) * e) for e in eps]
@@ -500,13 +563,16 @@ def _lens_cols(circles, eps, dt):
         ms = [[], []]
         glo, ghi = _sg(lo), _sg(hi)
         for t in _SAMPLES:
-            sm, cm = sincos(glo + t * (ghi - glo))
+            sr, cr = sincos(glo + t * (ghi - glo))
+            cm, sm = ex * cr - ey * sr, ey * cr + ex * sr
             for j, (gx0, gy0, gR) in enumerate(g):
                 u, v = (cm - gx0) / gR, (sm - gy0) / gR
                 ms[j].append(1.0 - (u * u + v * v))
         w = ok & (_decisive(ms[0]) > 0.0) & (_decisive(ms[1]) > 0.0)
+        # on the limb E x X = sin(angle) and F is the constant h1
+        arc = (hi - lo) - (sincos(hi)[0] - sincos(lo)[0])
         for idx in range(ncol):
-            occ[idx] = occ[idx] + mx.where(w, h1[idx] * (hi - lo), 0.0)
+            occ[idx] = occ[idx] + mx.where(w, h1[idx] * arc, 0.0)
     return occ
 
 

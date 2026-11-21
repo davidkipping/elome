@@ -157,10 +157,11 @@ def test_gradients_through_light_curve_mx(contact):
             assert np.isfinite(gi) and abs(gi - fd) <= 2e-4 * max(abs(fd), 1e-3), (n, gi, fd)
 
 
-@pytest.mark.parametrize("law,tol", [(HYB, 2e-7), (QUAD, 1.5e-6)])
+@pytest.mark.parametrize("law,tol", [(HYB, 1e-7), (QUAD, 5e-7)])
 def test_float32_holds_far_from_t0(law, tol):
     """120 orbits from t0 at a BJD-sized epoch: the moon's split phase keeps
-    float32 at its photometry's own level (the quadratic disc's ~3e-7)."""
+    float32 at its photometry's own level (measured 3.1e-8 and 2.1e-7; the
+    quadratic disc's own floor is ~3e-7)."""
     p = system(law, ecc=0.0, moon_ecc=0.0, t0=2459000.2)
     t = windows(p, epochs=(0, 40, 120))
     F64 = elome.TransitModel(p, t).light_curve(p)

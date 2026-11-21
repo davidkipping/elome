@@ -41,18 +41,21 @@ there. The error grows with the overlap's area.
 the data lie from `t0`. The barycentre's orbit numbers and residual
 times, and the moon's phase at each transit, are reduced in float64 on
 the host, as on the anvil path. 120 orbits from a BJD-sized `t0`, a
-light curve with a hybrid law is within $6\times10^{-8}$ of float64. With
-the quadratic law it is within $1.3\times10^{-6}$, for the reason below.
+light curve with a hybrid law is within $3\times10^{-8}$ of float64, and
+with the quadratic law within $2\times10^{-7}$, the quadratic disc's own
+float32 level.
 
 ### Where float32 has limits
 
-- **The quadratic law where the discs overlap across the limb.** The
-  $\mu^1$ term goes as the square root of $\mu^2$ near the limb, so the
-  closure magnifies the overlap's float32 rounding, about $2\times10^{-7}$
-  in its moments. While the overlap straddles the limb, a float32
-  quadratic light curve can be off by up to $7\times10^{-6}$ (the median
-  is $5\times10^{-8}$). A hybrid law stays within $1.3\times10^{-7}$
-  there. For mutual events near the limb, use a hybrid law or float64.
+- **The quadratic law where the discs overlap across the limb.** There
+  the $\mu^1$ term goes as the square root of $\mu^2$, so the closure
+  magnifies any rounding in the overlap's moments. Elómë keeps that
+  rounding at the overlap's own scale, about $10^{-8}$, by taking Green's
+  integrals about a point near the overlap rather than about the star's
+  centre (see {doc}`../reference/how-it-works`). While the overlap
+  straddles the limb, a float32 quadratic light curve is within
+  $6\times10^{-7}$ of float64 (the median is $10^{-8}$). A hybrid law is
+  within $1.2\times10^{-8}$ there.
 - **`t0`** is the least precise gradient, as for every model, since the
   float32 times are.
 
@@ -99,9 +102,10 @@ never load or run any of the moon code.
   $a\,(M_p / 3M_\star)^{1/3}$ in stellar radii; on a prograde orbit,
   within about half of it (Domingos, Winter & Yokoyama 2006). Bound
   `moon_a` or add these as priors.
-- **Prefer a hybrid law** for float32 fits with mutual events near the
-  limb (see above). Elsewhere the quadratic law is as accurate as the
-  data allow.
+- **Prefer a hybrid law** where the overlap's limb darkening matters:
+  it is exact there, while the quadratic law's closure is good to
+  $7.6\times10^{-7}$ in float64 and $6\times10^{-7}$ in float32 (see
+  above).
 - **Batch the chains.** `elome.anvil.make_moon_transit_flux` evaluates
   every chain in one call, with gradients. Call it eagerly, not under
   `mx.compile`.

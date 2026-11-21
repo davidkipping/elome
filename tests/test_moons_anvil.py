@@ -136,7 +136,7 @@ class TestModel:
         assert rep[tt.param_names.index("moon_p_off")] == pytest.approx(MOON["moon_per"],
                                                                         abs=1e-14)
 
-    @pytest.mark.parametrize("law,tol", [("quadratic", 2e-6), ("hybrid4", 5e-7)])
+    @pytest.mark.parametrize("law,tol", [("quadratic", 5e-7), ("hybrid4", 1e-7)])
     def test_float32(self, law, tol):
         tt, _ = _target(law, exp_time=EXP)
         v = _truth(tt)

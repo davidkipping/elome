@@ -505,6 +505,34 @@ def test_quadratic_closure_on_random_limb_lenses():
     assert worst < 1e-6
 
 
+@pytest.mark.parametrize("law", ["quadratic", "hybrid5"])
+def test_float32_lens_across_the_limb(law):
+    """Random lenses straddling the limb, float32 against float64: Green's
+    forms about a point near the lens keep each moment's rounding at the
+    lens's scale, which the quadratic closure would otherwise magnify there
+    (measured 5.6e-7 and 1.2e-8 over 20,000; before, 6.9e-6 and 1.3e-7)."""
+    rng = np.random.default_rng(3)
+    n, rp, rs = 4000, 0.1, 0.03
+    ang, zp = rng.uniform(0, 2 * PI, n), rng.uniform(1 - rp, 1 + rp, n)
+    xp, yp = zp * np.cos(ang), zp * np.sin(ang)
+    a2, D = rng.uniform(0, 2 * PI, n), rng.uniform(0, rp + rs, n)
+    xm, ym = xp + D * np.cos(a2), yp + D * np.sin(a2)
+
+    def flux(dt):
+        f = lambda v: mx.array(v, dtype=dt)
+        with mx.stream(mx.cpu):
+            if law == "quadratic":
+                out = moons.flux_dev_moon_quad(f(xp), f(yp), f(xm), f(ym), f(rp), f(rs),
+                                               0.4, 0.25)
+            else:
+                out = moons.flux_dev_moon(f(xp), f(yp), f(xm), f(ym), f(rp), f(rs),
+                                          mx.array([0.2, 0.15, 0.1, 0.05, 0.1], dtype=dt),
+                                          law)
+            return np.array(out, dtype=np.float64)
+    err = np.abs(flux(mx.float32) - flux(mx.float64)).max()
+    assert err < (1e-6 if law == "quadratic" else 3e-8), err
+
+
 @pytest.mark.parametrize("name", ["overlapping on the disc", "overlap across the limb",
                                   "moon off the star, overlapping the planet on the limb",
                                   "planet on the limb, moon on the disc across it",

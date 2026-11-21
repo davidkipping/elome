@@ -239,8 +239,7 @@ every release is tagged `vX.Y.Z` in git.
 ### Documentation
 - **Exomoons**, a section of its own: the sky-frame elements and their
   mirror symmetry, light curves with a moon at sky positions and on
-  orbits, the contact rule's events, accuracy in each precision (and
-  where float32 has limits: a quadratic overlap across the limb), and
+  orbits, the contact rule's events, accuracy in each precision, and
   fitting a moon, with anvil or otherwise.
 - **The cost of the limb-darkening law** (spherical accuracy-and-cost
   page, `benchmarks/bench_law_cost.py`): each code runs each of its laws
