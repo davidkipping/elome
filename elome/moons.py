@@ -81,8 +81,7 @@ from .dtypes import fp64_on_cpu
 from .flux import flux_dev
 from .hybrid import (_combine, _generator_terms, _may_be_large, combine_cols, declared,
                      get_law, lens_geometry)
-from .oblate import _C, _N_MAX, _coeffs, _even_arc, _even_arc_gl, _mod2pi, _pole_arc, _q_coeffs
-from .rings import _SAMPLES, _TINY, _arcs, _centred, _circle_roots, _decisive, _h
+from .rings import _SAMPLES, _TINY, _decisive
 from .trig import sincos
 
 __all__ = ["moon_turns_ref", "moon_phase", "moon_offset", "barycentre_sky",
@@ -273,13 +272,26 @@ def check_moon(moon_r, moon_a, moon_q, moon_ecc=0.0):
 #            + sum over the limb's arcs inside both circles of h(1) dtheta.
 #
 # Each circle is split at its two limb points and its two corners with the
-# other circle (closed form), and each arc's membership, of the star and of
-# the other circle, is read at three points (``rings._SAMPLES``): an arc
-# has no corner with the curve it is tested against, so every interior
-# point gives the same answer except where the curves merely touch. The
-# arcs are ``oblate.py``'s per-arc primitives with a circle's closed-form
-# roots (``rings._circle_roots``); gradients by frozen endpoints plus the
-# corner term, as ``rings._region_cols``.
+# other circle, each point computed once and shared by every curve through
+# it (``_meet``); each arc's membership, of the star and of the other
+# circle, is read at three points (``rings._SAMPLES``) -- an arc has no
+# corner with the curve it is tested against, so every interior point gives
+# the same answer except where the curves merely touch.
+#
+# On a circle of radius r whose centre is z from the star's, with psi the
+# angle from its point nearest the star's centre, s = z^2 + r^2 - 2 z r
+# cos(psi) and x dy - y dx = (s + r^2 - z^2) / 2 dpsi, so every column of an
+# arc is elementary (``_arc_cols``): mu^{2n}'s h_n(s) is a polynomial in s,
+# its integrand at most a cubic in cos(psi); a pole's h = 1 / (2p (p - s))
+# gives
+#
+#     int (s + r^2 - z^2) / (4p (p - s)) dpsi
+#         = -dpsi / 4p + (p + r^2 - z^2) / 4p int dpsi / (a + b cos psi),
+#
+# a = p - z^2 - r^2, b = 2 z r: an atan, an atanh, or their common series
+# near a = b (``_J``) -- the forms of ``hybrid._pole_terms``, at any limits.
+# The arcs' ends are live (the shared points move with the discs), so the
+# gradients carry the ends' motion; only the membership is frozen.
 #
 # For the hybrid laws every column of every piece is elementary, and the
 # light curve is exact. The quadratic law's mu^1 term over the lens would
@@ -293,12 +305,15 @@ def check_moon(moon_r, moon_a, moon_q, moon_ecc=0.0):
 # amplified as 1 / (half-chord), the arcs on either side would be split at
 # points whose membership tests are themselves at rounding level
 _THIN = {mx.float64: 1e-4, mx.float32: 1e-2}
+# half-width in x = (a - b) / (a + b) tan^2(psi / 2) of the series bridge
+# across a = b (as hybrid's): six terms truncate at x^6 / 13
+_X_SER = {mx.float64: 1e-3, mx.float32: 0.05}
 
 
 def _meet(c1, c2, dt):
-    """Where circle c1 = (x, y, R) meets c2: the two points, computed once
-    so that every curve through a corner is split at the same point, and
-    whether they exist -- not within _THIN of a tangency. Frozen inputs."""
+    """Where circle c1 = (x, y, R) meets c2: the two points (live), computed
+    once so that every curve through a corner is split at the same point,
+    and whether they exist -- not within _THIN of a tangency."""
     (x1, y1, R1), (x2, y2, R2) = c1, c2
     dx, dy = x2 - x1, y2 - y1
     D2 = dx * dx + dy * dy
@@ -307,109 +322,178 @@ def _meet(c1, c2, dt):
     hh2 = (R1 - a) * (R1 + a)
     thin = _THIN[dt] * mx.minimum(R1, R2)
     has = (hh2 > thin * thin) & (D2 > 0.0)
-    hh = mx.sqrt(mx.maximum(hh2, 0.0))
+    hh = mx.where(has, mx.sqrt(mx.where(has, hh2, 1.0)), 0.0)
     ux, uy = dx / D, dy / D
     bx, by = x1 + a * ux, y1 + a * uy
     return [(bx - hh * uy, by + hh * ux), (bx + hh * uy, by - hh * ux)], has
 
 
-def _angle_on(c, pt):
-    return _mod2pi(mx.arctan2(pt[1] - c[1], pt[0] - c[0]))
+def _sorted_arcs(bps, valid, start, period):
+    """Sub-arcs between a closed curve's valid breakpoints (live angles,
+    sorted by their frozen values), as (lo, hi, ok) lists of fixed length:
+    the last wraps round by ``period``; with no breakpoint at all, one
+    whole turn from ``start``."""
+    K = len(bps)
+    B = mx.stack(bps, -1)
+    V = mx.stack(valid, -1)
+    order = _sg(mx.argsort(mx.where(V, _sg(B), mx.inf), axis=-1))
+    B = mx.take_along_axis(B, order, axis=-1)
+    n = mx.sum(V.astype(mx.int32), axis=-1)
+    first = B[..., 0]
+    los, his, oks = [], [], []
+    for i in range(K):
+        lo = B[..., i]
+        hi = B[..., i + 1] if i + 1 < K else first
+        hi = mx.where(i + 1 < n, hi, first + period)
+        whole = (n == 0) & (i == 0)
+        los.append(mx.where(whole, start, lo))
+        his.append(mx.where(whole, start + period, hi))
+        oks.append((i < n) | whole)
+    return los, his, oks
 
 
-def _lens_cols(circles, eps, dt, large=False):
+def _J(psi, amb, apb, Q, dt):
+    """An antiderivative of 1 / (a + b cos psi) at psi in (-2 pi, 2 pi),
+    continuous wherever a + b cos psi > 0 -- every point of an arc on the
+    star; amb = a - b, apb = a + b > 0 (a circle reaching the star), Q =
+    amb apb:
+
+        Q > 0:  (2 / sqrt Q) atan2(sqrt(a - b) sin(psi/2), sqrt(a + b) cos(psi/2))
+        Q < 0:  (2 / sqrt(-Q)) atanh(sqrt(b - a) tan(psi/2) / sqrt(a + b))
+        |x| < _X_SER, x = (a - b) / (a + b) tan^2(psi/2), |psi| < pi:
+                (2 / (a + b)) tan(psi/2) sum_k (-x)^k / (2k + 1),
+
+    the series bridging Q = 0, where both closed forms are 0/0."""
+    sh, ch = sincos(0.5 * psi)
+    t = sh / mx.where(ch > 0.0, ch, 1.0)
+    x = (amb / apb) * t * t
+    ser = (mx.abs(x) < _X_SER[dt]) & (ch > 0.0)
+    xs = mx.where(ser, x, 0.0)
+    acc = 0.0 * xs + 1.0 / 11.0
+    for k in range(4, -1, -1):
+        acc = 1.0 / (2 * k + 1) - xs * acc
+    f_ser = 2.0 * t / apb * acc
+    pos = Q > 0.0
+    Qp = mx.where(pos & ~ser, Q, 1.0)
+    ap = mx.where(pos & ~ser, amb, 1.0)
+    f_pos = 2.0 / mx.sqrt(Qp) * mx.arctan2(mx.sqrt(ap) * sh, mx.sqrt(apb) * ch)
+    neg = ~pos & ~ser
+    Qn = mx.where(neg, -Q, 1.0)
+    w = mx.where(neg, mx.sqrt(mx.where(neg, -amb, 1.0)) * t / mx.sqrt(apb), 0.0)
+    f_neg = 1.0 / mx.sqrt(Qn) * mx.log1p(2.0 * w / (1.0 - w))
+    return mx.where(ser, f_ser, mx.where(pos, f_pos, f_neg))
+
+
+# mu^{2n}'s integrand h_n(s) (s + d) / 2, d = r^2 - z^2, as polynomial
+# coefficients in s: h_0 = 1/2, h_1 = (2 - s)/4, h_2 = (3 - 3s + s^2)/6
+def _even_poly(n, d):
+    if n == 0:
+        return [0.25 * d, 0.25 + 0.0 * d]
+    if n == 1:
+        return [0.25 * d, (2.0 - d) / 8.0, -0.125 + 0.0 * d]
+    return [0.25 * d, (1.0 - d) / 4.0, (d - 3.0) / 12.0, 1.0 / 12.0 + 0.0 * d]
+
+
+def _arc_cols(z, r, lo, hi, eps):
+    """The generator columns [mu^0, mu^2, mu^4, poles...] of an arc [lo,
+    hi] of a circle of radius r, centre z from the star's, psi from its
+    point nearest the star's centre, (lo, hi) in (-2 pi, 2 pi)."""
+    dt = lo.dtype
+    S, b, d = z * z + r * r, 2.0 * z * r, r * r - z * z
+    sl, cl = sincos(lo)
+    sh, chh = sincos(hi)
+    # int cos^k: psi, sin, psi/2 + sin cos/2, sin - sin^3/3
+    A = [hi - lo, sh - sl, 0.5 * (hi - lo) + 0.5 * (sh * chh - sl * cl),
+         (sh - sl) - (sh * sh * sh - sl * sl * sl) / 3.0]
+    cols = []
+    for n in range(3):
+        ps = _even_poly(n, d)
+        # (S - b c)^j -> coefficients in c
+        col = 0.0 * lo
+        for j, pj in enumerate(ps):
+            for kk in range(j + 1):
+                col = col + pj * math.comb(j, kk) * S ** (j - kk) * (-b) ** kk * A[kk]
+        cols.append(col)
+    for e in eps:
+        p = 1.0 + e
+        sp = math.sqrt(p)
+        amb = (sp - z - r) * (sp + z + r)
+        dzr = mx.abs(z - r)
+        apb = (sp - dzr) * (sp + dzr)
+        # a circle wholly beyond sqrt(p) has no arc on the star: stand-ins,
+        # so its masked lanes carry no NaN into the gradient
+        reach = apb > 0.0
+        amb, apb = mx.where(reach, amb, 0.5), mx.where(reach, apb, 1.0)
+        J = _J(hi, amb, apb, amb * apb, dt) - _J(lo, amb, apb, amb * apb, dt)
+        cols.append(-(hi - lo) / (4.0 * p) + (p + d) / (4.0 * p) * J)
+    return cols
+
+
+def _lens_cols(circles, eps, dt):
     """Occulted generator columns (positive) [mu^0, mu^2, mu^4, poles...] of
     the lens of two circles on the star; circles = [(x0, y0, R), (x1, y1,
-    R1)], each (n,). ``large``: a circle may be larger than the star (its
-    even columns then by ``oblate._even_arc_gl``)."""
-    g = [tuple(_sg(v) for v in c) for c in circles]
+    R1)], each (n,)."""
     ncol = 3 + len(eps)
     occ = [0.0 * circles[0][0] for _ in range(ncol)]
-    limb_th, limb_ok = [], []
-    hs = [(n, True) for n in range(3)] + [(1.0 + e, False) for e in eps]
-    zero = 0.0 * g[0][0]
+    zero = 0.0 * circles[0][0]
     star = (zero, zero, zero + 1.0)
-    limb = [_meet(g[k], star, dt) for k in range(2)]
-    corners = _meet(g[0], g[1], dt)
+    limb = [_meet(circles[k], star, dt) for k in range(2)]
+    corners = _meet(circles[0], circles[1], dt)
+    limb_th, limb_ok = [], []
     for k in range(2):
-        gx0, gy0, gR = g[k]
-        ox, oy, oR = g[1 - k]
         x0, y0, R = circles[k]
+        ox, oy, oR = (_sg(v) for v in circles[1 - k])
+        z2 = x0 * x0 + y0 * y0
+        cen = _sg(z2) < _TINY[dt]
+        z = mx.sqrt(mx.where(cen, 1.0, z2)) * (~cen).astype(dt)
+        # towards the star's centre from this one's (any direction if centred)
+        ux = mx.where(cen, -1.0, -x0 / mx.where(cen, 1.0, z))
+        uy = mx.where(cen, 0.0, -y0 / mx.where(cen, 1.0, z))
+        psi = lambda pt: mx.arctan2(ux * (pt[1] - y0) - uy * (pt[0] - x0),
+                                    ux * (pt[0] - x0) + uy * (pt[1] - y0))
         pts, has = limb[k]
-        lp = [_angle_on(g[k], pt) for pt in pts]
-        lv = [has, has]
         for pt in pts:
-            limb_th.append(_angle_on(star, pt))
+            limb_th.append(mx.arctan2(pt[1], pt[0]))
             limb_ok.append(has)
-        cp = [_angle_on(g[k], pt) for pt in corners[0]]
-        cv = [corners[1], corners[1]]
-        los, his, oks = _arcs(lp + cp, lv + cv)
-        LO, HI = _sg(mx.stack(los, -1)), _sg(mx.stack(his, -1))
-        OK = mx.stack(oks, -1)
-        b = lambda v: v[..., None]
+        bps = [psi(pt) for pt in pts] + [psi(pt) for pt in corners[0]]
+        bv = [has, has, corners[1], corners[1]]
+        los, his, oks = _sorted_arcs(bps, bv, -math.pi + 0.0 * z, _TWO_PI)
+        LO, HI, OK = mx.stack(los, -1), mx.stack(his, -1), mx.stack(oks, -1)
+        # the wrapping arc into (-2 pi, 2 pi)
+        shift = ((LO > 0.0) & (HI > math.pi)).astype(dt) * _TWO_PI   # not where(c, 2pi, 0): fp32
+        LO, HI = LO - shift, HI - shift
+        # membership at three points of each arc, frozen
+        gLO, gHI = _sg(LO), _sg(HI)
+        b = lambda v: _sg(v)[..., None]
+        gx, gy, gR, gux, guy = b(x0), b(y0), b(R), b(ux), b(uy)
         m_star, m_other = [], []
         for t in _SAMPLES:
-            sm_, cm_ = sincos(LO + t * (HI - LO))
-            xs, ys = b(gx0) + b(gR) * cm_, b(gy0) + b(gR) * sm_
+            sp_, cp_ = sincos(gLO + t * (gHI - gLO))
+            xs = gx + gR * (gux * cp_ - guy * sp_)
+            ys = gy + gR * (gux * sp_ + guy * cp_)
             m_star.append(1.0 - (xs * xs + ys * ys))
-            ux, uy = (xs - b(ox)) / b(oR), (ys - b(oy)) / b(oR)
-            m_other.append(1.0 - (ux * ux + uy * uy))
-        inside = (_decisive(m_star) > 0.0) & (_decisive(m_other) > 0.0)
-        kappa = mx.where(OK & inside, 1.0, 0.0).astype(dt)
-        # the arcs: live coefficients, frozen endpoints
-        shp = LO.shape
-        bx = lambda v: mx.broadcast_to(v[..., None], shp)
-        X0, Y0, A = bx(x0), bx(y0), bx(R)
-        S0, S1, S2, K0, K1 = _coeffs(X0, Y0, A, A)
-        cols = list(_even_arc(_q_coeffs(S0, S1, S2, K0, K1, _N_MAX), LO, HI))
-        if large:
-            big = bx(gR > 1.0)
-            gl = _even_arc_gl(X0, Y0, A, A, LO, HI, _N_MAX)
-            cols = [mx.where(big, g_, c_) for g_, c_ in zip(gl, cols)]
-        cen = _centred(gx0, gy0, gR, dt)
-        cenb = bx(cen)
-        pS = _coeffs(mx.where(cenb, _sg(0.5 * A), X0), mx.where(cenb, 0.0, Y0), A, A)
-        sl, cl = sincos(LO)
-        sh, ch = sincos(HI)
-        for e in eps:
-            p = 1.0 + e
-            zc = _circle_roots(mx.where(cen, 0.5 * gR, gx0), mx.where(cen, 0.0, gy0), gR, p, dt)
-            z0 = [_C(mx.broadcast_to(_sg(z.re)[..., None], shp),
-                     mx.broadcast_to(_sg(z.im)[..., None], shp)) for z in zc]
-            v = _pole_arc(*pS, p, z0, LO, HI)
-            # a circle centred on the star, first order in its offset
-            R2 = A * A
-            c0 = R2 / (2.0 * p * (p - R2))
-            c1 = A * (p + R2) / (2.0 * p * (p - R2) ** 2)
-            vc = c0 * (HI - LO) + c1 * (X0 * (sh - sl) + Y0 * (cl - ch))
-            cols.append(mx.where(cenb, vc, v))
-        # gradient-only corner terms at both ends of every arc
-        gX0, gY0, gA = _sg(X0), _sg(Y0), _sg(A)
-
-        def C(sn, cs):
-            xp, yp = gX0 + gA * cs, gY0 + gA * sn
-            xl, yl = X0 + A * cs, Y0 + A * sn
-            return xp * yl - yp * xl, xp * xp + yp * yp
-        Cl, s_lo = C(sl, cl)
-        Ch, s_hi = C(sh, ch)
-        for idx, (arg, even) in enumerate(hs):
-            corner = _h(arg, s_lo, even) * Cl - _h(arg, s_hi, even) * Ch
-            corner = corner - _sg(corner)
-            occ[idx] = occ[idx] + mx.sum(kappa * mx.where(OK, cols[idx] + corner, 0.0), axis=-1)
+            u_, v_ = (xs - ox[..., None]) / oR[..., None], (ys - oy[..., None]) / oR[..., None]
+            m_other.append(1.0 - (u_ * u_ + v_ * v_))
+        keep = OK & (_decisive(m_star) > 0.0) & (_decisive(m_other) > 0.0)
+        cols = _arc_cols(z[..., None], R[..., None], mx.where(keep, LO, 0.0),
+                         mx.where(keep, HI, 0.0), eps)
+        for idx in range(ncol):
+            occ[idx] = occ[idx] + mx.sum(mx.where(keep, cols[idx], 0.0), axis=-1)
     # the limb's arcs inside both circles
-    los, his, oks = _arcs(limb_th, limb_ok)
+    los, his, oks = _sorted_arcs(limb_th, limb_ok, 0.0 * zero, _TWO_PI)
     h1 = [1.0 / (2.0 * (n + 1.0)) for n in range(3)] + [1.0 / (2.0 * (1.0 + e) * e) for e in eps]
+    g = [tuple(_sg(v) for v in c) for c in circles]
     for lo, hi, ok in zip(los, his, oks):
         ms = [[], []]
+        glo, ghi = _sg(lo), _sg(hi)
         for t in _SAMPLES:
-            sm, cm = sincos(lo + t * (hi - lo))
+            sm, cm = sincos(glo + t * (ghi - glo))
             for j, (gx0, gy0, gR) in enumerate(g):
                 u, v = (cm - gx0) / gR, (sm - gy0) / gR
                 ms[j].append(1.0 - (u * u + v * v))
-        w = mx.where(ok & (_decisive(ms[0]) > 0.0) & (_decisive(ms[1]) > 0.0), 1.0, 0.0).astype(dt)
-        dth = _sg(hi - lo)
+        w = ok & (_decisive(ms[0]) > 0.0) & (_decisive(ms[1]) > 0.0)
         for idx in range(ncol):
-            occ[idx] = occ[idx] + w * h1[idx] * dth
+            occ[idx] = occ[idx] + mx.where(w, h1[idx] * (hi - lo), 0.0)
     return occ
 
 
@@ -451,7 +535,7 @@ def generator_cols_moon(xp, yp, xm, ym, rp, rs, law, front_p=None, front_m=None,
         gp = _generator_terms(lens_geometry(_separation(xp, yp, rp, front_p), rp), law)[0]
         gm = _generator_terms(lens_geometry(_separation(xm, ym, rs, front_m), rs), law)[0]
         large = _large(rp, large_occultor)
-    lens = _lens_cols([(xp, yp, rp), (xm, ym, rs)], law.eps, dt, large)
+    lens = _lens_cols([(xp, yp, rp), (xm, ym, rs)], law.eps, dt)
     both = _both_front(front_p, front_m)
     if both is not None:
         lens = [mx.where(both, c, 0.0) for c in lens]
@@ -532,12 +616,47 @@ def flux_dev_moon_quad(xp, yp, xm, ym, rp, rs, u1, u2, front_p=None,
     xp, yp, xm, ym, rp, rs = (v + zero for v in (xp, yp, xm, ym, rp, rs))
     dev = (flux_dev(_separation(xp, yp, rp, front_p), rp, u1, u2)
            + flux_dev(_separation(xm, ym, rs, front_m), rs, u1, u2))
-    m0, m2, m4 = _lens_cols([(xp, yp, rp), (xm, ym, rs)], (), dt, _large(rp, None))
+    m0, m2, m4 = _lens_cols([(xp, yp, rp), (xm, ym, rs)], (), dt)
     occ = (1.0 - u1 - u2) * m0 + (u1 + 2.0 * u2) * _lens_mu(m0, m2, m4, dt) - u2 * m2
     both = _both_front(front_p, front_m)
     if both is not None:
         occ = mx.where(both, occ, 0.0)
     return dev + occ / (math.pi * (1.0 - u1 / 3.0 - u2 / 6.0))
+
+
+# the pieces, for routes that take the lens on a subset of points
+# (``moons_tau``): each returns its contribution to the shape columns
+# [E0, S_1..S_n] (hybrid) or to F - 1 (quadratic)
+
+def _shape_of(gen, law):
+    S = law.generator_matrix()
+    return [gen[0]] + [_combine(gen, S[j]) for j in range(law.n_w)]
+
+
+def disc_shape_cols(x, y, r, law, front=None):
+    """One disc's shape columns (deviation form), under the caller's
+    large_occultors declaration."""
+    return _shape_of(_generator_terms(lens_geometry(_separation(x, y, r, front), r), law)[0], law)
+
+
+def lens_shape_cols(xp, yp, rp, xm, ym, rs, law):
+    """The lens's shape columns, positive (the flux the discs' columns count
+    twice): add them to the two discs'."""
+    return _shape_of(_lens_cols([(xp, yp, rp), (xm, ym, rs)], law.eps, xp.dtype), law)
+
+
+def disc_flux_quad(x, y, r, u1, u2, front=None):
+    """One disc's F - 1, quadratic law."""
+    return flux_dev(_separation(x, y, r, front), r, u1, u2)
+
+
+def lens_flux_quad(xp, yp, rp, xm, ym, rs, u1, u2):
+    """The lens's flux (positive, normalised as F - 1): add it to the two
+    discs' F - 1."""
+    dt = xp.dtype
+    m0, m2, m4 = _lens_cols([(xp, yp, rp), (xm, ym, rs)], (), dt)
+    occ = (1.0 - u1 - u2) * m0 + (u1 + 2.0 * u2) * _lens_mu(m0, m2, m4, dt) - u2 * m2
+    return occ / (math.pi * (1.0 - u1 / 3.0 - u2 / 6.0))
 
 
 def _cast(v, dt):

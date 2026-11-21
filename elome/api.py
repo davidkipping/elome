@@ -64,6 +64,7 @@ from .trig import sincos
 __all__ = ["TransitParams", "TransitModel"]
 
 _BUILTIN_LD = ("uniform", "linear", "quadratic", "polynomial")
+_TWO_PI_ = 2.0 * math.pi
 
 
 def _supported_ld() -> tuple:
@@ -115,6 +116,23 @@ def _spot_shape(spots):
                          "(n_sets, K, 4) in light_curves; got shape "
                          f"{shape}")
     return shape
+
+
+_MOON_FIELDS = ("moon_r", "moon_a", "moon_per", "moon_q", "moon_inc",
+                "moon_node", "moon_phase", "moon_ecc", "moon_w")
+
+
+def _is_mooned(params) -> bool:
+    """params.moon_r given = a planet with a moon; the other moon fields
+    without it are an error."""
+    mooned = getattr(params, "moon_r", None) is not None
+    if not mooned and any(getattr(params, k, None) is not None
+                          for k in _MOON_FIELDS[1:]):
+        raise ValueError("params.moon_a / moon_per / moon_q / moon_inc / "
+                         "moon_node / moon_phase / moon_ecc / moon_w describe "
+                         "a moon; set params.moon_r too (or leave them all "
+                         "None)")
+    return mooned
 
 
 # a batched field left None: its value (fp, theta, a ringed planet's f: 0;
@@ -182,11 +200,20 @@ class TransitParams:
       ``istar``, ``lam``: its spin inclination (None: 90) and
       sky-projected obliquity (None: 0); ``spot_epoch``: when the
       longitudes are measured (None: ``t0``).
+    - ``moon_r``, ``moon_a``: a moon's radius and the planet-moon
+      semi-major axis, in units of ``rp``; ``moon_per``: its period;
+      ``moon_q``: its mass over the planet's (None: 0); ``moon_inc``,
+      ``moon_node``: its orbit's inclination (None: ``inc``) and node
+      (None: 0) on the sky, so the defaults are coplanar with the
+      planet; ``moon_phase``: its mean argument of latitude at ``t0``
+      less 90 (None: 0, the moon at conjunction, in front of the
+      planet); ``moon_ecc``, ``moon_w`` (None: 0). ``t0``, ``per``,
+      ``a``, ``inc``, ``ecc`` and ``w`` are then the barycentre's.
     - ``t_secondary`` (unused: the eclipse time follows from the orbit)
       and ``spot_u`` (reserved) exist for compatibility.
 
-    Unset shape, ring and spot fields (None) mean a spherical planet on
-    an unspotted star.
+    Unset shape, ring, spot and moon fields (None) mean a spherical
+    planet without a moon, on an unspotted star.
     """
 
     def __init__(self):
@@ -241,6 +268,23 @@ class TransitParams:
         self.lam = None
         self.spot_epoch = None
         self.spot_u = None        # reserved: a limb-darkening law for spots
+        # a moon (hybrid and quadratic laws; elome.moons): radius and
+        # planet-moon semi-major axis in units of rp, period, mass ratio
+        # M_moon / M_planet (None: 0), and its orbit's elements on the sky
+        # [degrees]: inclination (None: inc) and node (None: 0) -- coplanar
+        # with the planet by default -- mean argument of latitude at t0
+        # less 90 (None: 0, in front of the planet), eccentricity and
+        # argument of periastron (None: 0). t0, per, a, inc, ecc and w
+        # are then the barycentre's. None = no moon.
+        self.moon_r = None
+        self.moon_a = None
+        self.moon_per = None
+        self.moon_q = None
+        self.moon_inc = None
+        self.moon_node = None
+        self.moon_phase = None
+        self.moon_ecc = None
+        self.moon_w = None
 
 
 def _u_vector(u, sets=False):
@@ -574,6 +618,7 @@ class TransitModel:
         self._oblate = _is_oblate(params) or self._tidal
         self._ringed = _is_ringed(params)
         self._spotted = _is_spotted(params)
+        self._mooned = _is_mooned(params)
         self._shaped = self._oblate or self._ringed
         # the orbit rebuilt from b: e capped at 0.999 (_check_ecc)
         self._from_b = self._shaped or self._spotted
@@ -627,6 +672,19 @@ class TransitModel:
                 raise ValueError("an oblate planet (params.f) takes a hybrid "
                                  "law: limb_dark='hybrid2' | 'hybrid4' | "
                                  "'hybrid5'")
+        if self._mooned:
+            if self._oblate or self._ringed or self._spotted:
+                raise ValueError("a moon is for a spherical planet on an "
+                                 "unspotted star: leave params.f, "
+                                 "params.tidal_q, params.ring_in and "
+                                 "params.spots None")
+            if transittype != "primary":
+                raise ValueError("a planet with a moon is primary-transit only")
+            if (_hybrid_law(params.limb_dark) is None
+                    and params.limb_dark not in ("uniform", "linear", "quadratic")):
+                raise ValueError("a planet with a moon takes a hybrid law "
+                                 "(exact) or the uniform, linear or quadratic "
+                                 f"law; got {params.limb_dark!r}")
         self.limb_dark = params.limb_dark
         # a hybrid law is resolved ONCE, here: every graph this model traces
         # uses this definition, whatever the registry does afterwards
@@ -680,6 +738,26 @@ class TransitModel:
                 pass
         self._compiled_sets = {}
         self._large = None
+        self._moon_ref = self._moon_setup(params) if self._mooned else None
+
+    def _moon_setup(self, params):
+        """The moon route's host data: references (t0, per, moon_per) taken
+        from the construction parameters, and each time's residual from
+        its reference transit, orbit number and the moon's reference
+        turns (moons_tau), all float64."""
+        from .moons import moon_turns_ref
+        from .orbit import epoch_center_times
+
+        def host(name):
+            x = getattr(params, name)
+            v = _scalar_value(x) if isinstance(x, mx.array) else x
+            if v is None:
+                raise ValueError(f"params.{name} must be set (and readable) "
+                                 "when a model with a moon is built")
+            return float(v)
+        t0, per, mper = host("t0"), host("per"), host("moon_per")
+        ep = epoch_center_times(self._t_super, t0, per)
+        return t0, per, mper, ep[0], ep[1], moon_turns_ref(ep[1], per, mper)
 
     @property
     def use_metal(self) -> bool:
@@ -747,6 +825,8 @@ class TransitModel:
             names += ["ring_in", "ring_out", "ring_f"]
         if self._spotted:
             names.append("prot")
+        if self._mooned:
+            names += ["moon_r", "moon_a", "moon_per"]
         return names
 
     # -- internals ---------------------------------------------------------
@@ -1213,6 +1293,8 @@ class TransitModel:
             return cast(math.radians(float(x)))   # on the host, in fp64
 
         self._require(lambda k: getattr(params, k), self._required_fields())
+        if self._mooned:
+            return self._moon_eval(params, uv, cast, rad, is_arr)
         if self._spotted:
             return self._spot_eval(params, uv, cast, rad, is_arr)
         if self._ringed:
@@ -1750,6 +1832,78 @@ class TransitModel:
             out = self._spot_fn("kh")(*head, b, rp, *star, cast(uv), k, h)
         return self._apply_masks(out, emask, gmask)
 
+    # -- a planet with a moon --------------------------------------------------
+    #
+    # moons_tau's route, eager: the residual times, orbit numbers and the
+    # moon's turns are host float64 arrays against references taken when the
+    # model was built (_moon_setup), so float32 holds the moon's phase however
+    # far the data lie from t0. Supersampling is the time grid's, as on every
+    # route; the contact rule is moons_tau's own, split at the kinks it finds
+    # in each exposure.
+
+    def _moon_eval(self, params, uv, cast, rad, is_arr):
+        """light_curve / light_curve_mx for a planet with a moon."""
+        from .moons import anchored_constants, check_moon, moon_orbit
+        from .moons_tau import flux_dev_moon_t, sample_count
+        dt = self.dtype
+        traced = _check_geometry(params, self._geom_rules)
+        t0r, perr, mperr, d_np, k_np, turns = self._moon_ref
+
+        def get(name, default):
+            x = getattr(params, name)
+            return default if x is None else x
+
+        def off(x, ref):
+            if is_arr(x):
+                with mx.stream(mx.cpu):
+                    return (x.astype(mx.float64) - ref).astype(dt)
+            return cast(float(x) - ref)
+
+        def host(x):
+            return _scalar_value(x) if is_arr(x) else float(x)
+
+        def num(x):                 # an orbit element, cast unless a Python 0
+            return cast(x) if is_arr(x) else float(x)
+        hv = {n: host(get(n, 0.0)) for n in ("rp", "a", "per", "ecc", "moon_r", "moon_a",
+                                            "moon_q", "moon_ecc", "moon_per")}
+        if hv["ecc"] is not None:
+            _check_ecc(hv["ecc"], False)
+        if None not in (hv["moon_r"], hv["moon_a"], hv["moon_q"], hv["moon_ecc"]):
+            check_moon(hv["moon_r"], hv["moon_a"], hv["moon_q"], hv["moon_ecc"])
+        rp, per, a = cast(params.rp), cast(params.per), cast(params.a)
+        P = dict(t0_off=off(params.t0, t0r), p_off=off(params.per, perr), per=per, a=a,
+                 inc=rad(params.inc), rp=rp, rs=rp * cast(params.moon_r),
+                 a_ps=rp * cast(params.moon_a), q=cast(get("moon_q", 0.0)),
+                 m_off=off(params.moon_per, mperr), moon_inc=rad(get("moon_inc", params.inc)),
+                 node=rad(get("moon_node", 0.0)), phase=rad(get("moon_phase", 0.0)),
+                 ecc=anchored_constants(num(params.ecc), rad(params.w), dt),
+                 orbit=moon_orbit(num(get("moon_ecc", 0.0)), rad(get("moon_w", 0.0)), dt),
+                 per_ref=perr, mper_ref=mperr)
+        known = None not in hv.values()
+        e = hv["ecc"] if known else 0.0
+        P["speed"] = (_TWO_PI_ * hv["a"] / hv["per"] * math.sqrt((1.0 + e) / (1.0 - e))
+                      if known else math.inf)
+        if self._hlaw is not None:
+            kind = ("hybrid", self._hlaw, cast(uv))
+        else:
+            kind = ("quad",) + tuple(_ld_coeffs(params, conv=cast, u=uv))
+        exp_time, n_sample = 0.0, None
+        if self.integration == "contact":
+            exp_time = self.exp_time
+            if known:
+                n_sample = sample_count(exp_time, hv["a"], hv["per"], hv["rp"],
+                                        hv["rp"] * hv["moon_a"], hv["moon_per"],
+                                        hv["rp"] * hv["moon_r"], e, hv["moon_ecc"])
+        large = True if hv["rp"] is None else hv["rp"] > 1.0
+        f = 1.0 + flux_dev_moon_t(d_np, k_np, turns, P, kind, large, exp_time,
+                                  self.n_gl, n_sample)
+        vals = {"rp": rp, "a": a, "per": per}
+        for name in ("t0", "inc", "w"):
+            if name in traced:
+                vals[name] = cast(getattr(params, name))
+        gmask = _geometry_mask(traced, vals, dt) if traced else None
+        return self._apply_masks(f, gmask)
+
     def _check_shape_kind(self, params):
         """Oblate or spherical, ringed or not, is fixed per model (separate
         graphs)."""
@@ -1766,6 +1920,10 @@ class TransitModel:
                              "TransitModel")
         if _is_spotted(params) != self._spotted:
             raise ValueError("params.spots changed between None and a value "
+                             "since model construction; build a new "
+                             "TransitModel")
+        if _is_mooned(params) != self._mooned:
+            raise ValueError("params.moon_r changed between None and a value "
                              "since model construction; build a new "
                              "TransitModel")
 
@@ -1921,6 +2079,10 @@ class TransitModel:
         For fitting with thousands of chains prefer ``elome.anvil``,
         which owns the likelihood and the float32 conditioning as well.
         """
+        if self._mooned:
+            raise NotImplementedError("light_curves does not take a planet "
+                                      "with a moon yet: call light_curve per "
+                                      "parameter set")
         cols, u_np = self._stack_params(params_seq)
         n = cols["t0"].size
         dt = self.dtype

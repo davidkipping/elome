@@ -524,9 +524,10 @@ def test_photometry_gradients_match_finite_differences(name, kind):
         args = [mx.array([v], dtype=mx.float64) for v in x0]
         g = mx.grad(lambda *v: mx.sum(F(*v)), argnums=tuple(range(6)))(*args)
         for i in range(6):
-            h = 1e-7
+            h = 1e-6         # the lens's moments are small differences of its arcs'
             up = [mx.array([v + (h if j == i else 0.0)], dtype=mx.float64) for j, v in enumerate(x0)]
             dn = [mx.array([v - (h if j == i else 0.0)], dtype=mx.float64) for j, v in enumerate(x0)]
             fd = (F(*up).item() - F(*dn).item()) / (2 * h)
             gi = g[i].item()
-            assert np.isfinite(gi) and abs(gi - fd) <= 1e-6 * max(1e-3, abs(fd)), (i, gi, fd)
+            # the difference's rounding floor: ~1e-9 on a flux of ~1e-2
+            assert np.isfinite(gi) and abs(gi - fd) <= 1e-6 * max(1e-2, abs(fd)), (i, gi, fd)
