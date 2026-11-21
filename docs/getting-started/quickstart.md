@@ -117,6 +117,7 @@ ellipse. Leave `f` as `None` for a spherical planet.
 - **Oblate and tidally locked planets:** {doc}`../oblate/index`.
 - **Ringed planets:** {doc}`../rings/index`.
 - **Starspots:** {doc}`../spots/index`.
+- **Exomoons:** {doc}`../moons/index`.
 - **Long exposures** (Kepler long cadence, full-frame images):
   {doc}`../guides/exposures`.
 - **Fitting with a sampler:** {doc}`../spherical/fitting` and the

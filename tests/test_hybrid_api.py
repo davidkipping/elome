@@ -569,7 +569,7 @@ def test_a_hybrid_law_eclipse_is_an_eclipse(ecc):
 def test_spherical_tau_routes_never_touch_the_oblate_or_ring_kernels():
     """TransitModel's spherical tau-kernel routes -- a hybrid law under
     every exposure rule, the quadratic contact rule -- import none of the
-    oblate or ring code."""
+    oblate, ring or moon code."""
     import subprocess
     import sys
     code = r'''
@@ -586,7 +586,8 @@ for law, u in (("hybrid4", [0.2, 0.2, 0.1, 0.1]), ("quadratic", [0.4, 0.25])):
             m = el.TransitModel(p, t, dtype=mx.float32, **kw)
             m.light_curve(p)
             m.light_curves([p, p])
-mods = ("elome.metal_oblate", "elome.metal_rings", "elome.rings_tau")
+mods = ("elome.metal_oblate", "elome.metal_rings", "elome.rings_tau", "elome.moons",
+        "elome.moons_tau")
 print("IMPORTED:" + ",".join(m for m in mods if m in sys.modules))
 '''
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,

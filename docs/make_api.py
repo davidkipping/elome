@@ -32,6 +32,7 @@ SECTIONS = [
      "{doc}`../spherical/fitting`.",
      ["elome.anvil.make_quad_transit_flux", "elome.anvil.make_ecc_transit_flux",
       "elome.anvil.make_hybrid_transit_flux", "elome.anvil.make_eclipse_flux",
+      "elome.anvil.make_moon_transit_flux",
       "elome.anvil.transit_param_names",
       "elome.anvil.PARAM_NAMES", "elome.anvil.PARAM_NAMES_ECC",
       "elome.anvil.make_transit_target", "elome.anvil.TransitTarget",
@@ -52,14 +53,16 @@ SECTIONS = [
       "elome.hybrid.ladder"]),
     ("Light curves from separations (float64 reference graphs)",
      "Functions of the sky separation z (spherical), the planet's centre "
-     "in its principal frame (oblate, ringed), or the planet's and the spots' "
-     "positions on the sky (starspots). They follow MLX's broadcasting and "
+     "in its principal frame (oblate, ringed), the planet's and the spots' "
+     "positions on the sky (starspots), or the planet's and its moon's "
+     "(exomoons). They follow MLX's broadcasting and "
      "type-promotion rules; see {doc}`../guides/gradients-and-precision`.",
      ["elome.flux_dev", "elome.flux_dev_analytic", "elome.flux_dev_poly",
       "elome.flux_dev_hybrid", "elome.shape_cols", "elome.flux_dev_oblate",
       "elome.shape_cols_oblate", "elome.flux_dev_ring", "elome.shape_cols_ring",
       "elome.oblate.principal_frame", "elome.flux_dev_spots", "elome.shape_cols_spots",
-      "elome.spot_vector",
+      "elome.spot_vector", "elome.flux_dev_moon", "elome.flux_dev_moon_quad",
+      "elome.shape_cols_moon",
       "elome.light_curve", "elome.sn_dev", "elome.sn_dev_with_aux",
       "elome.sn_dev_poly"]),
     ("Orbits and time",
@@ -68,7 +71,8 @@ SECTIONS = [
           "elome.light_travel_delay", "elome.separation_keplerian",
           "elome.separation_anchored", "elome.anchor_constants",
           "elome.kepler_E", "elome.kepler.kepler", "elome.kepler.kepler_E_sincos",
-          "elome.trig.sincos"]),
+          "elome.trig.sincos", "elome.moons.moon_turns_ref",
+          "elome.moons.mutual_inclination", "elome.moons.moon_period"]),
     ("Special functions and transforms",
      "", ["elome.cel", "elome.cel3", "elome.greens_transform_np",
           "elome.quad_g_coeffs", "elome.quad_norm"]),

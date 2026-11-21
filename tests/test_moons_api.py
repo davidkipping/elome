@@ -107,7 +107,7 @@ def test_the_contact_rule_against_a_converged_quadrature(law):
     for n_gl in (5, 7):
         m = elome.TransitModel(p, t, exp_time=EXP, integration="contact", n_gl=n_gl)
         errs.append(np.abs(m.light_curve(p) - R).max())
-    assert errs[1] < 3e-8 and errs[0] < 1.5e-7, errs
+    assert errs[1] < 1e-8 and errs[0] < 5e-8, errs          # measured 4.3e-9, 2.1e-8
     # an unsplit rule is far worse there
     m7 = elome.TransitModel(p, t, exp_time=EXP, supersample_factor=7)
     assert np.abs(m7.light_curve(p) - R).max() > 100 * errs[1]

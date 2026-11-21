@@ -80,6 +80,18 @@ def ringed(x, fill, op, last):
     return g
 
 
+def mooned(x, fill, op, last):
+    """The planet, its moon a little further round its orbit at each
+    position, and the orbit itself under the last."""
+    import math
+    phase = math.radians(40.0 + 2.2 * x)
+    mx_, my_ = x + 19.0 * math.sin(phase), CHORD - 6.0 * math.cos(phase)
+    orbit = (f'<ellipse cx="{x}" cy="{CHORD}" rx="19" ry="6" fill="none" '
+             f'stroke="{GHOST}" stroke-width="0.9" opacity="0.7"/>' if last else "")
+    return (f'{orbit}<circle cx="{x}" cy="{CHORD}" r="10" fill="{fill}" opacity="{op:.2f}"/>'
+            f'<circle cx="{mx_:.1f}" cy="{my_:.1f}" r="4" fill="{fill}" opacity="{op:.2f}"/>')
+
+
 SPOTS = """<g fill="#b45f1e" opacity="0.62">
   <ellipse cx="108" cy="40" rx="9" ry="7.5"/>
   <ellipse cx="143" cy="73" rx="8" ry="7"/>
@@ -96,6 +108,7 @@ def main():
         "oblate": star() + "\n" + track(oblate),
         "ringed": star() + "\n" + track(ringed, xs=(56, 126)),
         "spots": star(SPOTS) + "\n" + track(sphere, xs=(40, 66, 92, 124)),
+        "moons": star() + "\n" + track(mooned, xs=(36, 70, 118)),
     }
     for name, body in pages.items():
         (OUT / f"{name}.svg").write_text(svg(body))

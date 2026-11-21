@@ -6,6 +6,22 @@ every release is tagged `vX.Y.Z` in git.
 ## [Unreleased]
 
 ### Added
+- **Exomoons.** `TransitParams` takes a moon: `moon_r` and `moon_a` (its
+  radius and orbit, in planet radii), `moon_per`, `moon_q` (its mass over
+  the planet's), and its orbit's `moon_inc`, `moon_node`, `moon_phase`,
+  `moon_ecc` and `moon_w`, in the sky frame. The barycentre follows the
+  usual orbit, so the planet's transits shift in time and duration as it
+  circles it. Each body's disc is the spherical solution; where they
+  overlap on the star, the hybrid laws are exact and the uniform, linear
+  and quadratic laws take a closure, within 1 ppm. A spherical planet on
+  an unspotted star, primary transits, circular and eccentric orbits for
+  both, supersampling or the contact rule (split at every kink of each
+  exposure), `light_curve`, `light_curves` and `light_curve_mx` with
+  gradients in every parameter. float32 holds the moon's phase far from
+  `t0`. `flux_dev_moon`, `flux_dev_moon_quad` and `shape_cols_moon` give
+  the photometry at sky positions. `elome.anvil.make_moon_transit_flux` and
+  `make_transit_target(moon=True, moon_period_guess=)` fit one with anvil.
+  Based on Kipping (2011).
 - **Tidally locked planets.** `flux_dev_from_tau(..., tidal_q=)` and
   `TransitParams.tidal_q` model a triaxial ellipsoid whose nose points at
   the star at every instant (r1 = r2 (1 + 3 q), r3 = r2 (1 - q)), so its
@@ -221,6 +237,11 @@ every release is tagged `vX.Y.Z` in git.
   `sincos`.
 
 ### Documentation
+- **Exomoons**, a section of its own: the sky-frame elements and their
+  mirror symmetry, light curves with a moon at sky positions and on
+  orbits, the contact rule's events, accuracy in each precision (and
+  where float32 has limits: a quadratic overlap across the limb), and
+  fitting a moon, with anvil or otherwise.
 - **The cost of the limb-darkening law** (spherical accuracy-and-cost
   page, `benchmarks/bench_law_cost.py`): each code runs each of its laws
   as released, timed against its own quadratic law, which cancels the

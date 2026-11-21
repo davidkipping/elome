@@ -10,8 +10,9 @@ with analytic gradients in every parameter. It runs on
 [MLX](https://github.com/ml-explore/mlx), in float32 on the Apple-Silicon
 GPU through fused Metal kernels, or in float64 on the CPU. It models
 spherical planets with uniform, linear, quadratic, polynomial and
-*hybrid* limb darkening, and oblate and ringed planets and spotted stars
-with the hybrid laws, which keep their light curves elementary. The frontend follows
+*hybrid* limb darkening, oblate and ringed planets and spotted stars
+with the hybrid laws, which keep their light curves elementary, and
+planets with moons. The frontend follows
 [batman](https://github.com/lkreidberg/batman).
 
 *Elómë* (eh-LOH-meh) is Quenya for "star-dimness".
@@ -44,7 +45,8 @@ flux = elome.TransitModel(params, t).light_curve(params)
 ## Documentation
 
 **[elome.readthedocs.io](https://elome.readthedocs.io)**: installation,
-guides for spherical, oblate and ringed planets and spotted stars, fitting
+guides for spherical, oblate and ringed planets, spotted stars and
+exomoons, fitting
 with samplers, tutorials
 and the API reference.
 

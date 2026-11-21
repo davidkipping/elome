@@ -17,9 +17,10 @@ CPU. Both run through [MLX](https://github.com/ml-explore/mlx).
   parameter sets are batched.
 - **Differentiable.** Every parameter, including the limb darkening,
   the eccentricity and the planet's shape, has an analytic gradient.
-- **Spherical, oblate and ringed planets, and spotted stars.** A
-  flattened planet's light curve, a ringed one's and a spotted star's
-  stay elementary with the *hybrid* limb-darkening laws.
+- **Spherical, oblate and ringed planets, spotted stars, and moons.** A
+  flattened planet's light curve, a ringed one's, a spotted star's and a
+  planet's with its moon stay elementary with the *hybrid*
+  limb-darkening laws.
 
 ```python
 import numpy as np
@@ -83,26 +84,36 @@ Circular spots and faculae on a rotating star, crossed by the planet:
 the crossings and the rotational modulation, exact limb darkening, every
 gradient.
 :::
+
+:::{grid-item-card} Exomoons
+:link: moons/index
+:link-type: doc
+:class-card: path-card path-moons
+
+A planet and its moon on their orbits: the moon's own dip, the planet's
+wobble about their barycentre, and their overlaps on the star, with
+exact limb darkening and every gradient.
+:::
 ::::
 
 ## What combines with what
 
 A ringed planet may be spherical or oblate; a spotted star is crossed by
-a spherical planet.
+a spherical planet, and a moon orbits one.
 
-| | spherical planet | oblate planet | ringed planet | spotted star |
-|---|:---:|:---:|:---:|:---:|
-| hybrid limb-darkening laws | ✓ | ✓ | ✓ | ✓ |
-| polynomial laws | ✓ | ✗ | ✗ | ✗ |
-| eccentric orbits | ✓ | ✓ | ✓ | ✓ |
-| finite exposures | ✓ | ✓ | ✓ | ✓ |
-| secondary eclipses | ✓ | ✓ | ✗ | ✗ |
-| transit timing variations | ✓ | ✓ | ✓ | ✓ |
-| batches of parameter sets | ✓ | ✓ | ✓ | ✓ |
-| gradients in every parameter | ✓ | ✓ | ✓ | ✓ |
-| float32 GPU kernels | ✓ | ✓ | ✓ | ✓ |
-| occultor larger than the star | ✓ | ✗ | ✓ | ✓ |
-| `anvil` fitting target | ✓ | ✗ | ✗ | ✓ |
+| | spherical planet | oblate planet | ringed planet | spotted star | planet with a moon |
+|---|:---:|:---:|:---:|:---:|:---:|
+| hybrid limb-darkening laws | ✓ | ✓ | ✓ | ✓ | ✓ |
+| polynomial laws | ✓ | ✗ | ✗ | ✗ | up to quadratic |
+| eccentric orbits | ✓ | ✓ | ✓ | ✓ | ✓ |
+| finite exposures | ✓ | ✓ | ✓ | ✓ | ✓ |
+| secondary eclipses | ✓ | ✓ | ✗ | ✗ | ✗ |
+| transit timing variations | ✓ | ✓ | ✓ | ✓ | the moon's |
+| batches of parameter sets | ✓ | ✓ | ✓ | ✓ | ✓ |
+| gradients in every parameter | ✓ | ✓ | ✓ | ✓ | ✓ |
+| float32 GPU kernels | ✓ | ✓ | ✓ | ✓ | ✗ |
+| occultor larger than the star | ✓ | ✗ | ✓ | ✓ | ✗ |
+| `anvil` fitting target | ✓ | ✗ | ✗ | ✓ | ✓ |
 
 - **Eccentric orbits**: Elómë computes the light curve up to $e < 1$
   for a spherical planet and $e \le 0.999$ for the others; those are
@@ -123,8 +134,14 @@ a spherical planet.
   float32 MLX graph instead.
 - **Occultor size**: an oblate planet needs $r_p \le (1-f)^{3/2}$, so
   that its outline crosses the stellar limb at most twice.
+- **A planet with a moon**: the uniform, linear and quadratic laws are
+  exact for each disc and take a closure where the two overlap on the
+  star (see {doc}`moons/accuracy-and-fitting`). The planet's transit
+  times and durations vary as it circles the barycentre with its moon;
+  the barycentre itself follows one linear ephemeris. float32 runs the
+  same graph as float64, on the GPU.
 - **`anvil` fitting target** (`make_transit_target`): the quadratic or a
-  hybrid law; finite exposures with a hybrid law or an eclipse.
+  hybrid law; finite exposures with a hybrid law, an eclipse or a moon.
 
 New to Elómë? Start with {doc}`getting-started/installation` and the
 {doc}`getting-started/quickstart`.
@@ -187,6 +204,16 @@ spots/index
 spots/geometry
 spots/light-curves
 spots/accuracy-and-fitting
+```
+
+```{toctree}
+:hidden:
+:caption: Exomoons
+
+moons/index
+moons/geometry
+moons/light-curves
+moons/accuracy-and-fitting
 ```
 
 ```{toctree}

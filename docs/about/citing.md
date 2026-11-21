@@ -38,3 +38,5 @@ oblate or ringed planet or a spotted star, please also cite:
   *MNRAS* 427, 2487, [arXiv:1209.2985](https://arxiv.org/abs/1209.2985).
 - The sky-projected obliquity convention: Fabrycky & Winn (2009), *ApJ*
   696, 1230, [arXiv:0902.0737](https://arxiv.org/abs/0902.0737).
+- A planet and its moon on their orbits: Kipping (2011), *MNRAS* 416,
+  689, [arXiv:1105.3499](https://arxiv.org/abs/1105.3499).

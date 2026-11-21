@@ -24,3 +24,4 @@ html[data-theme="dark"] .sd-card.path-card::before { opacity: 0.85; }
 .path-oblate::before { background-image: url("cards/oblate.svg"); }
 .path-ringed::before { background-image: url("cards/ringed.svg"); }
 .path-spots::before { background-image: url("cards/spots.svg"); }
+.path-moons::before { background-image: url("cards/moons.svg"); }

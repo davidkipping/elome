@@ -150,6 +150,43 @@ depend on the rotating star and so differ between transits. A separate
 kernel finds them exposure by exposure, and graph operations give them
 their implicit derivatives.
 
+## Exomoons
+
+The blocked light of a planet and its moon is each disc's, less the lens
+they share on the star, which would otherwise be counted twice. Each
+disc is the spherical solution at its own separation. The lens is a
+region bounded by arcs of three circles: the planet's, the moon's and the
+limb. Green's theorem turns its columns into a sum over those arcs. On a
+circle, with the angle $\psi$ measured from its point nearest the star's
+centre, $s = \rho^2$ is linear in $\cos\psi$. Each even term is then a
+cubic in $\cos\psi$, and each pole term a constant plus the integral of
+$1/(a + b\cos\psi)$, an arctangent or, across $a = b$, an inverse
+hyperbolic tangent bridged by a short series. The two circles meet where
+one formula says, computed once and shared by every curve through the
+corner. A pair within a small fraction of a tangency is treated as
+touching, which removes a gap of $10^{-5}$ in float32 at the touch.
+Which arcs bound the lens is read at three points of each arc and held
+fixed, while the arcs' ends follow the parameters, so the gradients need
+no corner terms.
+
+The quadratic law's $\mu^1$ term over the lens needs incomplete elliptic
+integrals. The lens's exact $\mu^0$, $\mu^2$ and $\mu^4$ moments fix the
+mean and variance of $\mu^2$ over it, and a distribution with those
+moments closes the term: uniform in $\mu^2$, or a power law reaching
+$\mu = 0$ on a lens at the limb. It is exact for a lens at one $\mu$.
+
+The positions are the barycentre's orbit plus the moon's relative orbit,
+both through the transit-anchored solver. The moon's phase is split for
+float32 into the host's reference turns and the period offsets, as the
+planet's is. Time is handled per point: the host chooses which points
+either body can reach the star from and which overlap, and evaluates
+only those, gathering each parameter set's values per point so that many
+sets share one pass. The contact rule's events are the sign changes of
+eight smooth functions of time: each disc against the limb, from outside
+and inside; the discs against each other; and each corner against the
+limb. Bisection finds them, and one Newton step taken only in the
+gradient gives them their implicit derivatives.
+
 ## MLX caveats
 
 - `mx.sin`, `mx.cos`, `mx.exp` and `mx.erf` are only float32-accurate on

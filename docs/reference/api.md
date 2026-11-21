@@ -47,11 +47,20 @@ stellar radii; angles in degrees):
   ``istar``, ``lam``: its spin inclination (None: 90) and
   sky-projected obliquity (None: 0); ``spot_epoch``: when the
   longitudes are measured (None: ``t0``).
+- ``moon_r``, ``moon_a``: a moon's radius and the planet-moon
+  semi-major axis, in units of ``rp``; ``moon_per``: its period;
+  ``moon_q``: its mass over the planet's (None: 0); ``moon_inc``,
+  ``moon_node``: its orbit's inclination (None: ``inc``) and node
+  (None: 0) on the sky, so the defaults are coplanar with the
+  planet; ``moon_phase``: its mean argument of latitude at ``t0``
+  less 90 (None: 0, the moon at conjunction, in front of the
+  planet); ``moon_ecc``, ``moon_w`` (None: 0). ``t0``, ``per``,
+  ``a``, ``inc``, ``ecc`` and ``w`` are then the barycentre's.
 - ``t_secondary`` (unused: the eclipse time follows from the orbit)
   and ``spot_u`` (reserved) exist for compatibility.
 
-Unset shape, ring and spot fields (None) mean a spherical planet on
-an unspotted star.
+Unset shape, ring, spot and moon fields (None) mean a spherical
+planet without a moon, on an unspotted star.
 ```
 
 ### `TransitModel`
@@ -660,10 +669,39 @@ rule splits the eclipse at its own contacts.
 (``make_hybrid_transit_flux``).
 ```
 
+### `anvil.make_moon_transit_flux`
+
+```python
+make_moon_transit_flux(period_ref: float, moon_period_ref: float, limb_dark: str = 'quadratic', eccentric: bool = False, moon_eccentric: bool = False, exp_time: float = 0.0, integration: str = 'contact', n_gl: int = 5, n_sub: int = 1, large_occultor: bool = False)
+```
+
+```text
+Engine-contract batched model of a planet with a moon: v = (n_chains,
+d) with ``transit_param_names(limb_dark, eccentric, moon=True,
+moon_eccentric=moon_eccentric)`` and x = (3, m), the epoch-centered
+times and orbit numbers and each point's reference turns of the moon,
+``moons.moon_turns_ref(k, period_ref, moon_period_ref)`` -- returning
+df0 + (F - 1), (n_chains, m).
+
+``TransitModel``'s moon route (``moons_tau``), every chain in one pass:
+the quadratic law (q1, q2) with its lens closure, or a hybrid law
+through its q prior, exact. The barycentre follows (t0_off, p_off, b,
+a[, secosw, sesinw]) as the planet does in the other models; the moon's
+period is ``moon_period_ref`` + moon_p_off, its phase split from the
+references in x, so float32 holds it far from t0. ``exp_time`` (days)
+> 0 integrates each exposure by ``integration``: "contact" (split at
+the kinks of each exposure, ``n_gl`` nodes per piece), "supersample"
+(``n_sub`` uniform nodes) or "none". Evaluated eagerly: it raises under
+``mx.compile`` (run anvil with ``compile_step=False``).
+
+``large_occultor``: whether r may exceed 1, as
+``make_hybrid_transit_flux``'s.
+```
+
 ### `anvil.transit_param_names`
 
 ```python
-transit_param_names(limb_dark: str = 'quadratic', eccentric: bool = False, n_spots: int = 0, transittype: str = 'primary', timing: str = 'transit') -> list
+transit_param_names(limb_dark: str = 'quadratic', eccentric: bool = False, n_spots: int = 0, transittype: str = 'primary', timing: str = 'transit', moon: bool = False, moon_eccentric: bool = False) -> list
 ```
 
 ```text
@@ -672,7 +710,9 @@ The model-space parameter vector's names, in order, for
 
     t0_off, p_off, r, b, a, the limb darkening's q1..qn,
     [secosw, sesinw], [per spot j = 1..K: lonj, sinlatj, radj,
-    contrastj, then prot, cos_istar, lam], [fp], df0
+    contrastj, then prot, cos_istar, lam], [moon_r, moon_a, moon_p_off,
+    moon_q, cos_moon_inc, moon_node, moon_phase, [moon_secosw,
+    moon_sesinw]], [fp], df0
 
 With a secondary eclipse (``transittype`` "secondary" or "both";
 ``make_eclipse_flux``) the planet's flux ratio ``fp`` comes before
@@ -688,6 +728,14 @@ latitude as its sine (uniform over the sphere), its contrast the
 spot's intensity over the photosphere's; the star's rotation period
 ``prot`` in days, its spin axis's inclination as cos(istar) (isotropic)
 and the sky-projected obliquity ``lam`` in degrees.
+
+With ``moon`` (``make_moon_transit_flux``; a primary transit of an
+unspotted star): the moon's radius and semi-major axis in planet radii,
+its period's offset from ``moon_period_ref`` [days], its mass over the
+planet's, cos of its orbit's sky inclination (isotropic with the node
+uniform), the node and its phase at t0 in degrees (``TransitParams``'
+moon fields), and with ``moon_eccentric`` its (sqrt(e) cos w, sqrt(e)
+sin w).
 ```
 
 ### `anvil.PARAM_NAMES`
@@ -709,7 +757,7 @@ The eccentric quadratic models' parameter order (`make_ecc_transit_flux`): `seco
 ### `anvil.make_transit_target`
 
 ```python
-make_transit_target(t, y, yerr, t0_guess, period_guess, eccentric: bool = False, bounds=None, policy=None, core: str = 'metal', strength: float = 1000000.0, limb_dark: str = 'quadratic', n_spots: int = 0, exp_time: float = 0.0, integration: str = 'contact', n_gl: int = 5, spot_epoch=None, relative: bool = True, n_sub: int = 1, transittype: str = 'primary', timing: str = 'transit', ecc=None, w=None, rstar=None)
+make_transit_target(t, y, yerr, t0_guess, period_guess, eccentric: bool = False, bounds=None, policy=None, core: str = 'metal', strength: float = 1000000.0, limb_dark: str = 'quadratic', n_spots: int = 0, exp_time: float = 0.0, integration: str = 'contact', n_gl: int = 5, spot_epoch=None, relative: bool = True, n_sub: int = 1, transittype: str = 'primary', timing: str = 'transit', ecc=None, w=None, rstar=None, moon: bool = False, moon_period_guess=None, moon_eccentric: bool = False)
 ```
 
 ```text
@@ -757,9 +805,10 @@ Args:
         Run anvil with ``compile_step=target.compile_step`` (False): a
         spotted model is evaluated eagerly.
     exp_time, integration, n_gl, n_sub: an exposure time (in t's
-        units) and its rule, for hybrid laws and eclipses: ``n_gl``
-        nodes per piece for "contact", ``n_sub`` for "supersample"
-        (``make_hybrid_transit_flux``, ``make_eclipse_flux``).
+        units) and its rule, for hybrid laws, eclipses and moons:
+        ``n_gl`` nodes per piece for "contact", ``n_sub`` for
+        "supersample" (``make_hybrid_transit_flux``,
+        ``make_eclipse_flux``, ``make_moon_transit_flux``).
     spot_epoch: when the spots' longitudes are measured (t's system);
         default the predicted mid-transit nearest the data's middle,
         which keeps the star's float32 phase accurate.
@@ -796,12 +845,20 @@ Args:
     rstar: with an eclipse, the star's radius in solar radii: adds the
         light-travel time across the orbit to the occultation time
         (``eclipse.light_travel_delay``). None leaves it out.
+    moon, moon_period_guess, moon_eccentric: fit a planet with a moon
+        (``make_moon_transit_flux``; either law, a primary transit of
+        an unspotted star), its period sampled as ``moon_p_off`` about
+        ``moon_period_guess`` (days, required), which has no default
+        box: give one in ``bounds``. ``moon_eccentric`` samples the
+        moon's (moon_secosw, moon_sesinw) too. The node's default box
+        leaves out the moon's mirror image (see DEFAULT_BOUNDS). Run
+        anvil with ``compile_step=target.compile_step`` (False).
 ```
 
 ### `anvil.TransitTarget`
 
 ```python
-TransitTarget(target: object, transform: object, loglike: object, model_fn: object, x64: np.ndarray, y_fit: np.ndarray, yerr: np.ndarray, t_ref: float, t0_ref: float, period_ref: float, param_names: list, eccentric: bool, limb_dark: str = 'quadratic', n_spots: int = 0, spot_epoch: float | None = None, compile_step: bool = True, transittype: str = 'primary', timing: str = 'transit') -> None
+TransitTarget(target: object, transform: object, loglike: object, model_fn: object, x64: np.ndarray, y_fit: np.ndarray, yerr: np.ndarray, t_ref: float, t0_ref: float, period_ref: float, param_names: list, eccentric: bool, limb_dark: str = 'quadratic', n_spots: int = 0, spot_epoch: float | None = None, compile_step: bool = True, transittype: str = 'primary', timing: str = 'transit', moon_period_ref: float | None = None) -> None
 ```
 
 ```text
@@ -920,7 +977,7 @@ unrelated package of the same name) re-raises that error.
 ### `anvil.DEFAULT_BOUNDS`
 
 ```python
-DEFAULT_BOUNDS = {'t0_off': (-0.5, 0.5), 'p_off': (-0.05, 0.05), 'r': (0.005, 0.5), 'b': (0.0, 1.2), 'a': (1.5, 200.0), 'q1': (0.0, 1.0), 'q2': (0.0, 1.0), 'df0': (-0.01, 0.01), 'secosw': (-0.95, 0.95), 'sesinw': (-0.95, 0.95), 'q3': (0.0, 1.0), 'q4': (0.0, 1.0), 'q5': (0.0, 1.0), 'lon': (-180.0, 180.0), 'sinlat': (-1.0, 1.0), 'rad': (1.0, 30.0), 'contrast': (0.0, 1.0), 'cos_istar': (0.0, 1.0), 'lam': (-180.0, 180.0), 'tocc_off': (-0.5, 0.5), 'fp': (0.0, 0.01)}
+DEFAULT_BOUNDS = {'t0_off': (-0.5, 0.5), 'p_off': (-0.05, 0.05), 'r': (0.005, 0.5), 'b': (0.0, 1.2), 'a': (1.5, 200.0), 'q1': (0.0, 1.0), 'q2': (0.0, 1.0), 'df0': (-0.01, 0.01), 'secosw': (-0.95, 0.95), 'sesinw': (-0.95, 0.95), 'q3': (0.0, 1.0), 'q4': (0.0, 1.0), 'q5': (0.0, 1.0), 'lon': (-180.0, 180.0), 'sinlat': (-1.0, 1.0), 'rad': (1.0, 30.0), 'contrast': (0.0, 1.0), 'cos_istar': (0.0, 1.0), 'lam': (-180.0, 180.0), 'tocc_off': (-0.5, 0.5), 'fp': (0.0, 0.01), 'moon_r': (0.0, 1.0), 'moon_a': (2.0, 100.0), 'moon_q': (0.0, 0.2), 'cos_moon_inc': (-1.0, 1.0), 'moon_node': (-90.0, 90.0), 'moon_phase': (-180.0, 180.0), 'moon_secosw': (-0.95, 0.95), 'moon_sesinw': (-0.95, 0.95)}
 ```
 
 The parameter boxes `make_transit_target` uses unless `bounds=` overrides them.
@@ -1217,7 +1274,7 @@ as plain Python floats.
 
 ## Light curves from separations (float64 reference graphs)
 
-Functions of the sky separation z (spherical), the planet's centre in its principal frame (oblate, ringed), or the planet's and the spots' positions on the sky (starspots). They follow MLX's broadcasting and type-promotion rules; see {doc}`../guides/gradients-and-precision`.
+Functions of the sky separation z (spherical), the planet's centre in its principal frame (oblate, ringed), the planet's and the spots' positions on the sky (starspots), or the planet's and its moon's (exomoons). They follow MLX's broadcasting and type-promotion rules; see {doc}`../guides/gradients-and-precision`.
 
 ### `flux_dev`
 
@@ -1403,6 +1460,44 @@ spot_vector(lon, lat)
 Unit centre vector of a spot at sky-frame longitude lon (from the
 line of sight towards +x) and latitude lat (towards +y), radians:
 (cos lat sin lon, sin lat, cos lat cos lon). mx or host values.
+```
+
+### `flux_dev_moon`
+
+```python
+flux_dev_moon(xp, yp, xm, ym, rp, rs, w, law, front_p=None, front_m=None, large_occultor=None) -> mx.array
+```
+
+```text
+F - 1 of a planet and its moon for a hybrid law with shape weights w
+(as ``hybrid.flux_dev_hybrid`` takes them); arguments as
+``generator_cols_moon``.
+```
+
+### `flux_dev_moon_quad`
+
+```python
+flux_dev_moon_quad(xp, yp, xm, ym, rp, rs, u1, u2, front_p=None, front_m=None) -> mx.array
+```
+
+```text
+F - 1 of a planet and its moon for the quadratic law
+I = 1 - u1 (1 - mu) - u2 (1 - mu)^2: each disc exact (ALFM19), the lens
+they share by its exact mu^0 and mu^2 moments and ``_lens_mu``'s
+closure for mu^1. Arguments as ``generator_cols_moon``.
+```
+
+### `shape_cols_moon`
+
+```python
+shape_cols_moon(xp, yp, xm, ym, rp, rs, law, front_p=None, front_m=None, large_occultor=None) -> mx.array
+```
+
+```text
+Shape-basis columns [E0, S_1..S_n] of a planet and its moon, stacked
+on a trailing axis -- the ``ld_basis`` contract of the other paths
+(flux - 1 == (B @ c) / (N @ c), c = (1, -w), N = hybrid_norms(law)).
+Arguments as ``generator_cols_moon``; all are cast to xp's dtype.
 ```
 
 ### `light_curve`
@@ -1650,6 +1745,42 @@ sincos(x: mx.array)
 
 ```text
 (sin x, cos x), full working-precision in both dtypes.
+```
+
+### `moons.moon_turns_ref`
+
+```python
+moon_turns_ref(k, per_ref, moon_per_ref) -> np.ndarray
+```
+
+```text
+Float64 host preprocessing: k P_ref / P_m,ref reduced to [-1/2, 1/2)
+turns, for orbit numbers k (``orbit.epoch_center_times``' second row).
+```
+
+### `moons.mutual_inclination`
+
+```python
+mutual_inclination(inc, moon_inc, node)
+```
+
+```text
+(iota, iota_mirror) in degrees: the mutual inclination of the moon's
+orbit to the barycentre's, and that of its mirror (node + 180 degrees),
+which gives the same light curve. Arguments in degrees; numpy arrays
+broadcast.
+```
+
+### `moons.moon_period`
+
+```python
+moon_period(moon_a, rho_p, q=0.0)
+```
+
+```text
+The moon's orbital period [days] from Kepler's third law:
+moon_a the planet-moon semi-major axis in planet radii, rho_p the
+planet's mean density [kg m^-3], q = M_moon / M_planet.
 ```
 
 ## Special functions and transforms

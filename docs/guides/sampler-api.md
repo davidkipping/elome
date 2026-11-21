@@ -7,7 +7,8 @@ call, with analytic gradients in every input. The same call covers
 spherical, oblate and ringed planets and spotted stars, the quadratic
 and hybrid limb-darkening laws, circular and eccentric orbits, and every
 exposure rule, and the secondary eclipses of spherical and oblate
-planets.
+planets. A planet with a moon has a per-chain model of its own,
+`elome.anvil.make_moon_transit_flux` (see {doc}`../moons/light-curves`).
 
 ```python
 from elome import flux_dev_from_tau
