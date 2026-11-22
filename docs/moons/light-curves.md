@@ -28,9 +28,14 @@ like the limb-darkening law. Every value can change between calls.
 - **The references.** `t0`, `per` and `moon_per` must be numbers when the
   model is built. Each time's distance from its reference transit, its
   orbit number and the moon's phase at that transit are then reduced
-  once, in float64, against these values. Later calls take any values,
-  and the light curve is the same whatever references were used, to
-  rounding.
+  once, in float64, against these values. Later calls take any values.
+  In float64 the light curve is the same whatever references were used,
+  to rounding. In float32 the offsets from the references are float32
+  numbers, so a large one loses precision over many orbits, as the
+  planet's period does: a moon of period 0.36 d against a reference of
+  2 to 4 d is off by 1 to $3\times10^{-6}$ by the planet's fifth orbit,
+  against $2\times10^{-8}$ when the reference is its own. Build the model
+  near the values you expect.
 - **`light_curves(sets)`** evaluates many parameter sets in one pass,
   with per-set moon fields like any other field (see
   {doc}`../guides/batching`). A `moon_inc` left `None` is each set's own

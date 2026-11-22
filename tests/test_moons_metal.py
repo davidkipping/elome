@@ -308,3 +308,39 @@ def test_the_public_sky_functions_for_a_planet_larger_than_its_star(name):
         vk, gk = _public(name, H, fp, fm, W, mx.float32, True, mp, large=True)
     assert np.all(np.isfinite(gk))
     assert np.abs(vk - v64).max() <= 2.5 * np.abs(v32 - v64).max()
+
+
+def test_the_quadratic_closure_has_finite_gradients_where_float32_rounds_to_its_branch():
+    """Where an overlap straddles the limb the closure switches branch at
+    a = mean - half = 0; float32 can round a to 0 exactly, where sqrt'(a)
+    is infinite though its coefficient is 0 (positions that gave NaN)."""
+    xm = np.array([0.9678304, 0.9678524, 0.96781325, 0.9678414], np.float32)
+    H = [np.full(4, 0.95), np.zeros(4), np.full(4, 0.1), xm, np.full(4, 0.12), np.full(4, 0.1)]
+    with pytest.MonkeyPatch.context() as mp:
+        for kernel in (True, False):
+            val, g = _quad_lens(H, np.ones((4, 3)), mx.float32, kernel)
+            assert np.all(np.isfinite(g)), (kernel, g)
+            if kernel:
+                mp.setattr(MN, "_metal", lambda dt: None)
+
+
+@pytest.mark.parametrize("d", [0.0, 1e-8, 1e-6])
+def test_coincident_discs_of_one_radius(d):
+    """Two discs of one radius at one place: their overlap is either disc,
+    not nothing (each lies on the other, so neither's membership in the
+    other can be sampled)."""
+    c = [0.3, 0.1, 0.1, 0.3 + d, 0.1, 0.1]
+    exact = None
+    with mx.stream(mx.cpu):
+        v = [mx.array([x], dtype=mx.float64) for x in c]
+        one = MN.flux_dev_moon_quad(v[0], v[1], v[3], v[4], v[2], v[5], 0.4, 0.25).item()
+        disc = MN.flux_dev_moon_quad(v[0], v[1], v[3] + 5.0, v[4], v[2], v[5], 0.4, 0.25).item()
+        exact = disc            # the moon far away: one disc's depth
+    assert abs(one - exact) < 1e-12 + 2.5 * d
+    with pytest.MonkeyPatch.context() as mp:
+        for kernel in (True, False):
+            with mx.stream(mx.gpu):
+                v = [mx.array([x], dtype=mx.float32) for x in c]
+                f32 = MN.flux_dev_moon_quad(v[0], v[1], v[3], v[4], v[2], v[5], 0.4, 0.25).item()
+            assert abs(f32 - exact) < 2e-7, (kernel, f32, exact)
+            mp.setattr(MN, "_metal", lambda dt: None)

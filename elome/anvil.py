@@ -452,9 +452,11 @@ def make_moon_transit_flux(period_ref: float, moon_period_ref: float,
                  orbit=orbit, per_ref=period_ref, mper_ref=moon_period_ref)
         # host bounds over the chains: the barycentre's fastest sky speed,
         # and the contact rule's event samples
-        hv = {key: np.array(mx.stop_gradient(val), dtype=np.float64) for key, val in dict(
+        hv = {key: mx.stop_gradient(val) for key, val in dict(
             a=a, per=P["per"], e=e, rp=r, rs=P["rs"], a_ps=P["a_ps"], e_m=e_m,
             mper=moon_period_ref + P["m_off"]).items()}
+        mx.eval(*hv.values())                                   # one sync for them all
+        hv = {key: np.array(val, dtype=np.float64) for key, val in hv.items()}
         P["speed"] = float(np.max(2.0 * math.pi * hv["a"] / hv["per"]
                                   * np.sqrt((1.0 + hv["e"]) / (1.0 - hv["e"]))))
         P["moon_e"] = hv["e_m"]

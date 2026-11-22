@@ -54,9 +54,11 @@ _TWO_PI = 2.0 * math.pi
 _K_SPLIT = 8                                       # split points per exposure
 _S_MIN, _S_MAX = 4, 256                            # event samples per exposure
 _N_BISECT = {mx.float64: 30, mx.float32: 16}       # the kinks' bracket, in halvings
-_N_FALSI = 8                                       # Illinois steps before them
-_BLOCK = 1 << 14                                   # evaluation nodes per block
-_EVENT_BLOCK = 1 << 20                             # event samples per block (frozen)
+_N_FALSI = 10                                      # Illinois steps before them
+# evaluation nodes per block: a forward light curve's memory is bounded by
+# it (no gradient keeps the blocks); fewer blocks build less graph
+_BLOCK = 1 << 18
+_EVENT_BLOCK = 1 << 18                             # event samples per block (frozen)
 _sg = mx.stop_gradient
 
 
@@ -166,15 +168,26 @@ def _run(fn, *args):
     return f(*leaves)
 
 
-def _host(v):
-    """A fresh copy of every array in v (a tree), no graph behind it."""
+def _walk(v, fn):
+    """v (a tree) with fn applied to each of its arrays, in order."""
     if isinstance(v, mx.array):
-        return mx.array(np.asarray(_sg(v)), dtype=v.dtype)
+        return fn(v)
     if isinstance(v, dict):
-        return {key: _host(c) for key, c in v.items()}
+        return {key: _walk(c, fn) for key, c in v.items()}
     if isinstance(v, (tuple, list)):
-        return type(v)(_host(c) for c in v)
+        return type(v)(_walk(c, fn) for c in v)
     return v
+
+
+def _host(v):
+    """A fresh copy of every array in v (a tree), no graph behind it: the
+    arrays evaluated together, once, then copied."""
+    frozen = []
+    _walk(v, lambda x: frozen.append(_sg(x)))
+    if frozen:
+        mx.eval(*frozen)
+    copies = iter([mx.array(np.asarray(x), dtype=x.dtype) for x in frozen])
+    return _walk(v, lambda x: next(copies))
 
 
 def _compiling(dtype):
@@ -226,14 +239,17 @@ def _event_g(Q):
 
 def _changes(Q, dt, o, u, dm):
     """The event functions' sign changes between samples dm (1, J + 1) of
-    lanes (dt, o, u), (lanes, J, 8): the corners' only where there are
-    corners at either end, a sign change of the merged point (the same in
-    both) being no kink. A frozen stage."""
+    lanes (dt, o, u), (lanes, J) bytes, bit f set where function f changes
+    sign (one byte to read back per interval, not eight): the corners' only
+    where there are corners at either end, a sign change of the merged
+    point (the same in both) being no kink. A frozen stage."""
     G = _event_g(Q)(dm, dt, o, u)                                   # (lanes, J + 1, 9)
     S = G[..., :8] > 0.0
     change = S[:, :-1] != S[:, 1:]
     corners = (G[:, :-1, 8:] > 0.0) | (G[:, 1:, 8:] > 0.0)
-    return mx.concatenate([change[..., :6], change[..., 6:] & corners], axis=-1)
+    change = mx.concatenate([change[..., :6], change[..., 6:] & corners], axis=-1)
+    bits = mx.array([1 << f for f in range(8)], dtype=mx.uint8)
+    return mx.sum(change.astype(mx.uint8) * bits, axis=-1).astype(mx.uint8)
 
 
 def _pick(Q, dt, o, u, f, delta):
@@ -260,8 +276,11 @@ def _brackets(Q, cols, hw0, n_sample, dtype):
         ix = mx.array(np.minimum(np.arange(i, i + min(_bucket(c, dtype), step)), m - 1)
                       .astype(np.int32))
         take = lambda v: mx.take(v, ix, axis=0)                     # noqa: E731
-        change = np.array(_run(_changes, _lanes(Q, take), *(take(v) for v in cols), dm))
-        lb, jb, fb = np.nonzero(change[:c])                         # lane, time, function order
+        packed = np.array(_run(_changes, _lanes(Q, take), *(take(v) for v in cols), dm))[:c]
+        nz = np.flatnonzero(packed)
+        bits = np.unpackbits(packed.reshape(-1)[nz][:, None], axis=1, bitorder="little")
+        r, fb = np.nonzero(bits)
+        lb, jb = np.divmod(nz[r], packed.shape[1])                  # lane, time, function order
         found.append((lb + i, jb, fb))
     lane, jj, ff = (np.concatenate(c) for c in zip(*found))
     if lane.size:
@@ -292,6 +311,12 @@ def _refine(gf, lo, hi, dtype):
                         mx.where(right, mx.where(side == -1, 0.5 * fa, fa), fc),
                         mx.where(right, fc, mx.where(side == 1, 0.5 * fb, fb)))
         side = mx.where(right, -1, 1)
+        # c on the root itself (common: near its root an O(1) function falls
+        # on the rounding grid): the bracket collapses there, else the
+        # secant would return that end every step, the bracket frozen
+        zero = fc == 0.0
+        a, b = mx.where(zero, c, a), mx.where(zero, c, b)
+    mx.eval(a, b, fa)
     a, b, fa = np.array(a), np.array(b), np.array(fa)
     slow = np.nonzero(b - a > tol)[0]
     if slow.size:
@@ -403,11 +428,13 @@ def _photometry(Q, kind, large, cols, T):
             cols = [moons.disc_flux_quad(xp, yp, rp, u1, u2, fp)
                     + moons.disc_flux_quad(xm, ym, rs, u1, u2, fm)]
     # the lens, where the discs overlap with both on the star (host choice)
-    gx = [np.array(_sg(v)) for v in (xp, yp, xm, ym)]
-    grp, grs = (np.broadcast_to(np.array(_sg(v)), T.shape) for v in (rp, rs))
+    reads = [_sg(v) for v in (xp, yp, xm, ym, rp, rs)] + [fp, fm]
+    mx.eval(*reads)                                                 # one sync for them all
+    gx = [np.array(v) for v in reads[:4]]
+    grp, grs = (np.broadcast_to(np.array(v), T.shape) for v in reads[4:6])
     zp_, zm_ = np.hypot(gx[0], gx[1]), np.hypot(gx[2], gx[3])
     dd = np.hypot(gx[2] - gx[0], gx[3] - gx[1])
-    need = (np.array(fp) & np.array(fm) & (dd < (grp + grs) * (1.0 + 1e-9))
+    need = (np.array(reads[6]) & np.array(reads[7]) & (dd < (grp + grs) * (1.0 + 1e-9))
             & (zp_ < 1.0 + grp) & (zm_ < 1.0 + grs)).ravel()
     idx = np.nonzero(need)[0]
     if idx.size:

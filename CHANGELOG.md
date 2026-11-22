@@ -3,6 +3,35 @@
 All notable changes to Elómë. Versioning: semantic-ish (MAJOR.MINOR.PATCH);
 every release is tagged `vX.Y.Z` in git.
 
+## [Unreleased]
+
+### Changed
+- **A planet with a moon, faster again.** A float32 fit of 64 anvil
+  chains under the contact rule takes 40 ms per value and gradient, from
+  157 ms (256 chains: 113 ms, from 629 ms); 16 chains in float64 take
+  0.32 s, from 0.54 s; `TransitModel.light_curve` about 30% less. The
+  photometry is built in fewer, larger blocks (a forward light curve's
+  memory stays bounded); the contact rule's kink search no longer stalls
+  when its regula falsi lands on a root exactly, reads its sign changes
+  back packed one byte per sample, and each group of host reads takes
+  one synchronisation. The event search's samples use a quarter of the
+  memory.
+
+### Fixed
+- **NaN gradients from the quadratic law's closure in float32**, at the
+  positions where an overlap straddling the limb rounds its branch point
+  to exactly 0 (kernel and graph).
+- **Two coincident discs of one radius** (a moon as large as its planet,
+  at the planet's centre to rounding): their overlap was taken as nothing,
+  doubling the depth in float64 and dropping a disc in float32.
+- **NaN gradients in the float64 sky functions** (`flux_dev_moon` and
+  the others) wherever a disc is centred exactly on the star.
+
+### Documentation
+- The quadratic closure's largest error for a large moon, how float32
+  depends on the references when the periods are far from them, and
+  which paths check an MLX array's moon fields.
+
 ## [0.23.3] — 2026-11-22
 
 ### Changed

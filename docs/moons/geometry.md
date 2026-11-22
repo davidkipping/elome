@@ -114,8 +114,10 @@ the planet's radius, so the moon's radius and orbit scale with it.
 - every value finite.
 
 The planet's orbit and the limb darkening follow a spherical planet's
-rules. Outside these a Python number or numpy array raises `ValueError`.
-An MLX array is not checked, so keep a sampler inside the domain itself.
+rules. Outside these a Python number or numpy array raises `ValueError`,
+and so does an MLX array in `TransitModel`, which reads a model with a
+moon's values eagerly. The anvil model (`make_moon_transit_flux`) checks
+nothing, so keep a sampler inside the domain itself.
 The moon's orbit is not checked for stability: a moon must orbit well
 inside the planet's Hill sphere, which the model does not know.
 

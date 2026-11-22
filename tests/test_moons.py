@@ -616,3 +616,25 @@ def test_photometry_gradients_match_finite_differences(name, kind):
             gi = g[i].item()
             # the difference's rounding floor: ~1e-9 on a flux of ~1e-2
             assert np.isfinite(gi) and abs(gi - fd) <= 1e-6 * max(1e-2, abs(fd)), (i, gi, fd)
+
+
+@pytest.mark.parametrize("law", ["hybrid5", "quadratic"])
+def test_sky_gradients_with_a_disc_on_the_star_centre(law):
+    """A disc centred exactly on the star has its limb points at its centre:
+    their angles are 0/0, which must reach no gradient (float64, the sky
+    functions, which take the lens at every point)."""
+    W = [0.2, 0.15, 0.1, 0.05, 0.1]
+
+    def flux(*a):
+        if law == "quadratic":
+            return moons.flux_dev_moon_quad(a[0], a[1], a[3], a[4], a[2], a[5], 0.4, 0.25)
+        return moons.flux_dev_moon(a[0], a[1], a[3], a[4], a[2], a[5], W, law)
+    for c in [(0.0, 0.0, 0.1, 0.3, 0.0, 0.03), (0.0, 0.0, 0.1, 0.05, 0.02, 0.03)]:
+        with mx.stream(mx.cpu):
+            a = [mx.array([v], dtype=mx.float64) for v in c]
+            g = np.array([x.item() for x in mx.grad(lambda *v: mx.sum(flux(*v)),
+                                                    argnums=tuple(range(6)))(*a)])
+            h, c = 1e-6, np.array(c)
+            F = lambda p: flux(*(mx.array([v], dtype=mx.float64) for v in p)).item()  # noqa: E731
+            fd = np.array([(F(c + h * e) - F(c - h * e)) / (2 * h) for e in np.eye(6)])
+        assert np.all(np.isfinite(g)) and np.abs(g - fd).max() < 1e-8

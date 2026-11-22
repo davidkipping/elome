@@ -111,6 +111,7 @@ inline md m_max(md x, float y) { return (x.v > y) ? x : md(y); }
 constant float MN_TINY = 1e-30f;      // rings._TINY
 constant float MN_THIN = 1e-2f;       // moons._THIN
 constant float MN_XSER = 0.05f;       // moons._X_SER
+constant float MN_COINCIDE = 4.8e-7f; // moons._COINCIDE
 constant float MN_SAMPLES[3] = {0.5f, 0.25f, 0.75f};   // rings._SAMPLES
 #define MN_K CONST_K
 #define MN_NC (3 + MN_K)
@@ -131,11 +132,12 @@ template <typename T>
 inline void mn_meet_of(T x1, T y1, T R1, T x2, T y2, T R2, thread mn_meet<T> &P) {
     T dx = x2 - x1, dy = y2 - y1;
     T D2 = dx * dx + dy * dy;
-    T D = m_sqrt(m_max(D2, MN_TINY));
+    bool apart = mv(D2) > MN_TINY;                  // coincident centres: a stand-in distance
+    T D = apart ? m_sqrt(D2) : T(1.0f);
     T a = (D2 + (R1 - R2) * (R1 + R2)) / (2.0f * D);
     T hh2 = (R1 - a) * (R1 + a);
     float thin = MN_THIN * min(mv(R1), mv(R2));
-    P.has = (mv(hh2) > thin * thin) && (mv(D2) > 0.0f);
+    P.has = (mv(hh2) > thin * thin) && apart;
     T hh = P.has ? m_sqrt(hh2) : T(0.0f);
     T ux = dx / D, uy = dy / D;
     T bx = x1 + a * ux, by = y1 + a * uy;
@@ -265,6 +267,9 @@ inline void mn_lens(T X0, T Y0, T R0, T X1, T Y1, T R1, thread T *occ) {
     ey = far ? ey / en : 0.0f;
     T cmu2[2];
     for (int q = 0; q < 2; ++q) cmu2[q] = 1.0f - (cor.px[q] * cor.px[q] + cor.py[q] * cor.py[q]);
+    // coincident circles (moons._COINCIDE): the first's arcs inside the second
+    float gdx = mv(X1) - mv(X0), gdy = mv(Y1) - mv(Y0);
+    bool tie = metal::precise::sqrt(gdx * gdx + gdy * gdy) + fabs(mv(R1) - mv(R0)) <= MN_COINCIDE;
     T limb_th[4];
     bool limb_ok[4];
     for (int k = 0; k < 2; ++k) {
@@ -315,7 +320,8 @@ inline void mn_lens(T X0, T Y0, T R0, T X1, T Y1, T R1, thread T *occ) {
                 ds = (s == 0) ? ms : mn_decide(ds, ms);
                 dother = (s == 0) ? mo : mn_decide(dother, mo);
             }
-            if (!(ds > 0.0f && dother > 0.0f)) continue;
+            bool inside = tie ? (k == 0) : (dother > 0.0f);
+            if (!(ds > 0.0f && inside)) continue;
             T sl = m_sin(lo), cl = m_cos(lo), sh = m_sin(hi), ch = m_cos(hi);
             T cols[MN_NC];
             mn_arc_cols(z, R, lo, hi, sl, cl, sh, ch, cols);
@@ -383,7 +389,7 @@ template <typename T> inline T mn_lens_mu(T m0, T m2, T m4) {
     bool limb = mv(hw) > mv(mean);
     T a = limb ? mean : mean - hw;
     T b = mean + hw;
-    T ra = m_sqrt(a), rb = m_sqrt(b);
+    T ra = m_sqrt(m_max(a, MN_TINY)), rb = m_sqrt(b);   // sqrt'(0): moons._lens_mu
     T uni = (2.0f / 3.0f) * (a + ra * rb + b) / (ra + rb);
     T q = limb ? mean * mean / var : T(1.0f);
     T kp1 = q / (m_sqrt(1.0f + q) + 1.0f);

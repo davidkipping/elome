@@ -422,6 +422,12 @@ def check_moon(moon_r, moon_a, moon_q, moon_ecc=0.0, moon_per=1.0, angles=()):
 # amplified as 1 / (half-chord), the arcs on either side would be split at
 # points whose membership tests are themselves at rounding level
 _THIN = {mx.float64: 1e-4, mx.float32: 1e-2}
+# two circles within this of one another (centres plus radii) are one: each
+# lies on the other, so neither's membership in the other can be decided
+# by sampling; the lens is then either disc. The lens of two circles of
+# radius R a distance D apart is pi R^2 - 2 R D, so the choice costs at most
+# 2 R _COINCIDE, at the precision's rounding
+_COINCIDE = {mx.float64: 4 * 2.2e-16, mx.float32: 4 * 1.2e-7}
 # half-width in x = (a - b) / (a + b) tan^2(psi / 2) of the series bridge
 # across a = b (as hybrid's): six terms truncate at x^6 / 13
 _X_SER = {mx.float64: 1e-3, mx.float32: 0.05}
@@ -437,11 +443,14 @@ def _meet(c1, c2, dt):
     (x1, y1, R1), (x2, y2, R2) = c1, c2
     dx, dy = x2 - x1, y2 - y1
     D2 = dx * dx + dy * dy
-    D = mx.sqrt(mx.maximum(D2, _TINY[dt]))
+    # coincident centres: a stand-in distance, so the masked lanes carry no
+    # 0/0 (1/D, a ~ 1/D) into the gradient
+    apart = D2 > _TINY[dt]
+    D = mx.sqrt(mx.where(apart, D2, 1.0))
     a = (D2 + (R1 - R2) * (R1 + R2)) / (2.0 * D)       # along c1 -> c2 from c1
     hh2 = (R1 - a) * (R1 + a)
     thin = _THIN[dt] * mx.minimum(R1, R2)
-    has = (hh2 > thin * thin) & (D2 > 0.0)
+    has = (hh2 > thin * thin) & apart
     hh = mx.where(has, mx.sqrt(mx.where(has, hh2, 1.0)), 0.0)
     ux, uy = dx / D, dy / D
     bx, by = x1 + a * ux, y1 + a * uy
@@ -604,6 +613,11 @@ def _lens_cols(circles, eps, dt):
     # there, so their ends' terms cancel to the gap between them; computed
     # per arc, F's rounding ~ eps / (mu^2 + e) would not cancel
     corner_mu2 = [1.0 - (q[0] * q[0] + q[1] * q[1]) for q in corners[0]]
+    # coincident circles (_COINCIDE): the first's arcs are inside the second,
+    # the second's outside the first
+    gdx, gdy = (_sg(circles[1][j] - circles[0][j]) for j in range(2))
+    tie = (mx.sqrt(gdx * gdx + gdy * gdy) + mx.abs(_sg(circles[1][2] - circles[0][2]))
+           <= _COINCIDE[dt])
     limb_th, limb_ok = [], []
     for k in range(2):
         x0, y0, R = circles[k]
@@ -614,12 +628,21 @@ def _lens_cols(circles, eps, dt):
         # towards the star's centre from this one's (any direction if centred)
         ux = mx.where(cen, -1.0, -x0 / mx.where(cen, 1.0, z))
         uy = mx.where(cen, 0.0, -y0 / mx.where(cen, 1.0, z))
-        psi = lambda off: mx.arctan2(ux * off[1] - uy * off[0], ux * off[0] + uy * off[1])
+        # angles of points that exist; one that does not (a circle centred on
+        # the star has its limb points at its centre) takes a stand-in on the
+        # reference direction, so atan2'(0, 0) = 0/0 reaches no gradient. (A
+        # circle centred exactly on the star, at a fixed reference direction,
+        # loses its arcs' gradient in its own position: a point of measure
+        # zero, no longer 0/0)
+        def psi(off, ok):
+            fx, fy = mx.where(ok, off[0], ux), mx.where(ok, off[1], uy)
+            return mx.arctan2(ux * fy - uy * fx, ux * fx + uy * fy)
         pts, has, (loff, _) = limb[k]
         for pt in pts:
-            limb_th.append(mx.arctan2(ex * pt[1] - ey * pt[0], ex * pt[0] + ey * pt[1]))
+            px, py = mx.where(has, pt[0], ex), mx.where(has, pt[1], ey)
+            limb_th.append(mx.arctan2(ex * py - ey * px, ex * px + ey * py))
             limb_ok.append(has)
-        bps = [psi(o) for o in loff] + [psi(o) for o in corners[2][k]]
+        bps = [psi(o, has) for o in loff] + [psi(o, corners[1]) for o in corners[2][k]]
         bv = [has, has, corners[1], corners[1]]
         los, his, oks, (vlo, vhi) = _sorted_arcs(bps, bv, -math.pi + 0.0 * z, _TWO_PI,
                                                  [zero, zero] + corner_mu2)
@@ -640,7 +663,9 @@ def _lens_cols(circles, eps, dt):
             m_star.append(1.0 - (xs * xs + ys * ys))
             u_, v_ = (xs - ox[..., None]) / oR[..., None], (ys - oy[..., None]) / oR[..., None]
             m_other.append(1.0 - (u_ * u_ + v_ * v_))
-        keep = OK & (_decisive(m_star) > 0.0) & (_decisive(m_other) > 0.0)
+        inside = _decisive(m_other) > 0.0
+        inside = inside | tie[..., None] if k == 0 else inside & ~tie[..., None]
+        keep = OK & (_decisive(m_star) > 0.0) & inside
         LO, HI = mx.where(keep, LO, 0.0), mx.where(keep, HI, 0.0)
         z1, R1 = z[..., None], R[..., None]
         sc = (sincos(LO), sincos(HI))
@@ -813,7 +838,9 @@ def _lens_mu(m0, m2, m4, dt):
     limb = half > mean
     a = mx.where(limb, mean, mean - half)        # the uniform branch kept finite
     b = mean + half
-    ra, rb = mx.sqrt(a), mx.sqrt(b)
+    # sqrt'(a) is infinite where float rounds a = mean - half to 0 exactly;
+    # its coefficient in `uni` is then 0, so the floor changes no value
+    ra, rb = mx.sqrt(mx.maximum(a, tiny)), mx.sqrt(b)
     uni = (2.0 / 3.0) * (a + ra * rb + b) / (ra + rb)
     # q = E[x]^2 / var < 3 and k + 1 = sqrt(1 + q) - 1 without cancellation,
     # E[sqrt x] = sqrt(E[x] (k + 1) (k + 2)) / (k + 3/2) without dividing by
