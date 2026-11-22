@@ -3,6 +3,22 @@
 All notable changes to Elómë. Versioning: semantic-ish (MAJOR.MINOR.PATCH);
 every release is tagged `vX.Y.Z` in git.
 
+## [Unreleased]
+
+### Changed
+- **The moon's photometry at sky positions on the Metal kernels.**
+  `flux_dev_moon`, `shape_cols_moon`, `generator_cols_moon` and
+  `flux_dev_moon_quad` in float32 on the GPU take the same kernels as the
+  light curves, about 6–8 times faster with their gradients, at the same
+  accuracy. A quadratic-law planet larger than its star keeps the graph
+  for its discs.
+
+### Documentation
+- **Each comparison leads with Elómë's own performance**, and every
+  benchmark says what its points are: times spaced evenly over a window
+  about mid-transit, with the share of them in transit (about half; a
+  whole orbit, 3.8%, for the sampler's chunked gradient).
+
 ## [0.23.2] — 2026-11-22
 
 ### Documentation

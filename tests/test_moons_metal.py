@@ -233,3 +233,78 @@ def test_kernels_across_the_limb(law):
             return np.array(out, np.float64)
     err = np.abs(flux(mx.float32) - flux(mx.float64)).max()
     assert err < (6e-7 if law == "quadratic" else 2e-8), err
+
+
+def _sky(seed=5, L=3000, big=False):
+    """Planets and moons anywhere about the star, overlapping or not, some
+    behind it."""
+    rng = np.random.default_rng(seed)
+    zc, th = rng.uniform(0.0, 1.4, L), rng.uniform(0, 2 * np.pi, L)
+    rp = rng.uniform(1.05, 1.5, L) if big else rng.uniform(0.02, 0.3, L)
+    rs = rng.uniform(0.01, 0.3, L)
+    d, ph = (rp + rs) * rng.uniform(0.0, 1.6, L), rng.uniform(0, 2 * np.pi, L)
+    xp, yp = zc * np.cos(th), zc * np.sin(th)
+    fp, fm = rng.uniform(size=L) > 0.1, rng.uniform(size=L) > 0.1
+    return [xp, yp, xp + d * np.cos(ph), yp + d * np.sin(ph), rp, rs], fp, fm, rng
+
+
+_HW = [0.2, 0.15, 0.1, 0.05]          # hybrid4 shape weights
+
+
+def _public(name, H, fp, fm, W, dt, kernel, monkey, large=None):
+    if not kernel:
+        monkey.setattr(MN, "_metal", lambda dt: None)
+    with mx.stream(mx.gpu if dt == mx.float32 else mx.cpu):
+        v = [mx.array(a, dtype=dt) for a in H]
+        f_p, f_m = mx.array(fp), mx.array(fm)
+        if name == "generator_cols_moon":
+            fn = lambda *a: mx.stack(MN.generator_cols_moon(                 # noqa: E731
+                *a, "hybrid4", f_p, f_m, large_occultor=large), -1)
+        elif name == "shape_cols_moon":
+            fn = lambda *a: MN.shape_cols_moon(*a, "hybrid4", f_p, f_m,    # noqa: E731
+                                               large_occultor=large)
+        elif name == "flux_dev_moon":
+            fn = lambda *a: MN.flux_dev_moon(*a, mx.array(_HW, dtype=dt), "hybrid4",  # noqa: E731
+                                             f_p, f_m, large_occultor=large)
+        else:
+            fn = lambda *a: MN.flux_dev_moon_quad(*a, 0.4, 0.25, f_p, f_m)  # noqa: E731
+        val = np.array(fn(*v), np.float64)
+        w = mx.array(W.reshape(val.shape), dtype=dt)
+        g = mx.grad(lambda *a: mx.sum(fn(*a) * w), argnums=tuple(range(6)))(*v)
+    monkey.undo()
+    return val, np.stack([np.array(c, np.float64) for c in g], -1)
+
+
+@pytest.mark.parametrize("name", ["generator_cols_moon", "shape_cols_moon", "flux_dev_moon",
+                                  "flux_dev_moon_quad"])
+def test_the_public_sky_functions_by_the_kernels(name):
+    """In float32 on the GPU the sky-position functions take the kernels,
+    as accurate as the graph against float64."""
+    H, fp, fm, rng = _sky()
+    law = get_law("hybrid4")
+    ncol = {"generator_cols_moon": 3 + len(law.eps), "shape_cols_moon": law.n_col}.get(name, 1)
+    W = rng.normal(size=(H[0].size, ncol))
+    with pytest.MonkeyPatch.context() as mp:
+        v64, g64 = _public(name, H, fp, fm, W, mx.float64, False, mp)
+        v32, g32 = _public(name, H, fp, fm, W, mx.float32, False, mp)
+        vk, gk = _public(name, H, fp, fm, W, mx.float32, True, mp)
+    assert np.all(np.isfinite(vk)) and np.all(np.isfinite(gk))
+    assert not np.array_equal(vk, v32)                  # the kernels did run
+    assert np.abs(vk - v64).max() <= 2.0 * np.abs(v32 - v64).max()
+    e_k, e_32 = np.abs(gk - g64), np.abs(g32 - g64)
+    assert np.quantile(e_k, 0.999) <= 2.0 * np.quantile(e_32, 0.999)
+
+
+@pytest.mark.parametrize("name", ["flux_dev_moon", "flux_dev_moon_quad"])
+def test_the_public_sky_functions_for_a_planet_larger_than_its_star(name):
+    """The quadratic discs take the graph itself (the kernel's terms of
+    order r cancel in float32); the hybrid laws' kernel builds in the large
+    form."""
+    H, fp, fm, rng = _sky(seed=6, L=1500, big=True)
+    W = rng.normal(size=(H[0].size, 1))
+    with pytest.MonkeyPatch.context() as mp:
+        v64, _ = _public(name, H, fp, fm, W, mx.float64, False, mp, large=True)
+        v32, _ = _public(name, H, fp, fm, W, mx.float32, False, mp, large=True)
+        vk, gk = _public(name, H, fp, fm, W, mx.float32, True, mp, large=True)
+    assert np.all(np.isfinite(gk))
+    assert np.abs(vk - v64).max() <= 2.5 * np.abs(v32 - v64).max()

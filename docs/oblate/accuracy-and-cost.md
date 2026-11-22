@@ -38,8 +38,8 @@ A spherical planet's light curve is a closed form at each point. An
 oblate planet's also needs the roots of a quartic per point and per
 limb-darkening pole (and one more where the planet crosses the limb),
 which the GPU kernel seeds from the closed-form (Ferrari) solution and
-polishes. Fused float32 kernels, 512 chains × 5,000 points around a
-transit ([`benchmarks/bench_oblate.py`](https://github.com/davidkipping/elome/blob/main/benchmarks/bench_oblate.py), M2 Max):
+polishes. Fused float32 kernels, 512 chains × 5,000 points spaced evenly
+over ±0.14 d about mid-transit, about half of them in transit ([`benchmarks/bench_oblate.py`](https://github.com/davidkipping/elome/blob/main/benchmarks/bench_oblate.py), M2 Max):
 
 | | forward | vs spherical | value + gradient | vs spherical |
 |---|---:|---:|---:|---:|
@@ -79,7 +79,9 @@ The other public codes for oblate planets are
 
 The benchmark is the spherical one's transit with $f = 0.2$ at 30°, and
 the one limb-darkening profile all five codes express exactly,
-$I(\mu) = 1 - 0.5\,(1 - \mu^2)$ ([`benchmarks/oblate_compare/`](https://github.com/davidkipping/elome/tree/main/benchmarks/oblate_compare)):
+$I(\mu) = 1 - 0.5\,(1 - \mu^2)$ ([`benchmarks/oblate_compare/`](https://github.com/davidkipping/elome/tree/main/benchmarks/oblate_compare)).
+A light curve of $N$ points is $N$ times spaced evenly over 0.24 d
+centred on mid-transit, 52.7% of them in transit:
 
 | | Elómë float32 (GPU) | GreenLantern (GPU) | JoJo | squishyplanet | eclipsoid | Elómë float64 (CPU) |
 |---|---:|---:|---:|---:|---:|---:|
@@ -93,8 +95,12 @@ $I(\mu) = 1 - 0.5\,(1 - \mu^2)$ ([`benchmarks/oblate_compare/`](https://github.c
 | memory, $N = 10^7$ | 240 MB | 91 MB | 9.4 GB | 1.7 GB | 8.2 GB | 1.3 GB |
 | memory, 512 sets × $10^4$ | 91 MB | 16 MB | 49 MB | 691 MB | 4.3 GB | 946 MB |
 
-Every code is timed at every size and in every mode it supports.
-eclipsoid's largest error is near second and third contact; elsewhere
+Elómë's float32 kernel is the fastest at every size measured: 0.83 ms
+at $10^5$ points, about 30 times faster than the fastest other code
+(GreenLantern, also on the GPU), and 60 times faster for 512 light
+curves at once; below about $10^4$ points its time is mostly the GPU's
+fixed dispatch cost. Every code is timed at every size and in every mode
+it supports. eclipsoid's largest error is near second and third contact; elsewhere
 it is exact to rounding.
 
 Memory is the peak of the process's physical footprint (what Activity
@@ -106,8 +112,6 @@ attributes them to the process. Elómë's float64 path builds its graph
 in blocks of 262,144 evaluation points, which caps it near 1.3 GB at any
 length.
 
-Elómë's float32 kernel is the fastest at every size measured; below
-about $10^4$ points its time is mostly the GPU's fixed dispatch cost.
 The other codes cover what Elómë does not: the standard quadratic law
 (JoJo, GreenLantern, and squishyplanet and eclipsoid through their
 polynomial laws), polynomial laws of any order (squishyplanet,

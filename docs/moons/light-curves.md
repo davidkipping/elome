@@ -89,7 +89,9 @@ dq = flux_dev_moon_quad(xp, yp, xm, ym, 0.08, 0.03, 0.4, 0.25)      # quadratic
 
 `shape_cols_moon` returns the limb-darkening basis, so that
 $F - 1 = (B\,c)/(N\,c)$ with $c = (1, -w)$ and $N$ the star's norms
-(`elome.hybrid_norms`), as for every other planet.
+(`elome.hybrid_norms`), as for every other planet. In float32 on the GPU
+these functions run on the same Metal kernels as the light curves; in
+float64, the graph on the CPU.
 
 ## Exposures and kinks
 

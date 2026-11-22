@@ -67,6 +67,11 @@ cannot: batman integrates a custom law only once its C is rebuilt,
 pizzetti and jaxoplanet take sums of powers of $\mu$, and exoplanet-core
 the quadratic law. Each row names its law.
 
+A light curve of $N$ points is $N$ times spaced evenly over 0.24 d
+centred on mid-transit: the transit and its out-of-transit shoulders,
+with 52.5% of the points in transit (between first and fourth contact,
+0.126 d).
+
 Each code runs its own exact (or most accurate) mode, pizzetti its
 default, with its JIT compilation and half a second of warm-up calls
 outside the timed region (the warm-up brings the GPU to its working
@@ -100,7 +105,7 @@ of each row's own law, over 241 points:
 
 pizzetti with its series turned off is the exact solution everywhere.
 
-**One light curve**, median wall time:
+**One light curve** of $N$ points, median wall time:
 
 | code | $N = 10^3$ | $10^5$ | $10^6$ | $10^7$ |
 |---|---:|---:|---:|---:|
@@ -118,18 +123,22 @@ pizzetti with its series turned off is the exact solution everywhere.
 | [Elómë, float64 (CPU), quadratic]{.fallback} | 0.48 ms | 14.7 ms | 134 ms | 1.35 s |
 | [Elómë, float64 (CPU), hybrid2]{.fallback} | 0.30 ms | 6.81 ms | 79.5 ms | 666 ms |
 
-pizzetti is the fastest CPU code at every size, about four times as
-fast as batman on one thread and twice as fast as RoadRunner. Elómë's
-GPU path overtakes it at about $10^5$ points and is about five times
-faster from $10^6$ points up; below $10^5$ points the GPU's fixed dispatch cost
-dominates and the CPU codes are faster. Eccentric orbits, with each
-code's own Kepler solver inside the timed region, take Elómë's GPU path
-to 10.4 ms at $10^7$ points, against 46.2 ms for the fastest CPU code on
-one thread. hybrid2 costs Elómë less than the quadratic law, since none
-of its terms needs an elliptic integral, and RoadRunner the same, since
-it tabulates any law.
+Elómë's GPU path is the fastest code from about $10^5$ points up. At
+$10^7$ points it takes 9.5 ms, and 8.2 ms with hybrid2: five times
+faster than the fastest CPU code, pizzetti on one thread, and 10 to 20
+times faster than RoadRunner and batman on one thread. Eccentric orbits,
+with each code's own Kepler solver inside the timed region, take Elómë's
+GPU path to 10.4 ms at $10^7$ points, against 46.2 ms for the fastest CPU
+code on one thread. hybrid2 costs Elómë less than the quadratic law,
+since none of its terms needs an elliptic integral, and RoadRunner the
+same, since it tabulates any law.
 
-**Many light curves**, 512 parameter sets × $10^5$ points each:
+Below $10^5$ points the GPU's fixed cost of about 0.3 ms per call
+dominates, and the CPU codes are faster there; of those, pizzetti is the
+fastest at every size.
+
+**Many light curves**, 512 parameter sets × $10^5$ points each, over the
+same window:
 
 | code | wall time | light curves per second | memory |
 |---|---:|---:|---:|
@@ -143,14 +152,19 @@ it tabulates any law.
 | exoplanet-core (loop), quadratic | 1.54 s | 333 | 87 MB |
 | batman (loop), quadratic | 1.78 s | 288 | 247 MB |
 
-PyTransit's two models run their batches on all 12 threads.
+Elómë evaluates the 512 light curves in one call, in 6 to 10 ms: 52,000
+light curves per second under the quadratic law and 81,000 under
+hybrid2, 11 to 17 times the fastest CPU code (RoadRunner on 12 threads)
+and 45 to 70 times pizzetti. PyTransit's two models run their batches on
+all 12 threads.
 
 Elómë's throughput stays at about 50,000 light curves per second from
 256 to 4,096 sets, under the quadratic law.
 
-**Value and gradient** of a scalar loss on one light curve, in every
-parameter each code exposes (only Elómë and jaxoplanet are
-differentiable in every parameter):
+**Value and gradient** of a scalar loss on one light curve of $N$ points,
+in every parameter each code exposes. Only Elómë and jaxoplanet are
+differentiable in every parameter, and Elómë's GPU path takes about 1 ms
+for both laws, two to twelve times faster than jaxoplanet:
 
 | code | $N = 10^4$ | $N = 10^5$ |
 |---|---:|---:|
@@ -161,7 +175,7 @@ differentiable in every parameter):
 | [Elómë, float64 (CPU), hybrid2]{.fallback} | 3.98 ms | 22.8 ms |
 
 **Memory**, the peak of the process's physical footprint (what Activity
-Monitor shows) during one light curve, above its level after importing
+Monitor shows) during one light curve of $N$ points, above its level after importing
 the code: the call's working arrays and whatever the code keeps between
 calls, such as compiled code and memory pools. It counts CPU and GPU
 memory alike.

@@ -14,6 +14,17 @@ carries over from one to the next, on a quiet machine (no indexing or
 other load). Timings are medians over repeated calls, with compilation
 and warm-up outside the timed region.
 
+A light curve's **points** are its times, spaced evenly over a window
+centred on mid-transit that takes in the transit and its out-of-transit
+shoulders, so that about half of them fall in transit: 52.5% in the
+spherical comparison, 52.7% in the oblate one and 59.1% in the ringed
+one (0.24 d windows), and 48% in the kernel benchmarks of each planet's
+cost section and of {doc}`performance` (512 parameter sets × 5,000
+points over ±0.14 d). The sampler's chunked gradient on
+{doc}`performance` spreads 65,536 points over a whole orbit instead, 3.8%
+of them in transit, as a long-baseline light curve does. $N$ in a table
+is that number of points.
+
 Your numbers will differ with your machine. The ratios between codes on
 the same machine are what carry over: a Mac with more GPU cores (a Max or
 an Ultra) runs Elómë's float32 kernels faster, and the CPU codes scale

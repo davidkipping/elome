@@ -35,7 +35,7 @@ from .hybrid import _may_be_large, get_law
 from .metal_hybrid import _f, _hyb_header, _law_tag
 
 __all__ = ["available", "lens_cols_kernel", "lens_quad_kernel", "disc_cols_kernel",
-           "disc_quad_kernel"]
+           "disc_gen_kernel", "disc_quad_kernel"]
 
 
 def available(dtype) -> bool:
@@ -611,31 +611,57 @@ _DISC_VJP_SRC = """
 """
 
 
-def _disc_kernels(law, large):
-    key = ("moon-disc", law.definition, large)
+# the generator columns [mu^0, mu^2, mu^4, poles...] instead (``generator_cols_moon``)
+_GEN_SRC = """
+    uint i = thread_position_in_grid.x;
+    if (i >= (uint)npts) return;
+    float G[HYB_NGEN], Gz[HYB_NGEN], Gr[HYB_NGEN];
+    mp_hyb_gen(zin[i], rin[i], G, Gz, Gr);
+    for (int q = 0; q < HYB_NGEN; ++q) out[(uint)HYB_NGEN * i + (uint)q] = G[q];
+"""
+
+_GEN_VJP_SRC = """
+    uint i = thread_position_in_grid.x;
+    if (i >= (uint)npts) return;
+    float G[HYB_NGEN], Gz[HYB_NGEN], Gr[HYB_NGEN];
+    mp_hyb_gen(zin[i], rin[i], G, Gz, Gr);
+    float dz = 0.0f, dr = 0.0f;
+    for (int q = 0; q < HYB_NGEN; ++q) {
+        float c = ct[(uint)HYB_NGEN * i + (uint)q];
+        dz += c * Gz[q];
+        dr += c * Gr[q];
+    }
+    gz[i] = dz;
+    gr[i] = dr;
+"""
+
+
+def _disc_kernels(law, large, gen=False):
+    key = ("moon-disc", law.definition, large) + (("gen",) if gen else ())
     if key not in M._kernels:
         hdr = M._HEADER + _hyb_header(law, large)
-        tag = f"{_law_tag(law)}{'_large' if large else ''}"
+        tag = f"{_law_tag(law)}{'_large' if large else ''}{'_gen' if gen else ''}"
+        fwd, vjp = (_GEN_SRC, _GEN_VJP_SRC) if gen else (_DISC_SRC, _DISC_VJP_SRC)
         M._kernels[key] = (
             mx.fast.metal_kernel(name=f"mn_disc_{tag}", input_names=["zin", "rin", "npts"],
-                                 output_names=["out"], header=hdr, source=M._subst(_DISC_SRC)),
+                                 output_names=["out"], header=hdr, source=M._subst(fwd)),
             mx.fast.metal_kernel(name=f"mn_disc_vjp_{tag}",
                                  input_names=["zin", "rin", "ct", "npts"],
                                  output_names=["gz", "gr"], header=hdr,
-                                 source=M._subst(_DISC_VJP_SRC)))
+                                 source=M._subst(vjp)))
     return M._kernels[key]
 
 
-def _disc_core(law, large):
-    key = ("disc", law.definition, large)
+def _disc_core(law, large, gen=False):
+    key = ("disc", law.definition, large, gen)
     if key in _CORES:
         return _CORES[key]
-    ncol = law.n_col
+    ncol = 3 + len(law.eps) if gen else law.n_col
 
     @mx.custom_function
     def core(z, r):
         n = z.shape[0]
-        return _disc_kernels(law, large)[0](
+        return _disc_kernels(law, large, gen)[0](
             inputs=[z, r, n], output_shapes=[(n, ncol)], output_dtypes=[mx.float32],
             grid=(n, 1, 1), threadgroup=(256, 1, 1))[0]
 
@@ -643,7 +669,7 @@ def _disc_core(law, large):
         z, r = primals
         ct = cotangent if isinstance(cotangent, mx.array) else cotangent[0]
         n = z.shape[0]
-        return tuple(_disc_kernels(law, large)[1](
+        return tuple(_disc_kernels(law, large, gen)[1](
             inputs=[z, r, ct, n], output_shapes=[(n,), (n,)],
             output_dtypes=[mx.float32] * 2, grid=(n, 1, 1), threadgroup=(256, 1, 1)))
     core.vjp(_vjp)
@@ -651,18 +677,21 @@ def _disc_core(law, large):
     return core
 
 
-def disc_cols_kernel(z, r, law):
+def disc_cols_kernel(z, r, law, gen=False):
     """A disc's shape columns [E0, S_1..S_n] (deviation form) at separation z
     and radius r (broadcast), a list, by the fp32 kernel; under the caller's
-    large_occultors declaration, as ``hybrid.shape_cols``."""
+    large_occultors declaration, as ``hybrid.shape_cols``. ``gen``: the
+    generator columns [E0, E1, E2, P_k...] instead."""
     law = get_law(law)
     large = _may_be_large(r) is not False
-    z, r = (v if isinstance(v, mx.array) else mx.array(v, dtype=mx.float32) for v in (z, r))
-    shape = tuple(np.broadcast_shapes(z.shape, r.shape))
-    n = int(np.prod(shape)) if shape else 1
-    flat = lambda v: mx.reshape(mx.broadcast_to(v.astype(mx.float32), shape), (n,))  # noqa: E731
-    out = _disc_core(law, large)(flat(z), flat(r))
-    return [mx.reshape(out[:, c], shape) for c in range(law.n_col)]
+    vs, shape = _points((z, r))
+    out = _disc_core(law, large, gen)(*vs)
+    return [mx.reshape(out[:, c], shape) for c in range(out.shape[1])]
+
+
+def disc_gen_kernel(z, r, law):
+    """``disc_cols_kernel``'s generator columns."""
+    return disc_cols_kernel(z, r, law, gen=True)
 
 
 _QDISC_SRC = """

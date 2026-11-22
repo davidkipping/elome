@@ -5,7 +5,9 @@ configuration in its own process on a quiet machine. The scripts are in
 the repository's
 [`benchmarks/`](https://github.com/davidkipping/elome/tree/main/benchmarks)
 directory, each table names the one that produced it, and
-{doc}`benchmarks` says how to run them on your own machine.
+{doc}`benchmarks` says how to run them on your own machine. A light
+curve's points are its times, about half of them in transit unless a
+table says otherwise (see {doc}`benchmarks`).
 
 ## Against other codes
 
@@ -39,7 +41,9 @@ to rounding.
 Of the spherical codes only Elómë and jaxoplanet are differentiable in
 every parameter (exoplanet-core has gradients in $b$ and $r$), and
 Elómë's gradients are analytic, fused into Metal kernels. For the gradient of a chunked
-log-likelihood at 1024 chains × 65,536 points, compiled, in float32
+log-likelihood at 1024 chains × 65,536 points, spread over a whole orbit
+(3.8% of them in transit, as in a long-baseline light curve), compiled,
+in float32
 ([`benchmarks/bench_vjp.py`](https://github.com/davidkipping/elome/blob/main/benchmarks/bench_vjp.py), which records them in [`benchmarks/vjp.json`](https://github.com/davidkipping/elome/blob/main/benchmarks/vjp.json)):
 
 | | forward | value + gradient |

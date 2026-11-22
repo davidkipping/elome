@@ -14,7 +14,8 @@ CPU. Both run through [MLX](https://github.com/ml-explore/mlx).
   integral to $2\times10^{-16}$.
 - **Fast.** A light curve of $10^7$ points in about 10 ms on the GPU, and
   about 50,000 light curves of $10^5$ points each per second when
-  parameter sets are batched.
+  parameter sets are batched (points spread evenly over a transit and its
+  shoulders, about half of them in transit).
 - **Differentiable.** Every parameter, including the limb darkening,
   the eccentricity and the planet's shape, has an analytic gradient.
 - **Built for Apple silicon, runs on Linux too.** The fused float32

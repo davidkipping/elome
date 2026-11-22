@@ -59,8 +59,8 @@ the contact rule an exposure also pays for its event search, and up to
 seven pieces of `n_gl` nodes each; most exposures need only one or two,
 and only the nodes of non-empty pieces are evaluated.
 
-Fused float32 kernels, 512 parameter sets × 5,000 points around a
-transit, `hybrid4`, spots of 6–12°, two of them on the transit chord, on
+Fused float32 kernels, 512 parameter sets × 5,000 points spaced evenly
+over ±0.14 d about mid-transit (about half of them in transit), `hybrid4`, spots of 6–12°, two of them on the transit chord, on
 a star turning in 12 days, against the same transit with no spots
 ([`benchmarks/bench_spots.py`](https://github.com/davidkipping/elome/blob/main/benchmarks/bench_spots.py), M2 Max):
 

@@ -722,11 +722,14 @@ def _both_front(front_p, front_m):
     return front_p if front_m is None else front_p & front_m
 
 
-def _large(rp, large):
-    if large is not None:
-        return bool(large)
-    flag = _may_be_large(rp)
-    return flag is None or bool(flag)
+def _within_star(r):
+    """Whether radii r are known on the host to be at most 1 (False where
+    they cannot be read: under mx.compile or vmap)."""
+    try:
+        return bool(np.max(np.asarray(_sg(r) if isinstance(r, mx.array) else r,
+                                      np.float64)) <= 1.0)
+    except (RuntimeError, ValueError):
+        return False
 
 
 @fp64_on_cpu(any_arg=True)
@@ -743,12 +746,15 @@ def generator_cols_moon(xp, yp, xm, ym, rp, rs, law, front_p=None, front_m=None,
     yp, xm, ym, rp, rs = (_cast(v, dt) for v in (yp, xm, ym, rp, rs))
     zero = 0.0 * (xp + yp + xm + ym + rp + rs)
     xp, yp, xm, ym, rp, rs = (v + zero for v in (xp, yp, xm, ym, rp, rs))
+    mm = _metal(dt)
     with declared(large_occultor):
-        cols = lambda z, r: _generator_terms(lens_geometry(z, r), law)[0]  # noqa: E731
+        if mm is not None:
+            cols = lambda z, r: mm.disc_gen_kernel(z, r, law)                # noqa: E731
+        else:
+            cols = lambda z, r: _generator_terms(lens_geometry(z, r), law)[0]  # noqa: E731
         gp = _disc(cols, xp, yp, rp, front_p)
         gm = _disc(cols, xm, ym, rs, front_m)
-        large = _large(rp, large_occultor)
-    lens = _lens_cols([(xp, yp, rp), (xm, ym, rs)], law.eps, dt)
+    lens = _lens_any(xp, yp, rp, xm, ym, rs, law.eps)
     both = _both_front(front_p, front_m)
     if both is not None:
         lens = [mx.where(both, c, 0.0) for c in lens]
@@ -860,10 +866,18 @@ def flux_dev_moon_quad(xp, yp, xm, ym, rp, rs, u1, u2, front_p=None,
     yp, xm, ym, rp, rs = (_cast(v, dt) for v in (yp, xm, ym, rp, rs))
     zero = 0.0 * (xp + yp + xm + ym + rp + rs)
     xp, yp, xm, ym, rp, rs = (v + zero for v in (xp, yp, xm, ym, rp, rs))
-    quad = lambda z, r: flux_dev(z, r, u1, u2)                      # noqa: E731
+    mm = _metal(dt)
+    # a disc that may exceed the star takes the graph (as disc_flux_quad)
+    if mm is not None and _within_star(rp) and _within_star(rs):
+        quad = lambda z, r: mm.disc_quad_kernel(z, r, u1, u2)       # noqa: E731
+    else:
+        quad = lambda z, r: flux_dev(z, r, u1, u2)                  # noqa: E731
     dev = _disc(quad, xp, yp, rp, front_p) + _disc(quad, xm, ym, rs, front_m)
-    m0, m2, m4 = _lens_cols([(xp, yp, rp), (xm, ym, rs)], (), dt)
-    mu1 = _lens_mu1(m0, m2, m4, xp, yp, rp, xm, ym, rs, dt)
+    if mm is not None:
+        m0, m2, mu1 = mm.lens_quad_kernel(xp, yp, rp, xm, ym, rs)
+    else:
+        m0, m2, m4 = _lens_cols([(xp, yp, rp), (xm, ym, rs)], (), dt)
+        mu1 = _lens_mu1(m0, m2, m4, xp, yp, rp, xm, ym, rs, dt)
     occ = (1.0 - u1 - u2) * m0 + (u1 + 2.0 * u2) * mu1 - u2 * m2
     both = _both_front(front_p, front_m)
     if both is not None:

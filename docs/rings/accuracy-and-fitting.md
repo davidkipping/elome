@@ -42,7 +42,8 @@ Measured on an Apple M2 Max; each table names the script that produced it, and {
 Every outline -- the planet and both ring edges -- is integrated, and
 each splits into arcs where it crosses the others, so a ringed planet
 costs about 10–20 times an oblate one. Fused float32 kernels, 512 chains
-× 5,000 points around a transit, a spherical planet with a ring
+× 5,000 points spaced evenly over ±0.14 d about mid-transit (about half
+of them in transit), a spherical planet with a ring
 ([`benchmarks/bench_rings.py`](https://github.com/davidkipping/elome/blob/main/benchmarks/bench_rings.py), M2 Max):
 
 | | forward | vs oblate | value + gradient | vs oblate |
@@ -84,7 +85,9 @@ with a ring from 1.4 to 2.6 planet radii, `ring_f = 0.7` and its long
 axis at 25° to the motion, so the ring crosses the planet's disc; and
 the one limb-darkening profile every code expresses exactly,
 $I(\mu) = 1 - 0.5\,(1 - \mu^2)$. The reference is an independent float64
-ray integral ([`benchmarks/ring_compare/`](https://github.com/davidkipping/elome/tree/main/benchmarks/ring_compare)):
+ray integral ([`benchmarks/ring_compare/`](https://github.com/davidkipping/elome/tree/main/benchmarks/ring_compare)).
+A light curve of $N$ points is $N$ times spaced evenly over 0.24 d
+centred on mid-transit, 59.1% of them in transit:
 
 | | Elómë float32 (GPU) | pyPplusS | squishyplanet | JoJo | pryngles | Elómë float64 (CPU) |
 |---|---:|---:|---:|---:|---:|---:|
@@ -99,8 +102,11 @@ ray integral ([`benchmarks/ring_compare/`](https://github.com/davidkipping/elome
 | memory, $N = 10^5$ | 13 MB | 111 MB | 255 MB | 125 MB | 75 MB | 1.1 GB |
 | memory, $N = 10^6$ | 34 MB | | 548 MB | 26 GB | | 1.6 GB |
 
-The batches of the slower codes were timed on 8 to 32 sets and scaled to
-512. pyPplusS is shown at its default order; at order 20 its error is
+Elómë's float32 kernel is the fastest at every size measured, by a
+thousand times or more: 4.0 ms at $10^5$ points against 4.1 s for the fastest
+other code (squishyplanet), and 0.21 s for 512 light curves against
+about 350 s (JoJo). The batches of the slower codes were timed on 8 to
+32 sets and scaled to 512. pyPplusS is shown at its default order; at order 20 its error is
 $4\times10^{-10}$ to $1\times10^{-9}$ and it takes about 3.5 times as
 long. pryngles samples 5,000 points on the planet and 5,000 on the ring.
 Memory is measured as for oblate planets (see

@@ -62,7 +62,8 @@ sees the next one; wrap times that may stray with
 The exposure rule runs per output point in registers, so the
 sub-exposure axis never becomes an array. Expanding it instead multiplies
 every intermediate and every gradient array by the number of
-sub-exposures. At 512 chains × 5,000 points with 15 sub-exposures
+sub-exposures. At 512 chains × 5,000 points (spaced evenly over ±0.14 d
+about mid-transit, about half of them in transit) with 15 sub-exposures
 ([`benchmarks/bench_tau_kernel.py`](https://github.com/davidkipping/elome/blob/main/benchmarks/bench_tau_kernel.py), M2 Max), against computing the
 separations, evaluating the kernel and averaging outside it:
 
