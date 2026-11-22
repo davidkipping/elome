@@ -105,8 +105,10 @@ The moon moves between transits, so these differ from transit to
 transit. The contact rule ({doc}`../guides/exposures`) finds them in
 each exposure. It samples eight smooth event functions, one per kind of
 contact, across the exposure, and bisects every change of sign. It then
-splits the exposure at the earliest six events and integrates each piece
-by Gauss–Legendre.
+splits the exposure at the earliest eight events and integrates each piece
+by Gauss–Legendre. A corner's event counts only while the discs have
+corners: apart, the point where their corners would merge can cross the
+limb without making a kink.
 
 The sampling step is a quarter of the smaller body's radius at the
 fastest sky speed: the barycentre's at periastron plus the moon's about

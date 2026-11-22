@@ -758,6 +758,8 @@ class TransitModel:
                                  "when a model with a moon is built")
             return float(v)
         t0, per, mper = host("t0"), host("per"), host("moon_per")
+        if not (math.isfinite(mper) and mper > 0.0):
+            raise ValueError("params.moon_per must be finite and > 0")
         ep = epoch_center_times(self._t_super, t0, per)
         return t0, per, mper, ep[0], ep[1], moon_turns_ref(ep[1], per, mper)
 
@@ -1845,7 +1847,7 @@ class TransitModel:
 
     def _moon_eval(self, params, uv, cast, rad, is_arr):
         """light_curve / light_curve_mx for a planet with a moon."""
-        from .moons import anchored_constants, check_moon, moon_orbit
+        from .moons import _check_moon_orbit, anchored_constants, check_moon, moon_orbit
         from .moons_tau import flux_dev_moon_t, sample_count
         dt = self.dtype
         traced = _check_geometry(params, self._geom_rules)
@@ -1870,6 +1872,10 @@ class TransitModel:
                                             "moon_q", "moon_ecc", "moon_per")}
         if hv["ecc"] is not None:
             _check_ecc(hv["ecc"], False)
+        angles = [x for x in (host(get(n, params.inc if n == "moon_inc" else 0.0))
+                              for n in ("moon_inc", "moon_node", "moon_phase", "moon_w"))
+                  if x is not None]
+        _check_moon_orbit(1.0 if hv["moon_per"] is None else hv["moon_per"], angles)
         if None not in (hv["moon_r"], hv["moon_a"], hv["moon_q"], hv["moon_ecc"]):
             check_moon(hv["moon_r"], hv["moon_a"], hv["moon_q"], hv["moon_ecc"])
         rp, per, a = cast(params.rp), cast(params.per), cast(params.a)
@@ -1913,7 +1919,9 @@ class TransitModel:
         from .moons_tau import flux_dev_moon_t, sample_count
         dt = self.dtype
         t0r, perr, mperr, d_np, k_np, turns = self._moon_ref
-        check_moon(cols["moon_r"], cols["moon_a"], cols["moon_q"], cols["moon_ecc"])
+        check_moon(cols["moon_r"], cols["moon_a"], cols["moon_q"], cols["moon_ecc"],
+                   cols["moon_per"], [cols[k] for k in ("moon_inc", "moon_node",
+                                                        "moon_phase", "moon_w")])
         n = cols["t0"].size
 
         def c(x):

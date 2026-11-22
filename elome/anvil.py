@@ -402,6 +402,9 @@ def make_moon_transit_flux(period_ref: float, moon_period_ref: float,
     ``make_hybrid_transit_flux``'s.
     """
     period_ref, moon_period_ref = float(period_ref), float(moon_period_ref)
+    if not (math.isfinite(period_ref) and math.isfinite(moon_period_ref)
+            and period_ref > 0.0 and moon_period_ref > 0.0):
+        raise ValueError("period_ref and moon_period_ref must be finite and > 0")
     if limb_dark != "quadratic" and limb_dark not in _HYBRID_LAWS:
         raise ValueError(f"limb_dark must be 'quadratic' or one of "
                          f"{_HYBRID_LAWS}; got {limb_dark!r}")

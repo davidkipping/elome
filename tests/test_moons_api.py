@@ -113,6 +113,47 @@ def test_the_contact_rule_against_a_converged_quadrature(law):
     assert np.abs(m7.light_curve(p) - R).max() > 100 * errs[1]
 
 
+def test_seven_kinks_in_one_exposure():
+    """A large, fast moon whose exposures each hold up to seven kinks (both
+    discs' limb contacts, the discs' inner contact, both corners crossing
+    the limb): every one is a split point, and a merged corner crossing the
+    limb takes none (with six splits these were 4.9e-6 off)."""
+    p = system(HYB, ecc=0.0, moon_ecc=0.0, t0=0.0, per=3.0, a=15.0, rp=0.1, inc=89.0,
+               moon_a=3.0, moon_r=0.6, moon_per=0.4, moon_q=0.0, moon_inc=89.5,
+               moon_node=5.0, moon_phase=200.0)
+    t = np.array([-0.036, -0.032, -0.028, -0.004])
+    R = midpoint(p, t, n=4000)
+    F = elome.TransitModel(p, t, exp_time=EXP, integration="contact").light_curve(p)
+    assert np.abs(F - R).max() < 5e-8                      # measured 2.6e-8
+
+
+@pytest.mark.parametrize("law", [HYB, QUAD])
+@pytest.mark.parametrize("dtype", [mx.float64, mx.float32], ids=["fp64", "fp32"])
+@pytest.mark.parametrize("contact", [False, True])
+def test_a_moon_of_zero_size_has_finite_gradients(law, dtype, contact):
+    """moon_r = 0 (the prior's edge) and below float32's range: the discs'
+    closed forms have 0/0 derivatives at r = 0, which such a moon never
+    reaches. Its flux's derivative in moon_r vanishes there."""
+    p = system(law, moon_phase=0.0)                # in front of the planet at t0
+    t = windows(p, epochs=(0,), step=EXP)
+    kw = dict(exp_time=EXP, integration="contact", n_gl=5) if contact else {}
+    m = elome.TransitModel(p, t, dtype=dtype, **kw)
+    names = ["moon_r", "moon_a", "moon_phase", "rp"]
+
+    def loss(*vals):
+        q = copy.copy(p)
+        for n, v in zip(names, vals):
+            setattr(q, n, v)
+        return mx.sum(m.light_curve_mx(q))
+    for r0 in (0.0, 1e-32):
+        x0 = [mx.array(v, dtype=dtype) for v in (r0, p.moon_a, p.moon_phase, p.rp)]
+        with mx.stream(mx.cpu if dtype == mx.float64 else mx.gpu):
+            g = [v.item() for v in mx.grad(loss, argnums=(0, 1, 2, 3))(*x0)]
+        assert np.all(np.isfinite(g)), (r0, g)
+        if not contact:                            # to rounding (the lens's columns)
+            assert abs(g[0]) < 1e-8
+
+
 def test_supersampling_averages_the_instantaneous_curve():
     p = system()
     t = windows(p, step=EXP)
@@ -198,6 +239,18 @@ def test_evaluation_checks():
         m.light_curve(q)
     with pytest.raises(ValueError, match="outside the planet"):
         m.light_curves([p, system(moon_a=1.2)])
+    for change, msg in [(dict(moon_per=0.0), "moon_per must be > 0"),
+                        (dict(moon_per=-0.9), "moon_per must be > 0"),
+                        (dict(moon_per=np.nan), "finite"), (dict(moon_node=np.inf), "finite"),
+                        (dict(moon_phase=np.nan), "finite"), (dict(moon_w=np.nan), "finite"),
+                        (dict(moon_inc=np.nan), "finite")]:
+        with pytest.raises(ValueError, match=msg):
+            m.light_curve(system(**change))
+        with pytest.raises(ValueError, match=msg):
+            m.light_curves([p, system(**change)])
+    for bad in (0.0, -0.9, np.nan):
+        with pytest.raises(ValueError, match="moon_per must be finite and > 0"):
+            elome.TransitModel(system(moon_per=bad), t)
 
 
 def sets(law):

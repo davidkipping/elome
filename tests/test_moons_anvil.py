@@ -180,6 +180,37 @@ def test_finite_across_the_prior_box(law):
     assert np.isfinite(float(lp)) and np.all(np.isfinite(np.array(g)))
 
 
+@pytest.mark.parametrize("law", ["quadratic", "hybrid4"])
+@pytest.mark.parametrize("exp_time", [0.0, EXP], ids=["none", "contact"])
+def test_moon_r_zero_at_the_box_edge(law, exp_time):
+    """moon_r = 0, the box's edge (and below float32's range): finite
+    gradients for every chain in either precision."""
+    from elome.anvil import make_moon_transit_flux
+    from elome.moons import moon_turns_ref
+    from elome.orbit import epoch_center_times
+    per, mper = 12.345, 0.9
+    ep = epoch_center_times(np.linspace(-0.3, 0.3, 40), 0.0, per)
+    x = np.vstack([ep[0], ep[1], moon_turns_ref(ep[1], per, mper)])
+    fn = make_moon_transit_flux(per, mper, law, exp_time=exp_time)
+    vals = dict(t0_off=0.0, p_off=0.0, r=0.08, b=0.2, a=25.0, moon_r=0.0, moon_a=6.0,
+                moon_p_off=0.0, moon_q=0.02, cos_moon_inc=0.05, moon_node=10.0,
+                moon_phase=0.0, df0=1.0)
+    names = transit_param_names(law, moon=True)
+    V = np.array([[vals.get(n, 0.3) for n in names]] * 2)
+    V[1, names.index("moon_r")] = 1e-32
+    for dt, st in ((mx.float64, mx.cpu), (mx.float32, mx.gpu)):
+        with mx.stream(st):
+            g = mx.grad(lambda th: mx.sum(fn(th, mx.array(x, dtype=dt))))(mx.array(V, dtype=dt))
+        assert np.all(np.isfinite(np.array(g))), dt
+
+
+def test_reference_periods_are_checked():
+    from elome.anvil import make_moon_transit_flux
+    for per, mper in ((10.0, 0.0), (10.0, -1.0), (10.0, np.nan), (0.0, 1.0)):
+        with pytest.raises(ValueError, match="finite and > 0"):
+            make_moon_transit_flux(per, mper)
+
+
 @pytest.mark.slow
 def test_chees_smoke_with_a_moon():
     """A short ChEES-HMC run, uncompiled as the target asks: no divergences,

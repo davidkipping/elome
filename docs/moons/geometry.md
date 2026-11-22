@@ -108,7 +108,7 @@ the planet's radius, so the moon's radius and orbit scale with it.
 ## The domain
 
 - `moon_r` $\ge 0$ and `moon_q` $\ge 0$;
-- $0 \le$ `moon_ecc` $< 1$;
+- $0 \le$ `moon_ecc` $< 1$ and `moon_per` $> 0$;
 - the moon clears the planet at periastron:
   `moon_a` $(1 -$ `moon_ecc`$) > 1 +$ `moon_r`;
 - every value finite.

@@ -114,7 +114,12 @@ def _sqrt_any(x):
 def moon_turns_ref(k, per_ref, moon_per_ref) -> np.ndarray:
     """Float64 host preprocessing: k P_ref / P_m,ref reduced to [-1/2, 1/2)
     turns, for orbit numbers k (``orbit.epoch_center_times``' second row)."""
-    x = np.asarray(k, np.float64) * (float(per_ref) / float(moon_per_ref))
+    per_ref, moon_per_ref = float(per_ref), float(moon_per_ref)
+    if not (math.isfinite(per_ref) and math.isfinite(moon_per_ref) and per_ref > 0.0
+            and moon_per_ref > 0.0):
+        raise ValueError("the reference periods (per, moon_per) must be finite "
+                         "and > 0")
+    x = np.asarray(k, np.float64) * (per_ref / moon_per_ref)
     return x - np.floor(x + 0.5)
 
 
@@ -246,9 +251,23 @@ def moon_period(moon_a, rho_p, q=0.0):
     return np.sqrt(moon_a ** 3 / (_G3PI * rho_p * (1.0 + q)))
 
 
-def check_moon(moon_r, moon_a, moon_q, moon_ecc=0.0):
+def _check_moon_orbit(moon_per, angles=()):
+    """Host-value checks of the moon's period (finite, > 0) and of its
+    angles (finite), for routes where the other moon fields are not host
+    values."""
+    per = np.asarray(moon_per, np.float64)
+    if not all(np.all(np.isfinite(np.asarray(x, np.float64))) for x in [per, *angles]):
+        raise ValueError("moon parameters must be finite")
+    if np.any(per <= 0.0):
+        raise ValueError("moon_per must be > 0")
+
+
+def check_moon(moon_r, moon_a, moon_q, moon_ecc=0.0, moon_per=1.0, angles=()):
     """Host-value checks. moon_r and moon_a are in planet radii: the moon
-    must lie outside the planet at periastron, moon_a (1 - e) > 1 + moon_r."""
+    must lie outside the planet at periastron, moon_a (1 - e) > 1 + moon_r;
+    moon_per > 0; ``angles`` (the moon's inclination, node, phase and
+    argument of periastron) finite."""
+    _check_moon_orbit(moon_per, angles)
     vals = [np.asarray(v, np.float64) for v in (moon_r, moon_a, moon_q, moon_ecc)]
     r, a, q, e = vals
     if not all(np.all(np.isfinite(v)) for v in vals):
@@ -584,6 +603,24 @@ def _separation(x, y, r, front):
     return z if front is None else mx.where(front, z, z + 2.0 + r)
 
 
+def _disc(fn, x, y, r, front):
+    """fn(z, r) for one disc (a list of columns or one array), 0 where r^2
+    underflows -- a moon of zero size. Its flux and the flux's derivative
+    in r both vanish there, while the closed forms' derivatives at r = 0
+    are 0/0 off the star, so those lanes take a stand-in radius."""
+    dt = x.dtype
+    if not isinstance(r, mx.array):
+        if r * r > _TINY[dt]:
+            return fn(_separation(x, y, r, front), r)
+        r = mx.array(float(r), dtype=dt)
+    ok = r * r > _TINY[dt]
+    rr = mx.where(ok, r, 0.1)
+    out = fn(_separation(x, y, rr, front), rr)
+    if isinstance(out, mx.array):
+        return mx.where(ok, out, 0.0)
+    return [mx.where(ok, c, 0.0) for c in out]
+
+
 def _both_front(front_p, front_m):
     if front_p is None:
         return front_m
@@ -611,8 +648,9 @@ def generator_cols_moon(xp, yp, xm, ym, rp, rs, law, front_p=None, front_m=None,
     zero = 0.0 * (xp + yp + xm + ym + rp + rs)
     xp, yp, xm, ym, rp, rs = (v + zero for v in (xp, yp, xm, ym, rp, rs))
     with declared(large_occultor):
-        gp = _generator_terms(lens_geometry(_separation(xp, yp, rp, front_p), rp), law)[0]
-        gm = _generator_terms(lens_geometry(_separation(xm, ym, rs, front_m), rs), law)[0]
+        cols = lambda z, r: _generator_terms(lens_geometry(z, r), law)[0]  # noqa: E731
+        gp = _disc(cols, xp, yp, rp, front_p)
+        gm = _disc(cols, xm, ym, rs, front_m)
         large = _large(rp, large_occultor)
     lens = _lens_cols([(xp, yp, rp), (xm, ym, rs)], law.eps, dt)
     both = _both_front(front_p, front_m)
@@ -695,8 +733,8 @@ def flux_dev_moon_quad(xp, yp, xm, ym, rp, rs, u1, u2, front_p=None,
     yp, xm, ym, rp, rs = (_cast(v, dt) for v in (yp, xm, ym, rp, rs))
     zero = 0.0 * (xp + yp + xm + ym + rp + rs)
     xp, yp, xm, ym, rp, rs = (v + zero for v in (xp, yp, xm, ym, rp, rs))
-    dev = (flux_dev(_separation(xp, yp, rp, front_p), rp, u1, u2)
-           + flux_dev(_separation(xm, ym, rs, front_m), rs, u1, u2))
+    quad = lambda z, r: flux_dev(z, r, u1, u2)                      # noqa: E731
+    dev = _disc(quad, xp, yp, rp, front_p) + _disc(quad, xm, ym, rs, front_m)
     m0, m2, m4 = _lens_cols([(xp, yp, rp), (xm, ym, rs)], (), dt)
     occ = (1.0 - u1 - u2) * m0 + (u1 + 2.0 * u2) * _lens_mu(m0, m2, m4, dt) - u2 * m2
     both = _both_front(front_p, front_m)
@@ -717,7 +755,8 @@ def _shape_of(gen, law):
 def disc_shape_cols(x, y, r, law, front=None):
     """One disc's shape columns (deviation form), under the caller's
     large_occultors declaration."""
-    return _shape_of(_generator_terms(lens_geometry(_separation(x, y, r, front), r), law)[0], law)
+    return _shape_of(_disc(lambda z, r_: _generator_terms(lens_geometry(z, r_), law)[0],
+                           x, y, r, front), law)
 
 
 def lens_shape_cols(xp, yp, rp, xm, ym, rs, law):
@@ -728,7 +767,7 @@ def lens_shape_cols(xp, yp, rp, xm, ym, rs, law):
 
 def disc_flux_quad(x, y, r, u1, u2, front=None):
     """One disc's F - 1, quadratic law."""
-    return flux_dev(_separation(x, y, r, front), r, u1, u2)
+    return _disc(lambda z, r_: flux_dev(z, r_, u1, u2), x, y, r, front)
 
 
 def lens_flux_quad(xp, yp, rp, xm, ym, rs, u1, u2):

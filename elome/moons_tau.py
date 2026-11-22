@@ -47,7 +47,7 @@ from .hybrid import combine_cols, declared
 __all__ = ["flux_dev_moon_t", "sample_count"]
 
 _TWO_PI = 2.0 * math.pi
-_K_SPLIT = 6                                       # split points per exposure
+_K_SPLIT = 8                                       # split points per exposure
 _S_MIN, _S_MAX = 4, 256                            # event samples per exposure
 _N_BISECT = {mx.float64: 30, mx.float32: 16}
 _BLOCK = 1 << 14                                   # evaluation nodes per block
@@ -94,14 +94,15 @@ def _frozen(P):
 
 
 def _event_g(pos, P, dtype):
-    """g(delta, k, turns, dt) -> (..., 8): the event functions, whose sign
+    """g(delta, k, turns, dt) -> (..., 9): the event functions, whose sign
     changes are the kinks: z_p^2 - (1 +- rp)^2, z_m^2 - (1 +- rs)^2,
-    d^2 - (rp +- rs)^2 and |c|^2 - 1 for the discs' two corners c. Each is
-    continuous in time -- without corners, c is the point on the line of
+    d^2 - (rp +- rs)^2 and |c|^2 - 1 for the discs' two corners c, then
+    h^2, positive where the corners exist (no event function itself). Each
+    is continuous in time -- without corners, c is the point on the line of
     centres the corners merge at -- so every root found moves with the
-    parameters as ``_live`` takes it to; a root that is no kink (the discs
-    touching off the star, a merged point crossing the limb) only splits a
-    smooth stretch."""
+    parameters as ``_live`` takes it to. A root of c where there are no
+    corners is no kink, and ``_events`` drops it; another that is no kink
+    (the discs touching off the star) only splits a smooth stretch."""
     rp, rs = P["rp"], P["rs"]
     tiny = 1e-300 if dtype == mx.float64 else 1e-30
 
@@ -120,7 +121,7 @@ def _event_g(pos, P, dtype):
         c2 = (bx + hh * dy / D) ** 2 + (by - hh * dx / D) ** 2 - 1.0
         gs = [zp2 - (1.0 + rp) ** 2, zp2 - (1.0 - rp) ** 2,
               zm2 - (1.0 + rs) ** 2, zm2 - (1.0 - rs) ** 2,
-              d2 - (rp + rs) ** 2, d2 - (rp - rs) ** 2, c1, c2]
+              d2 - (rp + rs) ** 2, d2 - (rp - rs) ** 2, c1, c2, hh2]
         return mx.stack(gs, axis=-1)
     return g
 
@@ -133,8 +134,13 @@ def _events(g, dt, k, turns, hw, n_sample, dtype):
     hw2 = hw[:, None]
     deltas = -hw2 + 2.0 * hw2 * j[None, :]                         # (m, J + 1)
     e = lambda v: v[:, None]
-    G = g(deltas, e(k), e(turns), e(dt))                            # (m, J + 1, 8)
-    change = (G[:, :-1, :] > 0.0) != (G[:, 1:, :] > 0.0)            # (m, J, 8)
+    G = g(deltas, e(k), e(turns), e(dt))                            # (m, J + 1, 9)
+    S = G[..., :8] > 0.0
+    change = S[:, :-1] != S[:, 1:]                                  # (m, J, 8)
+    # the corners' functions only where there are corners at either end: a
+    # sign change of the merged point (the same in both) is no kink
+    corners = (G[:, :-1, 8:] > 0.0) | (G[:, 1:, 8:] > 0.0)
+    change = mx.concatenate([change[..., :6], change[..., 6:] & corners], axis=-1)
     m, J, F = change.shape
     key = mx.where(change, mx.arange(J * F, dtype=mx.int32).reshape(1, J, F), J * F)
     key = mx.sort(key.reshape(m, J * F), axis=-1)[:, :_K_SPLIT]
