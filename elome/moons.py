@@ -80,7 +80,7 @@ from .anchored import _one_minus_cos, anchor_constants_ew, solve_sincos_delta
 from .dtypes import fp64_on_cpu
 from .flux import flux_dev
 from .hybrid import (_combine, _generator_terms, _may_be_large, combine_cols, declared,
-                     get_law, lens_geometry)
+                     even_cols, get_law, lens_geometry)
 from .rings import _SAMPLES, _TINY, _decisive
 from .trig import sincos
 
@@ -133,9 +133,68 @@ def moon_phase(tau, k, turns_ref, per_ref, moon_per_ref, p_off, m_off, phase):
     from the references; phase: the moon's phase at t0 [radians]."""
     moon_per = moon_per_ref + m_off
     d_ratio = (p_off * moon_per_ref - per_ref * m_off) / (moon_per * moon_per_ref)
-    turns = turns_ref + k * d_ratio + tau / moon_per
+    kd = k * d_ratio
+    if tau.dtype == mx.float32:
+        # k d_ratio runs to hundreds of turns when the periods are offset,
+        # and float32's rounding of d_ratio with it: reduced to a turn
+        # before it is added, its value taken in float-float arithmetic,
+        # its gradient the plain product's
+        kd = kd - mx.round(kd)
+        corr = _sg(_k_d_ratio(k, per_ref, moon_per_ref, p_off, m_off) - kd)
+        kd = kd + (corr - mx.round(corr))
+    turns = turns_ref + kd + tau / moon_per
     turns = turns - mx.round(turns)
     return _TWO_PI * turns + phase
+
+
+def _two_sum(a, b):
+    s = a + b
+    bb = s - a
+    return s, (a - (s - bb)) + (b - bb)
+
+
+def _split(a):
+    c = 4097.0 * a                                 # 2^12 + 1: float32's halves
+    hi = c - (c - a)
+    return hi, a - hi
+
+
+def _two_prod(a, b):
+    p = a * b
+    (ah, al), (bh, bl) = _split(a), _split(b)
+    return p, ((ah * bh - p) + ah * bl + al * bh) + al * bl
+
+
+def _k_d_ratio(k, per_ref, moon_per_ref, p_off, m_off):
+    """k d_ratio reduced to [-1/2, 1/2) turns plus its remainder, in
+    float32 float-float arithmetic (error-free sums and Dekker's products,
+    each a separate operation: not for a fused or compiled graph), with the
+    host references split into float32 pairs: d_ratio = (p_off P_m,ref -
+    P_ref m_off) / ((P_m,ref + m_off) P_m,ref) to ~1e-14."""
+    f32 = lambda v: v.astype(mx.float32) if isinstance(v, mx.array) \
+        else mx.array(float(v), dtype=mx.float32)                  # noqa: E731
+    k, p_off, m_off = f32(k), f32(p_off), f32(m_off)
+    zero = 0.0 * (k + p_off + m_off)
+    k, p_off, m_off = k + zero, p_off + zero, m_off + zero
+    pair = lambda x: (np.float32(x), np.float32(x - float(np.float32(x))))  # noqa: E731
+    (ph, pl), (qh, ql) = pair(per_ref), pair(moon_per_ref)
+    c = lambda v: mx.full(zero.shape, float(v), dtype=mx.float32)  # noqa: E731
+    a_hi, a_lo = _two_prod(p_off, c(qh))
+    a_lo = a_lo + p_off * c(ql)
+    b_hi, b_lo = _two_prod(c(ph), m_off)
+    b_lo = b_lo + c(pl) * m_off
+    n_hi, n_lo = _two_sum(a_hi, -b_hi)
+    n_hi, n_lo = _two_sum(n_hi, n_lo + (a_lo - b_lo))
+    m_hi, m_lo = _two_sum(c(qh), m_off)
+    m_lo = m_lo + c(ql)
+    d_hi, d_lo = _two_prod(m_hi, c(qh))
+    d_lo = d_lo + (m_hi * c(ql) + m_lo * c(qh))
+    q1 = n_hi / d_hi
+    r_hi, r_lo = _two_prod(q1, d_hi)
+    q2 = (((n_hi - r_hi) - r_lo) + n_lo - q1 * d_lo) / d_hi
+    t_hi, t_lo = _two_prod(k, q1)
+    t_lo = t_lo + k * q2
+    return (t_hi - mx.round(t_hi)) + t_lo
 
 
 # --------------------------------------------------------------------------
@@ -637,6 +696,7 @@ def _large(rp, large):
     return flag is None or bool(flag)
 
 
+@fp64_on_cpu(any_arg=True)
 def generator_cols_moon(xp, yp, xm, ym, rp, rs, law, front_p=None, front_m=None,
                         large_occultor=None):
     """Generator deviation columns [E0, E1, E2, P_k...] (minus the occulted
@@ -725,6 +785,37 @@ def _lens_mu(m0, m2, m4, dt):
     return mx.where(ok, m0s * mx.where(limb, pw, uni), 0.0)
 
 
+def _lens_mu1(m0, m2, m4, xp, yp, rp, xm, ym, rs, dt):
+    """The lens's integral of mu. The smaller disc's part on the star, D,
+    has exact moments, mu^1 included, and the lens L lies inside it: mu^1
+    over L is ``_lens_mu``'s closure on L, or D's exact mu^1 less the
+    closure on the rest of D (moments by difference). Once L covers 90% of
+    D's area the second takes over, smoothly, as that rest shrinks to a
+    sliver: exact when one disc lies inside the other, continuous, and
+    the closure on L alone below 90% (the rest of D, a crescent, closes
+    worse than L there)."""
+    small = rs <= rp
+    x, y, r = (mx.where(small, a, b) for a, b in ((xm, xp), (ym, yp), (rs, rp)))
+
+    def moments(z, r_):
+        e0, e2, e4 = even_cols(z, r_)
+        return [-e0, -e2, -e4, flux_dev(z, r_, 1.0, 0.0) * (-2.0 * math.pi / 3.0)]
+    d0, d2, d4, d1 = _disc(moments, x, y, r, None)
+    ok = d0 > _TINY[dt]
+    w = mx.where(ok, mx.minimum(mx.maximum(m0 / mx.where(ok, d0, 1.0), 0.0), 1.0), 0.0)
+    # the rest of D, taken as empty below the moments' rounding (relative
+    # to D, and absolute: the lens's columns carry ~1e-8 / ~1e-14 of the
+    # star's flux), where its closure would be of rounding alone and its
+    # gradient large; what is dropped is below that rounding
+    c0 = d0 - m0
+    rel, ab = (1e-5, 3e-8) if dt == mx.float32 else (1e-12, 1e-13)
+    rest = c0 > rel * d0 + ab
+    c0, c2, c4 = (mx.where(rest, v, 0.0) for v in (c0, d2 - m2, d4 - m4))
+    t = mx.minimum(mx.maximum((w - 0.9) / 0.1, 0.0), 1.0)
+    t = t * t * (3.0 - 2.0 * t)
+    return (1.0 - t) * _lens_mu(m0, m2, m4, dt) + t * (d1 - _lens_mu(c0, c2, c4, dt))
+
+
 @fp64_on_cpu(any_arg=True)
 def flux_dev_moon_quad(xp, yp, xm, ym, rp, rs, u1, u2, front_p=None,
                        front_m=None) -> mx.array:
@@ -739,7 +830,8 @@ def flux_dev_moon_quad(xp, yp, xm, ym, rp, rs, u1, u2, front_p=None,
     quad = lambda z, r: flux_dev(z, r, u1, u2)                      # noqa: E731
     dev = _disc(quad, xp, yp, rp, front_p) + _disc(quad, xm, ym, rs, front_m)
     m0, m2, m4 = _lens_cols([(xp, yp, rp), (xm, ym, rs)], (), dt)
-    occ = (1.0 - u1 - u2) * m0 + (u1 + 2.0 * u2) * _lens_mu(m0, m2, m4, dt) - u2 * m2
+    mu1 = _lens_mu1(m0, m2, m4, xp, yp, rp, xm, ym, rs, dt)
+    occ = (1.0 - u1 - u2) * m0 + (u1 + 2.0 * u2) * mu1 - u2 * m2
     both = _both_front(front_p, front_m)
     if both is not None:
         occ = mx.where(both, occ, 0.0)
@@ -778,11 +870,12 @@ def lens_flux_quad(xp, yp, rp, xm, ym, rs, u1, u2):
     discs' F - 1."""
     dt = xp.dtype
     m0, m2, m4 = _lens_cols([(xp, yp, rp), (xm, ym, rs)], (), dt)
-    occ = (1.0 - u1 - u2) * m0 + (u1 + 2.0 * u2) * _lens_mu(m0, m2, m4, dt) - u2 * m2
+    mu1 = _lens_mu1(m0, m2, m4, xp, yp, rp, xm, ym, rs, dt)
+    occ = (1.0 - u1 - u2) * m0 + (u1 + 2.0 * u2) * mu1 - u2 * m2
     return occ / (math.pi * (1.0 - u1 / 3.0 - u2 / 6.0))
 
 
 def _cast(v, dt):
     if isinstance(v, mx.array):
         return v if v.dtype == dt else v.astype(dt)
-    return mx.array(float(v), dtype=dt)
+    return mx.array(np.asarray(v, np.float64), dtype=dt)

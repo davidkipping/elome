@@ -35,7 +35,12 @@ their mean and variance. For a moon of radius 0.03 on a planet of 0.1,
 that is within $1.3\times10^{-9}$ while the overlap is on the disc, and
 $7.6\times10^{-7}$ at worst while it straddles the limb. Treating the
 moon's whole disc at one intensity would be off by about $10^{-5}$
-there. The error grows with the overlap's area.
+there. The error grows with the overlap's size: for a moon of 0.1 on a
+planet of 0.3 it reaches $1.3\times10^{-5}$ across the limb. Where one
+disc lies wholly inside the other, the overlap is the smaller disc's own
+part on the star, whose $\mu^1$ term is exact, and so is the light
+curve; as the overlap nears that, the closure gives way to the exact
+term less a closure on the shrinking remainder.
 
 **float32** keeps the moon's phase to its float32 rounding however far
 the data lie from `t0`. The barycentre's orbit numbers and residual

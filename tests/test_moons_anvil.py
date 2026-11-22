@@ -204,6 +204,33 @@ def test_moon_r_zero_at_the_box_edge(law, exp_time):
         assert np.all(np.isfinite(np.array(g))), dt
 
 
+def test_float32_far_from_the_reference_periods():
+    """1000 orbits from t0 with the moon's period up to 0.2 d off its
+    reference (a sampler's aliases): k d_ratio, hundreds of turns, in
+    float-float arithmetic keeps float32 at its photometry's level (it was
+    up to 8.7e-6 off)."""
+    from elome.anvil import make_moon_transit_flux
+    from elome.moons import moon_turns_ref
+    from elome.orbit import epoch_center_times
+    per, mper = 12.345, 0.9
+    t = np.concatenate([k * per + np.linspace(-0.25, 0.25, 60) for k in (0, 10, 400, 1000)])
+    ep = epoch_center_times(t, 0.0, per)
+    x = np.vstack([ep[0], ep[1], moon_turns_ref(ep[1], per, mper)])
+    names = transit_param_names("hybrid4", moon=True)
+    fn = make_moon_transit_flux(per, mper, "hybrid4")
+    vals = dict(t0_off=0.0, r=0.08, b=0.2, a=25.0, moon_r=0.4, moon_a=6.0, moon_q=0.02,
+                cos_moon_inc=0.05, moon_node=10.0, moon_phase=40.0, df0=1.0)
+    V = []
+    for moff in (0.0, 0.01, 0.05, 0.2):
+        for poff in (0.0, 1e-3):
+            V.append([{**vals, "moon_p_off": moff, "p_off": poff}.get(n, 0.3) for n in names])
+    V = np.array(V, dtype=np.float32).astype(np.float64)      # the same values in both
+    with mx.stream(mx.cpu):
+        f64 = np.array(fn(mx.array(V, dtype=mx.float64), mx.array(x, dtype=mx.float64)))
+    f32 = np.array(fn(mx.array(V, dtype=mx.float32), mx.array(x, dtype=mx.float32)))
+    assert np.abs(f32 - f64).max() < 1e-7                      # measured 4.2e-8
+
+
 def test_reference_periods_are_checked():
     from elome.anvil import make_moon_transit_flux
     for per, mper in ((10.0, 0.0), (10.0, -1.0), (10.0, np.nan), (0.0, 1.0)):

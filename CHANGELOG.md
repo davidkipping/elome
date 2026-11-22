@@ -13,7 +13,8 @@ every release is tagged `vX.Y.Z` in git.
   usual orbit, so the planet's transits shift in time and duration as it
   circles it. Each body's disc is the spherical solution; where they
   overlap on the star, the hybrid laws are exact and the uniform, linear
-  and quadratic laws take a closure, within 1 ppm. A spherical planet on
+  and quadratic laws take a closure, within 1 ppm for a moon of 0.03
+  stellar radii and exact where one disc lies inside the other. A spherical planet on
   an unspotted star, primary transits, circular and eccentric orbits for
   both, supersampling or the contact rule (split at every kink of each
   exposure), `light_curve`, `light_curves` and `light_curve_mx` with

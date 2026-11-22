@@ -505,6 +505,63 @@ def test_quadratic_closure_on_random_limb_lenses():
     assert worst < 1e-6
 
 
+@pytest.mark.parametrize("rp,rs,xp,xm", [(0.6, 0.03, 0.3, 0.4), (0.6, 0.3, 0.3, 0.4),
+                                         (0.1, 0.03, 0.95, 0.97), (1.3, 0.26, 0.0, 0.2)],
+                         ids=["small", "large", "at the limb", "planet covering the star"])
+def test_quadratic_moon_inside_the_planet_is_exact(rp, rs, xp, xm):
+    """A moon wholly inside the planet: the lens is its whole part on the
+    star, whose mu^1 term the spherical solution gives -- the planet's
+    light curve alone (the closure alone was 8e-6 off at rs = 0.3)."""
+    with mx.stream(mx.cpu):
+        a = lambda v: mx.array([v], dtype=mx.float64)
+        f = lambda x: moons.flux_dev_moon_quad(a(xp), a(0.0), a(x), a(0.0), a(rp), a(rs),
+                                               *QUAD).item()
+        assert abs(f(xm) - f(9.0)) < 1e-15
+
+
+def test_quadratic_lens_near_nesting_is_smooth():
+    """Through the blend to the smaller disc's exact term (from 90% of its
+    area inside the planet to all of it): gradients match finite
+    differences, and values the oracle."""
+    rp, rs, yp = 0.3, 0.1, 0.1
+    worst = 0.0
+    with mx.stream(mx.cpu):
+        a = lambda v: mx.array([v], dtype=mx.float64)
+        F = lambda x: moons.flux_dev_moon_quad(a(0.2), a(yp), x, a(yp), a(rp), a(rs), *QUAD).sum()
+        for D in rp - rs + np.linspace(-0.0097, 0.06, 15):     # off the tangency's kink
+            x0 = 0.2 + D
+            g = mx.grad(F)(a(x0)).item()
+            fd = (F(a(x0 + 1e-6)).item() - F(a(x0 - 1e-6)).item()) / 2e-6
+            worst = max(worst, abs(g - fd) / max(abs(fd), 1e-4))   # 0 once hidden
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                ref = MO.quad_flux_dev([(0.2, yp, rp), (x0, yp, rs)], *QUAD)
+            assert abs(F(a(x0)).item() - ref) < 1e-7
+    assert worst < 1e-6                                     # measured 1.7e-7
+
+
+def test_photometry_takes_host_arguments():
+    """numpy arrays, Python numbers and lists, as the other paths' entry
+    points take them (float64), with float32 data kept float32."""
+    x = np.linspace(-0.5, 0.5, 5)
+    f = lambda v: mx.array(np.asarray(v, np.float64), dtype=mx.float64)
+    W = [0.2, 0.2, 0.1, 0.1]
+    ref = np.array(moons.flux_dev_moon(f(x), f(0.1), f(x + 0.2), f(0.05), 0.08, 0.03, W,
+                                       "hybrid4"))
+    for args in ((x, 0.1, x + 0.2, 0.05), (list(x), [0.1] * 5, list(x + 0.2), 0.05)):
+        got = moons.flux_dev_moon(*args, 0.08, 0.03, W, "hybrid4")
+        assert got.dtype == mx.float64 and np.array_equal(np.array(got), ref)
+        for fn, extra in ((moons.flux_dev_moon_quad, (0.4, 0.25)),
+                          (moons.shape_cols_moon, ("hybrid4",)),
+                          (moons.generator_cols_moon, ("hybrid4",))):
+            out = fn(*args, 0.08, 0.03, *extra)
+            assert np.isfinite(np.array(out[0] if isinstance(out, list) else out)).all()
+    one = moons.flux_dev_moon(0.25, 0.1, 0.45, 0.05, 0.08, 0.03, W, "hybrid4")
+    assert one.dtype == mx.float64 and one.item() == ref[3]
+    assert moons.flux_dev_moon(np.float32(0.25), 0.1, 0.45, 0.05, 0.08, 0.03, W,
+                               "hybrid4").dtype == mx.float32
+
+
 @pytest.mark.parametrize("law", ["quadratic", "hybrid5"])
 def test_float32_lens_across_the_limb(law):
     """Random lenses straddling the limb, float32 against float64: Green's

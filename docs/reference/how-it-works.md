@@ -189,6 +189,11 @@ integrals. The lens's exact $\mu^0$, $\mu^2$ and $\mu^4$ moments fix the
 mean and variance of $\mu^2$ over it, and a distribution with those
 moments closes the term: uniform in $\mu^2$, or a power law reaching
 $\mu = 0$ on a lens at the limb. It is exact for a lens at one $\mu$.
+The lens lies inside the smaller disc's part on the star, whose
+moments, $\mu^1$ included, are the spherical solution's. Once the lens
+covers 90% of it, the smaller disc's exact $\mu^1$, less the closure on
+the rest of it, takes over smoothly, so a lens that is the whole smaller
+disc is exact.
 
 The positions are the barycentre's orbit plus the moon's relative orbit,
 both through the transit-anchored solver. The moon's phase is split for

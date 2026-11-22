@@ -57,9 +57,10 @@ What differs:
 - **The hybrid laws are exact, and the quadratic law nearly so.** Each
   body's own disc is exact for every law the model takes. Where the planet
   and the moon overlap on the star, the hybrid laws are exact too. The
-  uniform, linear and quadratic laws there take a closure for one term,
-  good to better than a part per million (see
-  {doc}`accuracy-and-fitting`). The polynomial laws are not available.
+  uniform, linear and quadratic laws there take a closure for one term:
+  better than a part per million for a moon of a few hundredths of the
+  star's radius, less good for a larger one, and exact where one disc
+  lies inside the other (see {doc}`accuracy-and-fitting`). The polynomial laws are not available.
 - **A spherical planet on an unspotted star, and primary transits only.**
 - **One moon per planet.**
 - **No fused float32 kernels.** float32 runs the same graph as float64

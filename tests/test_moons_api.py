@@ -154,6 +154,18 @@ def test_a_moon_of_zero_size_has_finite_gradients(law, dtype, contact):
             assert abs(g[0]) < 1e-8
 
 
+def test_the_event_search_in_blocks_is_the_same(monkeypatch):
+    """The contact rule's event samples taken a few lanes at a time (their
+    memory bounded) give the same light curves, bit for bit."""
+    from elome import moons_tau
+    ps = sets(HYB)
+    m = elome.TransitModel(ps[0], windows(ps[0], step=EXP), exp_time=EXP,
+                           integration="contact", n_gl=5)
+    whole = m.light_curves(ps)
+    monkeypatch.setattr(moons_tau, "_EVENT_BLOCK", 3000)
+    assert np.array_equal(m.light_curves(ps), whole)
+
+
 def test_supersampling_averages_the_instantaneous_curve():
     p = system()
     t = windows(p, step=EXP)

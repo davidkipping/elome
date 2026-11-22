@@ -54,6 +54,7 @@ _S_MIN, _S_MAX = 4, 256                            # event samples per exposure
 _N_BISECT = {mx.float64: 30, mx.float32: 16}       # the kinks' bracket, in halvings
 _N_FALSI = 8                                       # Illinois steps before them
 _BLOCK = 1 << 14                                   # evaluation nodes per block
+_EVENT_BLOCK = 1 << 20                             # event samples per block (frozen)
 _sg = mx.stop_gradient
 
 
@@ -134,23 +135,32 @@ def _at(P, ix):
     return _lanes(P, lambda v: mx.take(v, ix, axis=0))
 
 
-def _brackets(g, dt, k, turns, hw0, n_sample, dtype):
-    """The kinks' brackets, read on the host from the frozen event functions
-    g sampled at n_sample + 1 times across each exposure: per kink its lane,
+def _brackets(P_frozen, sets, dt, k, turns, hw0, n_sample, dtype):
+    """The kinks' brackets, read on the host from the event functions with
+    the frozen parameters, sampled at n_sample + 1 times across each exposure: per kink its lane,
     its event function and its bracket (lo, hi) as offsets from the exposure
     centre, host arrays ordered by lane, at most _K_SPLIT per lane (the
-    earliest)."""
+    earliest). The samples are taken in blocks of lanes (no gradient is
+    kept, so each block's memory is freed with it)."""
     j = np.arange(n_sample + 1, dtype=np.float64) / n_sample
     deltas = -hw0 + 2.0 * hw0 * j
-    e = lambda v: v[:, None]
-    G = g(mx.array(deltas, dtype=dtype)[None, :], e(k), e(turns), e(dt))   # (m, J + 1, 9)
-    S = G[..., :8] > 0.0
-    change = S[:, :-1] != S[:, 1:]                                  # (m, J, 8)
-    # the corners' functions only where there are corners at either end: a
-    # sign change of the merged point (the same in both) is no kink
-    corners = (G[:, :-1, 8:] > 0.0) | (G[:, 1:, 8:] > 0.0)
-    change = np.array(mx.concatenate([change[..., :6], change[..., 6:] & corners], axis=-1))
-    lane, jj, ff = np.nonzero(change)                               # lane, time, function order
+    dm = mx.array(deltas, dtype=dtype)[None, :]
+    step = max(1, _EVENT_BLOCK // (n_sample + 1))
+    found = []
+    for i in range(0, dt.shape[0], step):
+        e = lambda v: v[i:i + step, None]                           # noqa: E731
+        Pb = _lanes(P_frozen, lambda v: v[i:i + step]) if sets else P_frozen
+        g = _event_g(_geometry(Pb), Pb, dtype)
+        G = g(dm, e(k), e(turns), e(dt))                            # (block, J + 1, 9)
+        S = G[..., :8] > 0.0
+        change = S[:, :-1] != S[:, 1:]                              # (block, J, 8)
+        # the corners' functions only where there are corners at either
+        # end: a sign change of the merged point (the same in both) is no kink
+        corners = (G[:, :-1, 8:] > 0.0) | (G[:, 1:, 8:] > 0.0)
+        change = np.array(mx.concatenate([change[..., :6], change[..., 6:] & corners], axis=-1))
+        lb, jb, fb = np.nonzero(change)                             # lane, time, function order
+        found.append((lb + i, jb, fb))
+    lane, jj, ff = (np.concatenate(c) for c in zip(*found))
     if lane.size:
         start = np.searchsorted(lane, lane, side="left")
         keep = np.arange(lane.size) - start < _K_SPLIT
@@ -224,8 +234,7 @@ def _pieces(PL, P_frozen, d_s, k_s, t_s, hw0, n_sample, n_gl, sets, dtype):
     move with the parameters and the gradient is that of the quadrature
     evaluated."""
     m = d_s.shape[0]
-    g = _event_g(_geometry(P_frozen), P_frozen, dtype)
-    lane, ff, lo, hi = _brackets(g, d_s, k_s, t_s, hw0, n_sample, dtype)
+    lane, ff, lo, hi = _brackets(P_frozen, sets, d_s, k_s, t_s, hw0, n_sample, dtype)
     if lane.size:
         gf = _picker(P_frozen, d_s, k_s, t_s, lane, ff, sets, dtype)
         ev = _refine(gf, lo, hi, dtype)
