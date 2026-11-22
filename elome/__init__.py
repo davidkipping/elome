@@ -110,7 +110,7 @@ __all__ = [
     "sn_dev_with_aux",
 ]
 
-__version__ = "0.23.3"
+__version__ = "0.23.4"
 
 # Ringed planets, spotted stars and moons, exported lazily: their modules
 # are imported only when one of these is first used (or a ring, spot or
