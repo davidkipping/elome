@@ -544,6 +544,11 @@ def check_comparisons():
             (r"to (about \S+) times \(ringed\)", batch_ratio(rg["batch"], "elome_fp32"))]),
         "index.md": ({}, [
             (r"integral to (\$[^$]+\$)", circ["elome fp64"]),
+            # the headline: the quadratic batch, against each code's loop
+            (r"\*\*(\S+) times faster than pizzetti",
+             sp("pizzetti", "batch") / sp("elome_gpu", "batch")),
+            (r"pizzetti and (\S+) times faster than batman\.\*\*",
+             sp("batman", "batch") / sp("elome_gpu", "batch")),
             (r"\$10\^7\$ points in (about \S+ ms)", sp("elome_fp32", "single", 10**7)),
             (r"(about \S+) light curves of \$10\^5\$ points", min(scaling)),
             (r"(about \S+) light curves of \$10\^5\$ points", max(scaling))]),

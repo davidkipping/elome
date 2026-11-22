@@ -2,6 +2,8 @@
 
 **Analytic, differentiable transit light curves on Apple Silicon.**
 
+**45 times faster than pizzetti and 180 times faster than batman.**[^speed]
+
 Elómë computes the light curve of a planet crossing its star exactly and
 in closed form, with analytic gradients in every parameter. A
 float32 path fuses each model into hand-written Metal kernels on the
@@ -302,3 +304,11 @@ about/citing
 about/name
 about/changelog
 ```
+
+[^speed]: Spherical planet, quadratic limb darkening, a batch of 512
+    light curves of $10^5$ points each: Elómë in one float32 call on the
+    GPU of an Apple M2 Max, pizzetti and batman looping over
+    the parameter sets on one CPU thread. Elómë's float32 light curves are
+    accurate to about $10^{-7}$ of the flux. See
+    {doc}`spherical/accuracy-and-cost` for every size, the other codes and
+    the scripts to time them on your own machine.

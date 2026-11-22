@@ -2,6 +2,8 @@
 
 **Analytic, differentiable transit light curves on Apple Silicon.**
 
+**45 times faster than pizzetti and 180 times faster than batman.**[^speed]
+
 [![Documentation](https://readthedocs.org/projects/elome/badge/?version=latest)](https://elome.readthedocs.io)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/davidkipping/elome/blob/main/LICENSE)
 
@@ -98,3 +100,12 @@ hybrid-law papers, also in preparation; see
 ## License
 
 MIT; see [LICENSE](https://github.com/davidkipping/elome/blob/main/LICENSE).
+
+[^speed]: Spherical planet, quadratic limb darkening, a batch of 512
+    light curves of $10^5$ points each: Elómë in one float32 call on the
+    GPU of an Apple M2 Max, pizzetti and batman looping over the parameter
+    sets on one CPU thread. Elómë's float32 light curves are accurate to
+    about $10^{-7}$ of the flux. The
+    [benchmarks](https://elome.readthedocs.io/en/latest/spherical/accuracy-and-cost.html)
+    give every size and the other codes, with the scripts to time them on
+    your own machine.
