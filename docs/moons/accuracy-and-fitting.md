@@ -60,7 +60,7 @@ float32 level.
   centre (see {doc}`../reference/how-it-works`). While the overlap
   straddles the limb, a float32 quadratic light curve is within
   $6\times10^{-7}$ of float64 (the median is $10^{-8}$). A hybrid law is
-  within $1.2\times10^{-8}$ there.
+  within $1.5\times10^{-8}$ there.
 - **`t0`** is the least precise gradient, as for every model, since the
   float32 times are.
 
@@ -69,10 +69,12 @@ differences, under the contact rule as well (see {doc}`light-curves`).
 
 ## Cost
 
-A model with a moon is evaluated eagerly, not compiled. The host chooses
-which points either body can reach the star from and where the two discs
-overlap, so each call pays a fixed cost for building the graph, and then
-a few operations per point that is evaluated. Points far from transit
+A model with a moon is called eagerly, not under `mx.compile`. The host
+chooses which points either body can reach the star from and where the
+two discs overlap, so each call pays a fixed cost for building the
+graph, and then a few operations per point that is evaluated. In float32
+on the GPU each disc and the overlap are fused Metal kernels, which
+makes a fit about three times faster than the same graph would be. Points far from transit
 cost nothing. The overlap is computed only where the discs overlap on
 the star, and mutual events are brief. Under the contact rule each
 exposure also pays for its event search, and for one piece of `n_gl`

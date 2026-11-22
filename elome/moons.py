@@ -880,9 +880,28 @@ def _shape_of(gen, law):
     return [gen[0]] + [_combine(gen, S[j]) for j in range(law.n_w)]
 
 
+def _metal(dt):
+    """The fp32 Metal kernels (``metal_moons``), where they run."""
+    if dt != mx.float32:
+        return None
+    from . import metal_moons
+    return metal_moons if metal_moons.available(dt) else None
+
+
+def _lens_any(xp, yp, rp, xm, ym, rs, eps):
+    """``_lens_cols``, by the kernel where it runs."""
+    mm = _metal(xp.dtype)
+    if mm is not None:
+        return mm.lens_cols_kernel(xp, yp, rp, xm, ym, rs, eps)
+    return _lens_cols([(xp, yp, rp), (xm, ym, rs)], eps, xp.dtype)
+
+
 def disc_shape_cols(x, y, r, law, front=None):
     """One disc's shape columns (deviation form), under the caller's
     large_occultors declaration."""
+    mm = _metal(x.dtype)
+    if mm is not None:
+        return _disc(lambda z, r_: mm.disc_cols_kernel(z, r_, law), x, y, r, front)
     return _shape_of(_disc(lambda z, r_: _generator_terms(lens_geometry(z, r_), law)[0],
                            x, y, r, front), law)
 
@@ -890,11 +909,16 @@ def disc_shape_cols(x, y, r, law, front=None):
 def lens_shape_cols(xp, yp, rp, xm, ym, rs, law):
     """The lens's shape columns, positive (the flux the discs' columns count
     twice): add them to the two discs'."""
-    return _shape_of(_lens_cols([(xp, yp, rp), (xm, ym, rs)], law.eps, xp.dtype), law)
+    return _shape_of(_lens_any(xp, yp, rp, xm, ym, rs, law.eps), law)
 
 
 def disc_flux_quad(x, y, r, u1, u2, front=None):
-    """One disc's F - 1, quadratic law."""
+    """One disc's F - 1, quadratic law, under the caller's large_occultors
+    declaration (a disc that may exceed the star takes the graph: the
+    quadratic kernel's terms of order r cancel in float32)."""
+    mm = _metal(x.dtype)
+    if mm is not None and _may_be_large(r) is False:
+        return _disc(lambda z, r_: mm.disc_quad_kernel(z, r_, u1, u2), x, y, r, front)
     return _disc(lambda z, r_: flux_dev(z, r_, u1, u2), x, y, r, front)
 
 
@@ -902,8 +926,12 @@ def lens_flux_quad(xp, yp, rp, xm, ym, rs, u1, u2):
     """The lens's flux (positive, normalised as F - 1): add it to the two
     discs' F - 1."""
     dt = xp.dtype
-    m0, m2, m4 = _lens_cols([(xp, yp, rp), (xm, ym, rs)], (), dt)
-    mu1 = _lens_mu1(m0, m2, m4, xp, yp, rp, xm, ym, rs, dt)
+    mm = _metal(dt)
+    if mm is not None:
+        m0, m2, mu1 = mm.lens_quad_kernel(xp, yp, rp, xm, ym, rs)
+    else:
+        m0, m2, m4 = _lens_cols([(xp, yp, rp), (xm, ym, rs)], (), dt)
+        mu1 = _lens_mu1(m0, m2, m4, xp, yp, rp, xm, ym, rs, dt)
     occ = (1.0 - u1 - u2) * m0 + (u1 + 2.0 * u2) * mu1 - u2 * m2
     return occ / (math.pi * (1.0 - u1 / 3.0 - u2 / 6.0))
 

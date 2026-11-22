@@ -63,9 +63,10 @@ What differs:
   lies inside the other (see {doc}`accuracy-and-fitting`). The polynomial laws are not available.
 - **A spherical planet on an unspotted star, and primary transits only.**
 - **One moon per planet.**
-- **No fused float32 kernels.** float32 runs the same graph as float64
-  does, on the GPU; it keeps its accuracy far from `t0` (see
-  {doc}`accuracy-and-fitting`).
+- **float32 kernels for the photometry only.** Each disc and the overlap
+  run in fused Metal kernels; the orbits and the exposure quadrature stay
+  MLX operations around them. float32 keeps its accuracy far from `t0`
+  (see {doc}`accuracy-and-fitting`).
 - **Not under `mx.compile` or `mx.vmap`.** A model with a moon is called
   eagerly: it chooses on the host which points and overlaps to evaluate.
 - **Two orbits in time.** The moon's phase advances between transits,

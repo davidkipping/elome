@@ -3,6 +3,18 @@
 All notable changes to Elómë. Versioning: semantic-ish (MAJOR.MINOR.PATCH);
 every release is tagged `vX.Y.Z` in git.
 
+## [Unreleased]
+
+### Changed
+- **A planet with a moon in float32, about three times faster.** On the
+  GPU each disc and the overlap of the two run in fused Metal kernels,
+  with their gradients, for the hybrid laws and the quadratic law (whose
+  closure for the overlap runs in the kernel too). A fit of 16 anvil
+  chains under the contact rule takes 0.07 s per value and gradient, from
+  0.20 s, at the same accuracy. A quadratic-law planet larger than its
+  star keeps the graph for its discs, which is more accurate there in
+  float32.
+
 ## [0.23.0] — 2026-11-22
 
 ### Added

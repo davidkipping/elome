@@ -38,7 +38,8 @@ like the limb-darkening law. Every value can change between calls.
 - **`light_curve_mx(params)`** is differentiable in every moon field and
   in every orbital and limb-darkening parameter (see
   {doc}`../guides/gradients-and-precision`).
-- **`dtype=mx.float32`** runs the same graph on the GPU.
+- **`dtype=mx.float32`** runs on the GPU, each disc and the overlap in
+  fused Metal kernels.
 
 ```python
 import mlx.core as mx

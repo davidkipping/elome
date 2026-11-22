@@ -208,6 +208,13 @@ limb. Regula falsi refines each sign change, with bisection where it is
 slow, and one Newton step taken only in the gradient gives the events
 their implicit derivatives. Only the pieces between them are evaluated.
 
+In float32 on the GPU only the photometry is fused: each disc, and the
+overlap per point, in Metal kernels. The overlap kernel transcribes the
+graph, its frozen choices included, and takes its gradient in forward
+mode, carrying the six derivatives in x, y and radius of both discs
+through one evaluation. The orbits, the event search and the
+quadrature stay graph operations around the kernels.
+
 ## MLX caveats
 
 - `mx.sin`, `mx.cos`, `mx.exp` and `mx.erf` are only float32-accurate on
