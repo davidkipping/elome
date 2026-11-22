@@ -59,7 +59,7 @@ def reference(p, t):
 def test_light_curve_matches_the_photometry_at_independent_positions(law, ecc, moon_ecc):
     p = system(law, ecc, moon_ecc)
     t = windows(p)
-    F = elome.TransitModel(p, t).light_curve(p)
+    F = elome.TransitModel(p, t, dtype=mx.float64).light_curve(p)
     assert np.abs(F - reference(p, t)).max() < 1e-13
     assert F.min() < 1.0 - 1e-3                     # a transit, with the moon's dip
 
@@ -71,8 +71,8 @@ def test_a_vanishing_moon_leaves_the_planet(law):
     q = elome.TransitParams()
     for k in ("t0", "per", "rp", "a", "inc", "ecc", "w", "limb_dark", "u"):
         setattr(q, k, getattr(p, k))
-    F = elome.TransitModel(p, t).light_curve(p)
-    G = elome.TransitModel(q, t).light_curve(q)
+    F = elome.TransitModel(p, t, dtype=mx.float64).light_curve(p)
+    G = elome.TransitModel(q, t, dtype=mx.float64).light_curve(q)
     assert np.abs(F - G).max() < 2e-14       # the orbit by the moon route's own split
 
 
@@ -81,21 +81,21 @@ def test_defaults_are_a_coplanar_circular_moon_in_front_at_t0():
     q = system(moon_ecc=0.0, moon_inc=p.inc, moon_node=0.0, moon_phase=0.0, moon_w=0.0)
     q.moon_q = p.moon_q = None
     t = windows(p)
-    m = elome.TransitModel(p, t)
+    m = elome.TransitModel(p, t, dtype=mx.float64)
     q.moon_q = 0.0
-    assert np.array_equal(m.light_curve(p), elome.TransitModel(q, t).light_curve(q))
+    assert np.array_equal(m.light_curve(p), elome.TransitModel(q, t, dtype=mx.float64).light_curve(q))
 
 
 def test_the_far_side_of_the_orbit_is_flat():
     p = system()
     t = p.t0 + 0.5 * p.per + np.linspace(-0.5, 0.5, 201)
-    assert np.all(elome.TransitModel(p, t).light_curve(p) == 1.0)
+    assert np.all(elome.TransitModel(p, t, dtype=mx.float64).light_curve(p) == 1.0)
 
 
 def midpoint(p, t, n=1500):
     off = (np.arange(n) + 0.5) / n * EXP - 0.5 * EXP
     tt = (t[:, None] + off[None, :]).ravel()
-    return elome.TransitModel(p, tt).light_curve(p).reshape(t.size, n).mean(axis=1)
+    return elome.TransitModel(p, tt, dtype=mx.float64).light_curve(p).reshape(t.size, n).mean(axis=1)
 
 
 @pytest.mark.parametrize("law", [HYB, QUAD])
@@ -105,11 +105,11 @@ def test_the_contact_rule_against_a_converged_quadrature(law):
     R = midpoint(p, t)
     errs = []
     for n_gl in (5, 7):
-        m = elome.TransitModel(p, t, exp_time=EXP, integration="contact", n_gl=n_gl)
+        m = elome.TransitModel(p, t, exp_time=EXP, integration="contact", n_gl=n_gl, dtype=mx.float64)
         errs.append(np.abs(m.light_curve(p) - R).max())
     assert errs[1] < 1e-8 and errs[0] < 5e-8, errs          # measured 4.3e-9, 2.1e-8
     # an unsplit rule is far worse there
-    m7 = elome.TransitModel(p, t, exp_time=EXP, supersample_factor=7)
+    m7 = elome.TransitModel(p, t, exp_time=EXP, supersample_factor=7, dtype=mx.float64)
     assert np.abs(m7.light_curve(p) - R).max() > 100 * errs[1]
 
 
@@ -123,7 +123,7 @@ def test_seven_kinks_in_one_exposure():
                moon_node=5.0, moon_phase=200.0)
     t = np.array([-0.036, -0.032, -0.028, -0.004])
     R = midpoint(p, t, n=4000)
-    F = elome.TransitModel(p, t, exp_time=EXP, integration="contact").light_curve(p)
+    F = elome.TransitModel(p, t, exp_time=EXP, integration="contact", dtype=mx.float64).light_curve(p)
     assert np.abs(F - R).max() < 5e-8                      # measured 2.6e-8
 
 
@@ -160,7 +160,7 @@ def test_the_event_search_in_blocks_is_the_same(monkeypatch):
     from elome import moons_tau
     ps = sets(HYB)
     m = elome.TransitModel(ps[0], windows(ps[0], step=EXP), exp_time=EXP,
-                           integration="contact", n_gl=5)
+                           integration="contact", n_gl=5, dtype=mx.float64)
     whole = m.light_curves(ps)
     monkeypatch.setattr(moons_tau, "_EVENT_BLOCK", 3000)
     assert np.array_equal(m.light_curves(ps), whole)
@@ -190,9 +190,9 @@ def test_supersampling_averages_the_instantaneous_curve():
     p = system()
     t = windows(p, step=EXP)
     n = 5
-    F = elome.TransitModel(p, t, exp_time=EXP, supersample_factor=n).light_curve(p)
+    F = elome.TransitModel(p, t, exp_time=EXP, supersample_factor=n, dtype=mx.float64).light_curve(p)
     off = np.linspace(-0.5 * EXP, 0.5 * EXP, n)
-    G = elome.TransitModel(p, (t[:, None] + off).ravel()).light_curve(p).reshape(t.size, n)
+    G = elome.TransitModel(p, (t[:, None] + off).ravel(), dtype=mx.float64).light_curve(p).reshape(t.size, n)
     assert np.abs(F - G.mean(axis=1)).max() < 1e-15
 
 
@@ -207,7 +207,7 @@ def test_gradients_through_light_curve_mx(contact):
     p = system()
     t = windows(p, epochs=(0, 4), step=EXP if contact else 4.0 / 1440.0)
     kw = dict(exp_time=EXP, integration="contact", n_gl=5) if contact else {}
-    m = elome.TransitModel(p, t, **kw)
+    m = elome.TransitModel(p, t, **{"dtype": mx.float64, **kw})
     wts = np.random.default_rng(0).normal(size=t.size)
     base = {n: float(getattr(p, n)) for n in NAMES}
 
@@ -237,7 +237,7 @@ def test_float32_holds_far_from_t0(law, tol):
     quadratic disc's own floor is ~3e-7)."""
     p = system(law, ecc=0.0, moon_ecc=0.0, t0=2459000.2)
     t = windows(p, epochs=(0, 40, 120))
-    F64 = elome.TransitModel(p, t).light_curve(p)
+    F64 = elome.TransitModel(p, t, dtype=mx.float64).light_curve(p)
     F32 = elome.TransitModel(p, t, dtype=mx.float32).light_curve(p)
     assert np.abs(F32 - F64).max() < tol
 
@@ -252,15 +252,15 @@ def test_float32_holds_far_from_t0(law, tol):
 def test_construction_checks(change, msg):
     p = system(**change)
     with pytest.raises(ValueError, match=msg):
-        elome.TransitModel(p, windows(p))
+        elome.TransitModel(p, windows(p), dtype=mx.float64)
 
 
 def test_evaluation_checks():
     p = system()
     t = windows(p)
     with pytest.raises(ValueError, match="primary-transit"):
-        elome.TransitModel(system(fp=1e-4), t, transittype="secondary")
-    m = elome.TransitModel(p, t)
+        elome.TransitModel(system(fp=1e-4), t, transittype="secondary", dtype=mx.float64)
+    m = elome.TransitModel(p, t, dtype=mx.float64)
     with pytest.raises(ValueError, match="outside the planet"):
         m.light_curve(system(moon_a=1.2))
     with pytest.raises(ValueError, match="moon_r changed"):
@@ -282,7 +282,7 @@ def test_evaluation_checks():
             m.light_curves([p, system(**change)])
     for bad in (0.0, -0.9, np.nan):
         with pytest.raises(ValueError, match="moon_per must be finite and > 0"):
-            elome.TransitModel(system(moon_per=bad), t)
+            elome.TransitModel(system(moon_per=bad), t, dtype=mx.float64)
 
 
 def sets(law):
@@ -301,7 +301,7 @@ def sets(law):
 def test_light_curves_matches_light_curve_per_set(law, kw):
     ps = sets(law)
     t = windows(ps[0], step=EXP)
-    m = elome.TransitModel(ps[0], t, **kw)
+    m = elome.TransitModel(ps[0], t, **{"dtype": mx.float64, **kw})
     F = m.light_curves(ps)
     G = np.stack([m.light_curve(p) for p in ps])
     assert F.shape == (len(ps), t.size)
@@ -312,7 +312,7 @@ def test_light_curves_matches_light_curve_per_set(law, kw):
 def test_light_curves_takes_array_valued_params():
     ps = sets(HYB)
     t = windows(ps[0])
-    m = elome.TransitModel(ps[0], t)
+    m = elome.TransitModel(ps[0], t, dtype=mx.float64)
     q = copy.copy(ps[0])
     for name in ("t0", "per", "rp", "inc", "ecc", "moon_r", "moon_a", "moon_per",
                  "moon_q", "moon_node", "moon_phase", "moon_ecc", "moon_w"):
@@ -328,7 +328,7 @@ def test_light_curves_in_float32():
     ps = [system(HYB, ecc=0.0, moon_ecc=0.0, t0=2459000.2),
           system(HYB, ecc=0.0, moon_ecc=0.0, t0=2459000.2, moon_phase=120.0)]
     t = windows(ps[0], epochs=(0, 40))
-    F64 = elome.TransitModel(ps[0], t).light_curves(ps)
+    F64 = elome.TransitModel(ps[0], t, dtype=mx.float64).light_curves(ps)
     F32 = elome.TransitModel(ps[0], t, dtype=mx.float32).light_curves(ps)
     assert np.abs(F32 - F64).max() < 2e-7
 

@@ -66,7 +66,7 @@ planet without a moon, on an unspotted star.
 ### `TransitModel`
 
 ```python
-TransitModel(params, t, transittype: str = 'primary', supersample_factor: int = 1, exp_time: float = 0.0, dtype=None, use_metal: bool = True, integration: str = 'supersample', n_gl: int = 7)
+TransitModel(params, t, transittype: str = 'primary', supersample_factor: int = 1, exp_time: float = 0.0, dtype=None, use_metal: bool = True, integration: str = 'supersample', n_gl: int = 7, max_err=None, nthreads=None, fac=None)
 ```
 
 ```text
@@ -77,15 +77,18 @@ Args:
     params: TransitParams (validated here; values may change between
         light_curve calls, but the limb-darkening *law* and the
         transit type are fixed per model).
-    t: times, same units as params.t0/per (absolute values are fine —
-        computation is float64 on the CPU by default).
+    t: times, same units as params.t0/per (absolute values are fine:
+        they are re-centred on the host in float64 first).
     transittype: "primary" or "secondary".
     supersample_factor: average this many samples over exp_time.
     exp_time: exposure time (same units as t).
-    dtype: mx.float64 (default; CPU, exact) or mx.float32 (the GPU
-        kernels). In float32 the times are re-centred on the host in
-        float64 first, so absolute mission times are fine; over
-        hundreds of orbits the float32 phase loses precision.
+    dtype: mx.float32 (the GPU kernels, about 1e-7 in flux) or
+        mx.float64 (the CPU, exact to rounding). None (default): float32
+        where the Metal kernels run -- a Mac with Apple Silicon, MLX's
+        default device the GPU -- and float64 elsewhere. In float32 the
+        times are re-centred on the host in float64 first, so absolute
+        mission times are fine; over hundreds of orbits the float32
+        phase loses precision.
     integration: "supersample" (batman's rule) or "contact"
         (Gauss-Legendre on windows split at the contact times).
     n_gl: Gauss-Legendre nodes per piece for "contact" (7 here; the
@@ -93,6 +96,9 @@ Args:
     use_metal: float32 may use the fused Metal kernels (default);
         False runs the float32 MLX graph instead, as on a machine
         without Metal.
+    max_err, nthreads, fac: batman's, accepted so that batman scripts
+        run unchanged, and ignored: every law here is a closed form,
+        with no numerical integration to tune or thread.
 ```
 
 ### `TransitModel.light_curve`
@@ -186,13 +192,14 @@ Differentiable details:
   input. With an fp32 (GPU) model, differentiate float32 fields on
   the GPU; for an fp64 field such as an absolute t0, take the
   gradient inside ``with mx.stream(mx.cpu):`` (or use an fp64
-  model, the default, which lives there anyway).
+  model, which lives there anyway).
 
-Precision: the graph is built on the model's own stream -- for the
-default ``dtype=mx.float64`` that is the CPU, as MLX has no float64
-on Metal. The result is a lazy fp64 array, so whatever you build on
-it must stay on the CPU too: wrap your own ops (and ``mx.grad``) in
-``with mx.stream(mx.cpu):``.
+Precision: the graph is built on the model's own stream -- for
+``dtype=mx.float64`` that is the CPU, as MLX has no float64 on Metal.
+The result is then a lazy fp64 array, so whatever you build on it
+must stay on the CPU too: wrap your own ops (and ``mx.grad``) in
+``with mx.stream(mx.cpu):``. A float32 model (the default on Apple
+Silicon) lives on the GPU, as its inputs may.
 ```
 
 ## The sampler API
@@ -1239,6 +1246,29 @@ hybrid_norms(law) -> np.ndarray
 ```text
 N = [pi, N_1..N_n] for the ``ld_basis`` contract
 flux - 1 == (B @ c) / (N @ c), c = (1, -w). Float64, host-side.
+```
+
+### `hybrid_weights`
+
+```python
+hybrid_weights(limb_dark, u, law='hybrid4')
+```
+
+```text
+The shape weights of a hybrid law closest to one of batman's laws,
+for ``params.u``: ``limb_dark`` "linear", "quadratic", "squareroot",
+"logarithmic", "power2" or "nonlinear" (the four-parameter law) with
+batman's coefficients ``u``; ``law`` the hybrid law ("hybrid2",
+"hybrid4", "hybrid5" or a HybridLaw).
+
+A least-squares fit of the intensity over the stellar disc, each ring
+weighted by its area (mu dmu), with the overall scale free, as a light
+curve does not see it. With hybrid4, light curves of a planet of 0.1
+stellar radii agree with batman's to a few ppm for the four-parameter,
+power-2 and quadratic laws; hybrid2, with two weights, follows a given
+two-parameter profile only to tens of ppm. Fit the hybrid law to the
+star itself when you can: this reproduces the given profile, with its
+own errors.
 ```
 
 ### `hybrid4_basis`

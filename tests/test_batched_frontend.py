@@ -47,7 +47,7 @@ MODES = [
 
 @pytest.mark.parametrize("label,kw,base", MODES, ids=[m[0] for m in MODES])
 def test_matches_the_looped_api(label, kw, base):
-    m = elome.TransitModel(_p(**base), T, **kw)
+    m = elome.TransitModel(_p(**base), T, **{"dtype": mx.float64, **kw})
     sets = _sets(5, **base)
     batched = m.light_curves(sets)
     looped = np.stack([m.light_curve(p) for p in sets])
@@ -57,7 +57,7 @@ def test_matches_the_looped_api(label, kw, base):
 
 def test_mixed_circular_and_eccentric():
     """e = 0 and e > 0 in one batch: the anchored orbit covers both."""
-    m = elome.TransitModel(_p(), T)
+    m = elome.TransitModel(_p(), T, dtype=mx.float64)
     sets = [_p(ecc=0.0), _p(ecc=0.3, w=63.0), _p(ecc=0.0, rp=0.12),
             _p(ecc=0.7, w=200.0)]
     batched = m.light_curves(sets)
@@ -66,7 +66,7 @@ def test_mixed_circular_and_eccentric():
 
 
 def test_array_valued_transitparams():
-    m = elome.TransitModel(_p(), T)
+    m = elome.TransitModel(_p(), T, dtype=mx.float64)
     pa = _p()
     pa.rp = np.array([0.08, 0.1, 0.12])
     pa.inc = np.array([86.5, 87.07, 88.0])
@@ -80,7 +80,7 @@ def test_array_valued_transitparams():
 
 
 def test_single_set_still_works():
-    m = elome.TransitModel(_p(), T)
+    m = elome.TransitModel(_p(), T, dtype=mx.float64)
     assert m.light_curves([_p()]).shape == (1, T.size)
 
 
@@ -105,7 +105,7 @@ def test_fp32_gpu_path(kw, base):
 
 
 def test_rejects_empty_and_mismatched_law():
-    m = elome.TransitModel(_p(), T)
+    m = elome.TransitModel(_p(), T, dtype=mx.float64)
     with pytest.raises(ValueError, match="no parameter sets"):
         m.light_curves([])
     with pytest.raises(ValueError, match="limb-darkening"):
@@ -133,7 +133,7 @@ def test_batching_is_much_faster_than_looping():
 def test_array_form_infers_the_batch_size_from_any_attribute():
     """Regression: the size was taken from t0 alone, so an array rp with
     a scalar t0 raised a broadcast error."""
-    m = elome.TransitModel(_p(), T)
+    m = elome.TransitModel(_p(), T, dtype=mx.float64)
     pa = _p()
     pa.rp = np.array([0.09, 0.1, 0.11])        # t0/per/a/inc stay scalars
     assert m.light_curves(pa).shape == (3, T.size)

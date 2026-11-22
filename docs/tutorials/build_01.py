@@ -105,7 +105,7 @@ params.u = [0.4, 0.25]      # quadratic limb darkening
 params.limb_dark = "quadratic"
 
 t = np.linspace(-0.15, 0.15, 1000)          # days from mid-transit
-model = elome.TransitModel(params, t)
+model = elome.TransitModel(params, t, dtype=mx.float64)
 flux = model.light_curve(params)
 
 print(f"depth = {1 - flux.min():.6f}   out-of-transit flux = {flux.max():.1f}")
@@ -204,7 +204,7 @@ for law, u in (("uniform", []), ("linear", [0.5]), ("quadratic", [0.4, 0.25]),
         setattr(p2, k, getattr(params, k))
     p2.u, p2.limb_dark = u, law
     # the LAW is fixed per model, so each law needs its own TransitModel
-    f = elome.TransitModel(p2, t).light_curve(p2)
+    f = elome.TransitModel(p2, t, dtype=mx.float64).light_curve(p2)
     print(f"{law:12s} (N={len(u)}): depth {1 - f.min():.5f}")
     if HAVE_PLT:
         plt.plot(t, f, lw=1.4, label=f"{law} (N={len(u)})")
@@ -243,16 +243,16 @@ t_lc = np.linspace(-0.15, 0.15, 400)
 
 # a trustworthy reference: a very high-order contact rule
 ref = elome.TransitModel(p3, t_lc, exp_time=EXP,
-                               integration="contact", n_gl=40).light_curve(p3)
+                               integration="contact", n_gl=40, dtype=mx.float64).light_curve(p3)
 
 print(f"{'method':<28}{'model evals/exposure':>22}{'max error':>13}")
 for n in (7, 101, 1001):
-    m = elome.TransitModel(p3, t_lc, exp_time=EXP, supersample_factor=n)
+    m = elome.TransitModel(p3, t_lc, exp_time=EXP, supersample_factor=n, dtype=mx.float64)
     err = np.abs(m.light_curve(p3) - ref).max()
     print(f"{'supersample N=' + str(n):<28}{n:>22}{err:>13.2e}")
 for n_gl in (3, 5, 7):
     m = elome.TransitModel(p3, t_lc, exp_time=EXP,
-                                 integration="contact", n_gl=n_gl)
+                                 integration="contact", n_gl=n_gl, dtype=mx.float64)
     err = np.abs(m.light_curve(p3) - ref).max()
     # five sub-intervals per window, n_gl nodes each
     print(f"{'contact GL n=' + str(n_gl):<28}{5*n_gl:>22}{err:>13.2e}")
@@ -260,7 +260,7 @@ for n_gl in (3, 5, 7):
 
 code("""
 # what the smearing actually does to the curve
-sharp = elome.TransitModel(p3, t_lc).light_curve(p3)
+sharp = elome.TransitModel(p3, t_lc, dtype=mx.float64).light_curve(p3)
 if HAVE_PLT:
     plt.figure(figsize=(7, 3.2))
     plt.plot(t_lc, sharp, lw=1.4, label="instantaneous")
@@ -354,7 +354,7 @@ t_obs = 2500.0 + np.sort(rng.uniform(0.0, 27.0, 6_000))
 _p = elome.TransitParams()
 _p.t0, _p.per, _p.rp, _p.a, _p.inc = T0_TRUE, PER_TRUE, RP_TRUE, A_TRUE, INC_TRUE
 _p.ecc, _p.w, _p.u, _p.limb_dark = 0.0, 90.0, [U1_TRUE, U2_TRUE], "quadratic"
-truth_curve = elome.TransitModel(_p, t_obs).light_curve(_p)
+truth_curve = elome.TransitModel(_p, t_obs, dtype=mx.float64).light_curve(_p)
 y_obs = truth_curve + YERR * rng.standard_normal(t_obs.size)
 yerr_obs = np.full(t_obs.size, YERR)
 # --------------------------------------------------------------------------
@@ -529,7 +529,7 @@ if HAVE_PLT:
     u2_fit = math.sqrt(best[5])*(1 - 2*best[6])
     pf.ecc, pf.w, pf.u, pf.limb_dark = 0.0, 90.0, [u1_fit, u2_fit], "quadratic"
     t_fine = np.linspace(-0.2, 0.2, 800) + best[0]
-    model_fit = elome.TransitModel(pf, t_fine).light_curve(pf)
+    model_fit = elome.TransitModel(pf, t_fine, dtype=mx.float64).light_curve(pf)
 
     ph_d = (t_obs - best[0] + 0.5*best[1]) % best[1] - 0.5*best[1]
     nb = 120

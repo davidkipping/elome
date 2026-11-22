@@ -3,6 +3,34 @@
 All notable changes to Elómë. Versioning: semantic-ish (MAJOR.MINOR.PATCH);
 every release is tagged `vX.Y.Z` in git.
 
+## [Unreleased]
+
+### Changed
+- **`TransitModel` defaults to float32 on Apple Silicon.** With `dtype`
+  left out, a model runs on the GPU's fused Metal kernels, accurate to
+  about $10^{-7}$ of the flux, wherever they run (Metal available, MLX's
+  default device the GPU), and on the exact float64 path elsewhere. Pass
+  `dtype=mx.float64` for the float64 reference on a Mac. A batman script
+  that swaps its import is then several times faster than batman, not
+  several times slower.
+
+### Added
+- **batman compatibility.** `TransitModel` accepts batman's `max_err`,
+  `nthreads` and `fac` (and ignores them: every law here is a closed
+  form), and has batman's orbit helpers `get_t_periastron`,
+  `get_t_secondary`, `get_t_conjunction` and `get_true_anomaly`, which
+  agree with batman's to rounding.
+- **`elome.hybrid_weights(limb_dark, u, law="hybrid4")`** converts
+  coefficients for batman's linear, quadratic, square-root, logarithmic,
+  power-2 and four-parameter laws into a hybrid law's weights; with
+  hybrid4 the light curve is within a few ppm of batman's. Asking for one
+  of those laws now says so in its error.
+
+### Documentation
+- **Coming from batman**, in the README and on the front page: the
+  one-line swap, what carries over, the speed against batman, and what
+  to do about its other laws.
+
 ## [0.23.5] — 2026-11-22
 
 ### Changed

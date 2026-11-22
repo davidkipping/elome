@@ -135,7 +135,7 @@ def test_light_curves_by_the_kernels_are_the_graph(monkeypatch, law, contact):
         monkeypatch.setattr(MN, "_metal", lambda dt: None)
         graph = m.light_curves(ps)
     with mx.stream(mx.cpu):
-        exact = elome.TransitModel(ps[0], windows(ps[0], step=EXP), **kw).light_curves(ps)
+        exact = elome.TransitModel(ps[0], windows(ps[0], step=EXP), **{"dtype": mx.float64, **kw}).light_curves(ps)
     assert np.abs(fast - exact).max() <= 1.5 * np.abs(graph - exact).max() + 3e-8
 
 

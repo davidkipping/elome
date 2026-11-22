@@ -28,9 +28,9 @@ def P(**kw):
 
 def pair(p, **mk):
     """A model, and the same model evaluating every time."""
-    full = el.TransitModel(p, T, **mk)
+    full = el.TransitModel(p, T, **{"dtype": mx.float64, **mk})
     full._view = lambda *a, **k: None
-    return el.TransitModel(p, T, **mk), full
+    return el.TransitModel(p, T, **{"dtype": mx.float64, **mk}), full
 
 
 CASES = {
@@ -125,9 +125,9 @@ def test_inside_a_compile_every_time_is_evaluated():
 def test_float32_and_spots_and_tidal_planets_evaluate_every_time():
     assert el.TransitModel(P(), T, dtype=mx.float32)._event_view(P()) is None
     sp = P(**H4, spots=[[10.0, 5.0, 8.0, 0.6]], prot=12.0)
-    assert el.TransitModel(sp, T)._event_view(sp) is None
+    assert el.TransitModel(sp, T, dtype=mx.float64)._event_view(sp) is None
     td = P(**H4, tidal_q=0.05, a=4.0)
-    assert el.TransitModel(td, T)._event_view(td) is None
+    assert el.TransitModel(td, T, dtype=mx.float64)._event_view(td) is None
 
 
 def test_an_orbit_that_misses_the_star():
@@ -164,7 +164,7 @@ def test_no_point_in_the_event_is_dropped():
         p = P(t0=t0, per=per, rp=rp, a=a, inc=inc, ecc=e, w=w, fp=1e-3)
         t = np.sort(rng.uniform(0, 3 * per, 1500))
         kw = dict(integration="contact", exp_time=exp) if exp > 0 else {}
-        m = el.TransitModel(p, t, transittype="secondary" if sec else "primary", **kw)
+        m = el.TransitModel(p, t, transittype="secondary" if sec else "primary", **{"dtype": mx.float64, **kw})
         view = m._event_view(p)
         if view is None:
             continue

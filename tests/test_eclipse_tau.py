@@ -55,7 +55,7 @@ def test_equals_transit_model(oblate, ecc, w, ss):
     t = T0 + 2 * PER + np.linspace(0.0, PER, 2001)
     p = _params(ecc, w, oblate)
     mkw = dict(supersample_factor=ss, exp_time=EXP) if ss > 1 else {}
-    ref = el.TransitModel(p, t, transittype="secondary", **mkw).light_curve(p)
+    ref = el.TransitModel(p, t, transittype="secondary", **{"dtype": mx.float64, **mkw}).light_curve(p)
     tau = (t - T0) - PER * np.round((t - T0) / PER)
     xkw = dict(exp_time=EXP, integration="supersample", n_sub=ss) if ss > 1 else {}
     dev = np.asarray(el.flux_dev_from_tau(tau, PER, A, _b(ecc, w), R,
@@ -341,7 +341,7 @@ def test_transit_model_spherical_eclipse_takes_the_kernel(ecc, ss):
                           use_metal=False, **mkw)
     g = g32.light_curve(p)
     assert not any(key[0] == "sph-tau" for key in g32._compiled if isinstance(key, tuple))
-    d = el.TransitModel(p, t, transittype="secondary", **mkw).light_curve(p)
+    d = el.TransitModel(p, t, transittype="secondary", **{"dtype": mx.float64, **mkw}).light_curve(p)
     assert k.min() < 1.0 + 0.5 * FP
     assert np.abs(k - g).max() <= 2.0 * 2.0 ** -23
     assert np.abs(k - d).max() < 4e-7
@@ -498,7 +498,7 @@ def test_contact_rule_is_transit_model_s(ecc, w, oblate):
     t = T0 + _around_eclipse(ecc, w)
     p = _params(ecc, w, oblate)
     m = el.TransitModel(p, t, transittype="secondary", exp_time=EXP,
-                        integration="contact", n_gl=7)
+                        integration="contact", n_gl=7, dtype=mx.float64)
     got = 1.0 + np.asarray(_contact(t - T0, ecc, w, oblate=oblate, n_gl=7))
     assert np.abs(m.light_curve(p) - got).max() < 1e-12 * FP
 
@@ -651,7 +651,7 @@ def _model(ecc, w, oblate=False, n_gl=7, **kw):
     p = _params(ecc, w, oblate)
     t = T0 + _around_eclipse(ecc, w)
     return p, t, el.TransitModel(p, t, transittype="secondary", exp_time=EXP,
-                                 integration="contact", n_gl=n_gl, **kw)
+                                 integration="contact", n_gl=n_gl, **{"dtype": mx.float64, **kw})
 
 
 @needs_metal

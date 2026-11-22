@@ -47,7 +47,7 @@ def circular_z(t, t0=0.0, per=P, a=A, inc=INC):
 
 @pytest.mark.parametrize("law", NAMES)
 def test_light_curve_is_flux_dev_hybrid_on_the_orbit(law):
-    m = elome.TransitModel(params(law), T)
+    m = elome.TransitModel(params(law), T, dtype=mx.float64)
     got = m.light_curve(params(law))
     z, front = circular_z(T)
     with mx.stream(mx.cpu):
@@ -60,13 +60,13 @@ def test_light_curve_is_flux_dev_hybrid_on_the_orbit(law):
 
 @pytest.mark.parametrize("law", NAMES)
 def test_weights_update_without_rebuild(law):
-    m = elome.TransitModel(params(law), T)
+    m = elome.TransitModel(params(law), T, dtype=mx.float64)
     f1 = m.light_curve(params(law))
     u = list(WEIGHTS[law])
     u[0] += 0.3
     f2 = m.light_curve(params(law, u=u))
     assert not np.allclose(f1, f2)
-    assert np.array_equal(f2, elome.TransitModel(params(law, u=u), T)
+    assert np.array_equal(f2, elome.TransitModel(params(law, u=u), T, dtype=mx.float64)
                           .light_curve(params(law, u=u)))
 
 
@@ -74,8 +74,8 @@ def test_weights_update_without_rebuild(law):
 def test_wrong_or_changed_count_raises(law):
     n = LAWS[law].n_w
     with pytest.raises(ValueError, match=f"{law} takes {n} weights"):
-        elome.TransitModel(params(law, u=[0.1] * (n + 1)), T)
-    m = elome.TransitModel(params(law), T)
+        elome.TransitModel(params(law, u=[0.1] * (n + 1)), T, dtype=mx.float64)
+    m = elome.TransitModel(params(law), T, dtype=mx.float64)
     with pytest.raises(ValueError, match="coefficient count changed"):
         m.light_curve(params(law, u=[0.1] * (n - 1)))
     with pytest.raises(ValueError, match="law changed"):
@@ -85,7 +85,7 @@ def test_wrong_or_changed_count_raises(law):
 @pytest.mark.parametrize("law", NAMES)
 def test_eccentric_runs(law):
     p = params(law, ecc=0.3, w=63.0)
-    m = elome.TransitModel(p, T)
+    m = elome.TransitModel(p, T, dtype=mx.float64)
     f = m.light_curve(p)
     assert f.min() < 0.99 and np.isfinite(f).all()
     assert list(m._compiled) == [(False, False)]          # fp64: the graph
@@ -149,7 +149,7 @@ def test_fp32_gpu_model_runs_the_tau_kernel(law, mode, ecc):
         assert list(m._compiled) == [("sph-tau", orbit)]
     graph = elome.TransitModel(p, T, dtype=mx.float32, use_metal=False,
                                      **MODES[mode]).light_curve(p)
-    f64 = elome.TransitModel(p, T, **MODES[mode]).light_curve(p)
+    f64 = elome.TransitModel(p, T, **{"dtype": mx.float64, **MODES[mode]}).light_curve(p)
     assert np.abs(got - graph).max() < 1e-6
     assert np.abs(got - f64).max() < 2e-6
 
@@ -339,7 +339,7 @@ def test_contact_integration(law):
     latter's own O(1/N) accuracy."""
     def lc(**kw):
         return elome.TransitModel(params(law), T, exp_time=EXP,
-                                        **kw).light_curve(params(law))
+                                        **{"dtype": mx.float64, **kw}).light_curve(params(law))
     c7 = lc(integration="contact", n_gl=7)
     c40 = lc(integration="contact", n_gl=40)
     s = lc(integration="supersample", supersample_factor=1001)
@@ -355,7 +355,7 @@ def test_light_curves_per_set_weights(law, form):
     rng = np.random.default_rng(1)
     W = phys_w(law, rng, n)
     rp = np.linspace(0.08, 0.12, n)
-    m = elome.TransitModel(params(law), T)
+    m = elome.TransitModel(params(law), T, dtype=mx.float64)
     if form == "sequence":
         got = m.light_curves([params(law, u=W[j], rp=float(rp[j]))
                               for j in range(n)])
@@ -372,7 +372,7 @@ def test_light_curves_per_set_weights(law, form):
 @pytest.mark.parametrize("law", NAMES)
 def test_light_curves_contact_mode(law):
     m = elome.TransitModel(params(law), T, exp_time=EXP,
-                                 integration="contact", n_gl=7)
+                                 integration="contact", n_gl=7, dtype=mx.float64)
     ps = [params(law, rp=r) for r in (0.08, 0.1, 0.12)]
     got = m.light_curves(ps)
     for j, p in enumerate(ps):
@@ -385,7 +385,7 @@ def test_fp32_model_matches_fp64(law):
         pytest.skip("Metal unavailable")
     p = params(law)
     f32 = elome.TransitModel(p, T, dtype=mx.float32).light_curve(p)
-    f64 = elome.TransitModel(p, T).light_curve(p)
+    f64 = elome.TransitModel(p, T, dtype=mx.float64).light_curve(p)
     assert np.abs(f32 - f64).max() < 2e-6
 
 
@@ -393,7 +393,7 @@ def test_fp32_model_matches_fp64(law):
 def test_light_curve_mx_gradient_in_every_weight(law):
     """light_curve_mx differentiates in each w_j through the affine
     shape map; FD in fp64 on the CPU."""
-    m = elome.TransitModel(params(law), T)
+    m = elome.TransitModel(params(law), T, dtype=mx.float64)
     n = LAWS[law].n_w
     w0 = np.array(WEIGHTS[law])
     ct = np.random.default_rng(2).normal(size=T.size)
@@ -419,9 +419,9 @@ def test_light_curve_mx_gradient_in_every_weight(law):
 @pytest.mark.parametrize("law", NAMES)
 def test_secondary_eclipse_ignores_limb_darkening(law):
     p = params(law, fp=1e-3, t_secondary=P / 2)
-    m = elome.TransitModel(p, T + P / 2, transittype="secondary")
+    m = elome.TransitModel(p, T + P / 2, transittype="secondary", dtype=mx.float64)
     q = params("quadratic", u=[0.4, 0.25], fp=1e-3, t_secondary=P / 2)
-    mq = elome.TransitModel(q, T + P / 2, transittype="secondary")
+    mq = elome.TransitModel(q, T + P / 2, transittype="secondary", dtype=mx.float64)
     assert np.array_equal(m.light_curve(p), mq.light_curve(q))
 
 
@@ -432,7 +432,7 @@ def test_priors_feed_the_model():
     w2 = ld.hybrid2_from_q_np(rng.random(), rng.random())
     for law, w in (("hybrid5", w5), ("hybrid2", np.asarray(w2))):
         p = params(law, u=w)
-        f = elome.TransitModel(p, T).light_curve(p)
+        f = elome.TransitModel(p, T, dtype=mx.float64).light_curve(p)
         assert np.isfinite(f).all() and f.min() < 0.99 and f.max() <= 1.0
 
 
@@ -448,7 +448,7 @@ CUSTOM = {
 
 
 @pytest.mark.parametrize("which", list(CUSTOM))
-@pytest.mark.parametrize("dtype", [None, mx.float32], ids=["fp64", "fp32"])
+@pytest.mark.parametrize("dtype", [mx.float64, mx.float32], ids=["fp64", "fp32"])
 def test_transit_model_takes_a_hybrid_law_object(which, dtype):
     """light_curve, light_curves and light_curve_mx with a custom law equal
     flux_dev_hybrid on the model's own separations."""
@@ -465,14 +465,14 @@ def test_transit_model_takes_a_hybrid_law_object(which, dtype):
         ref = 1.0 + np.asarray(flux_dev_hybrid(
             mx.array(np.where(front, z, 2 + z), dtype=mx.float64),
             mx.array(RP, dtype=mx.float64), list(w), law))
-    tol = 1e-13 if dtype is None else 2e-6
+    tol = 1e-13 if dtype == mx.float64 else 2e-6
     assert np.abs(f - ref).max() <= tol
     assert np.abs(np.asarray(m.light_curve_mx(p), np.float64) - f).max() <= 1e-6
     pa = params("hybrid2")
     pa.limb_dark, pa.u = law, np.stack([w, w])
     pa.rp = np.array([RP, RP])
     lcs = m.light_curves(pa)
-    assert np.abs(lcs - f[None, :]).max() <= (1e-14 if dtype is None else 2e-7)
+    assert np.abs(lcs - f[None, :]).max() <= (1e-14 if dtype == mx.float64 else 2e-7)
 
 
 def test_an_equal_law_object_is_the_same_law():
@@ -480,7 +480,7 @@ def test_an_equal_law_object_is_the_same_law():
     law = CUSTOM["hybrid2-type"]
     p = params("hybrid2")
     p.limb_dark, p.u = law, [0.3, 0.2]
-    m = elome.TransitModel(p, T)
+    m = elome.TransitModel(p, T, dtype=mx.float64)
     p.limb_dark = elome.HybridLaw("custom2", (0.15,), ((1.0, -1.0, 0.0),))
     m.light_curve(p)
     p.limb_dark = elome.HybridLaw("custom2", (0.2,), ((1.0, -1.0, 0.0),))
@@ -495,9 +495,9 @@ def test_a_law_registered_after_import_is_supported():
     try:
         p = params("hybrid2")
         p.limb_dark, p.u = "late2", [0.3, 0.2]
-        a = elome.TransitModel(p, T).light_curve(p)
+        a = elome.TransitModel(p, T, dtype=mx.float64).light_curve(p)
         p.limb_dark = law
-        b = elome.TransitModel(p, T).light_curve(p)
+        b = elome.TransitModel(p, T, dtype=mx.float64).light_curve(p)
         assert np.array_equal(a, b)
     finally:
         del Hm.LAWS["late2"]
@@ -512,7 +512,7 @@ def test_a_name_and_its_law_object_are_one_law():
                         (elome.HYBRID2, "hybrid2")):
         p = params("hybrid2")
         p.limb_dark = build
-        m = elome.TransitModel(p, T)
+        m = elome.TransitModel(p, T, dtype=mx.float64)
         a = m.light_curve(p)
         p.limb_dark = call
         assert np.array_equal(m.light_curve(p), a)
@@ -528,7 +528,7 @@ def test_a_model_keeps_its_law_when_the_registry_changes():
     try:
         p = params("hybrid2")
         p.limb_dark, p.u = "x", [0.3, 0.2]
-        m = elome.TransitModel(p, T)
+        m = elome.TransitModel(p, T, dtype=mx.float64)
         circ = m.light_curve(p)
         Hm.LAWS["x"] = elome.HybridLaw("x", (0.5,), ((1.0, -1.0, 0.0),))
         with pytest.raises(ValueError, match="law changed"):
@@ -539,7 +539,7 @@ def test_a_model_keeps_its_law_when_the_registry_changes():
         pe = params("hybrid2", ecc=0.2, w=63.0)    # a graph traced only now
         pe.limb_dark, pe.u = law, [0.3, 0.2]
         e = m.light_curve(pe)
-        ref = elome.TransitModel(pe, T).light_curve(pe)
+        ref = elome.TransitModel(pe, T, dtype=mx.float64).light_curve(pe)
         assert np.array_equal(e, ref)
     finally:
         Hm.LAWS.pop("x", None)

@@ -15,6 +15,7 @@ covered, $F = 0$ exactly and every gradient is zero.
 ```python
 import math
 import numpy as np
+import mlx.core as mx
 import elome
 
 p = elome.TransitParams()
@@ -22,7 +23,7 @@ p.t0, p.per, p.rp, p.a = 0.0, 1.4079, 7.28, 336.0     # WD 1856+534 b-like
 p.inc = math.degrees(math.acos(7.79 / p.a))           # b = 7.79: grazing
 p.ecc, p.w, p.limb_dark, p.u = 0.0, 90.0, "quadratic", [0.4, 0.25]
 t = np.linspace(-0.01, 0.01, 2001)                    # a 5-minute, 16%-deep graze
-flux = elome.TransitModel(p, t).light_curve(p)        # float64: exact
+flux = elome.TransitModel(p, t, dtype=mx.float64).light_curve(p)   # exact
 ```
 
 ## Accuracy

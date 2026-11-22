@@ -63,10 +63,10 @@ def _frontend(t, ecc, w, transittype, law="quadratic", rstar=None,
            if integration == "contact" else
            dict(exp_time=exp_time, integration=integration, supersample_factor=n_sub))
     sec = elome.TransitModel(p, t - _delay(ecc, w, rstar), transittype="secondary",
-                             **ekw).light_curve(p)
+                             **{"dtype": mx.float64, **ekw}).light_curve(p)
     dev = sec - 1.0 - FP
     if transittype == "both":
-        dev = dev + elome.TransitModel(p, t, **ekw).light_curve(p) - 1.0
+        dev = dev + elome.TransitModel(p, t, **{"dtype": mx.float64, **ekw}).light_curve(p) - 1.0
     return dev / (1.0 + FP)
 
 

@@ -4,16 +4,17 @@ Five ideas run through the rest of the documentation.
 
 ## Two precisions, chosen by the data's dtype
 
-| | float64 | float32 |
+| | float32 | float64 |
 |---|---|---|
-| where it runs | the CPU | the Apple-Silicon GPU |
-| how | an MLX graph of the closed-form solution | hand-fused Metal kernels |
-| accuracy | rounding, about $10^{-16}$ | about $10^{-7}$ in flux |
-| use it for | reference values, checks, small problems | sampling, large batches, long light curves |
+| where it runs | the Apple-Silicon GPU | the CPU |
+| how | hand-fused Metal kernels | an MLX graph of the closed-form solution |
+| accuracy | about $10^{-7}$ in flux | rounding, about $10^{-16}$ |
+| use it for | everything: sampling, batches, long light curves | reference values and checks; machines without the GPU kernels |
 
 The two paths compute the same function. The dtype of the *data* decides
 which one runs. For the batman-style frontend that is
-`TransitModel(params, t, dtype=...)`, which defaults to float64. For the
+`TransitModel(params, t, dtype=...)`, which defaults to float32 where the
+GPU kernels run (a Mac with Apple Silicon) and to float64 elsewhere. For the
 array functions, float32 data (an `mx.array` or a numpy `float32`
 array) takes the GPU kernels, and anything else is float64 on the CPU.
 {doc}`../guides/gradients-and-precision` has the full rule.

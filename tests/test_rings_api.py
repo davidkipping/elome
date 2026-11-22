@@ -59,7 +59,7 @@ def test_matches_the_reference(kw):
     """Absolute times, t0 the time of inferior conjunction, inc, w and
     theta in degrees."""
     p = P(**kw)
-    got = el.TransitModel(p, T).light_curve(p)
+    got = el.TransitModel(p, T, dtype=mx.float64).light_curve(p)
     ref = reference(p, T)
     assert 1.0 - ref.min() > 1e-3
     assert np.abs(got - ref).max() < 1e-14
@@ -75,8 +75,8 @@ def test_transparent_ring_is_the_bare_planet(kw, f):
     bare.ring_in = bare.ring_out = bare.ring_f = None
     if f is None:
         bare.theta = None
-    got = el.TransitModel(p, T, **kw).light_curve(p)
-    ref = el.TransitModel(bare, T, **kw).light_curve(bare)
+    got = el.TransitModel(p, T, **{"dtype": mx.float64, **kw}).light_curve(p)
+    ref = el.TransitModel(bare, T, **{"dtype": mx.float64, **kw}).light_curve(bare)
     assert np.abs(got - ref).max() < 1e-14
 
 
@@ -87,7 +87,7 @@ def test_contact_rule_converges():
     converges only that slowly across a kink)."""
     p = P(ring_f=0.95, ring_out=4.0, inc=89.6)
     t = T0 + 2 * PER + np.linspace(-0.17, 0.17, 41)
-    L = lambda **kw: el.TransitModel(p, t, exp_time=EXP, **kw).light_curve(p)
+    L = lambda **kw: el.TransitModel(p, t, exp_time=EXP, **{"dtype": mx.float64, **kw}).light_curve(p)
     c5 = L(integration="contact")
     s1, s2 = (L(integration="supersample", supersample_factor=n) for n in (801, 3201))
     ext = s2 + (s2 - s1) / 3.0
@@ -110,7 +110,7 @@ def test_kinks_are_where_the_outlines_touch_the_limb():
 
 def test_theta_is_in_degrees_and_matches_flux_dev_from_tau():
     p = P(theta=35.0)
-    got = el.TransitModel(p, T).light_curve(p)
+    got = el.TransitModel(p, T, dtype=mx.float64).light_curve(p)
     tau = (T - T0) - PER * np.round((T - T0) / PER)
     ref = 1.0 + np.asarray(el.flux_dev_from_tau(
         tau, PER, 8.8, 8.8 * math.cos(math.radians(88.5)), 0.08, limb_dark="hybrid5",
@@ -133,7 +133,7 @@ def test_ld_basis_contract():
 @pytest.mark.parametrize("kw", [{}, {"integration": "contact", "exp_time": EXP}],
                          ids=["none", "contact"])
 def test_light_curves_equal_the_loop(kw):
-    m = el.TransitModel(P(), T, **kw)
+    m = el.TransitModel(P(), T, **{"dtype": mx.float64, **kw})
     sets = [P(), P(ring_f=0.9, ring_tau=0.3, theta=80.0, ecc=0.2, w=10.0),
             P(rp=0.07, ring_in=1.2, ring_out=3.0, u=[0.3, 0.1, 0.1, 0.05, 0.05])]
     loop = np.stack([m.light_curve(q) for q in sets])
@@ -152,7 +152,7 @@ def test_light_curve_mx_differentiates_in_the_ring():
     base = dict(ring_in=1.4, ring_out=2.6, ring_f=0.8, ring_tau=0.6, theta=25.0, rp=0.08)
     t = T0 + 2 * PER + np.linspace(-0.12, 0.12, 25)
     ct = np.random.default_rng(0).normal(size=t.shape)
-    m = el.TransitModel(P(**base), t)
+    m = el.TransitModel(P(**base), t, dtype=mx.float64)
 
     def loss(vals):
         p = P(**{k: v if isinstance(v, mx.array) else mx.array(v, dtype=mx.float64)
@@ -183,7 +183,7 @@ def test_ring_edge_on_the_planet_outline(dtype, tol, ring_tau):
         p = P(ring_in=1.0, ring_out=2.0, ring_f=0.0, theta=0.0)
         disc = P(rp=0.16)
         disc.theta = disc.ring_in = disc.ring_out = disc.ring_f = None
-        ref = el.TransitModel(disc, T).light_curve(disc)      # float64
+        ref = el.TransitModel(disc, T, dtype=mx.float64).light_curve(disc)      # float64
         assert np.abs(run(p) - ref).max() < tol
     f = 0.19
     tie = P(f=f, ring_f=f, ring_in=1.0 / math.sqrt(1.0 - f), ring_tau=ring_tau)
@@ -198,7 +198,7 @@ def test_ring_edge_on_the_planet_outline(dtype, tol, ring_tau):
                          ids=["none", "contact"])
 def test_fp32_model_matches_fp64(kw):
     p = P(ecc=0.2, w=40.0, ring_tau=0.5)
-    d64 = el.TransitModel(p, T, **kw).light_curve(p)
+    d64 = el.TransitModel(p, T, **{"dtype": mx.float64, **kw}).light_curve(p)
     d32 = el.TransitModel(p, T, dtype=mx.float32, **kw).light_curve(p)
     assert np.abs(d32 - d64).max() < 3e-7
 
@@ -232,7 +232,7 @@ def test_long_grids_are_evaluated_in_blocks(pkw, mkw, monkeypatch):
     it is built in blocks of at most _RING_BLOCK points -- times x sets x
     exposure nodes: the same curve, bit for bit."""
     p = P(**pkw)
-    m = el.TransitModel(p, T, **mkw)
+    m = el.TransitModel(p, T, **{"dtype": mx.float64, **mkw})
     m._view = lambda *a, **k: None          # every time, as a long dense grid
     sets = [p, P(**{**pkw, "ring_f": 0.9, "ring_tau": 0.3, "theta": 80.0})]
     whole, whole_sets = m.light_curve(p), m.light_curves(sets)
@@ -276,7 +276,7 @@ def test_contact_kinks_are_found_once_per_set(monkeypatch):
         calls.append(a[0].shape)
         return orig(*a, **kw)
     p = P()
-    m = el.TransitModel(p, T, integration="contact", exp_time=EXP, n_gl=2)
+    m = el.TransitModel(p, T, integration="contact", exp_time=EXP, n_gl=2, dtype=mx.float64)
     monkeypatch.setattr(rings_tau, "_RING_BLOCK", 100)
     monkeypatch.setattr(rings_tau, "_ring_kinks", spy)
     m.light_curves([p, P(rp=0.07)])
@@ -297,32 +297,32 @@ def test_ring_kernels_are_not_blocked(monkeypatch):
 
 def test_errors():
     with pytest.raises(ValueError, match="hybrid law"):
-        el.TransitModel(P(limb_dark="quadratic", u=[0.4, 0.2]), T)
+        el.TransitModel(P(limb_dark="quadratic", u=[0.4, 0.2]), T, dtype=mx.float64)
     with pytest.raises(ValueError, match="ring_in"):
-        el.TransitModel(P(ring_in=None), T)
+        el.TransitModel(P(ring_in=None), T, dtype=mx.float64)
     with pytest.raises(ValueError, match="ring_out"):
         p = P(ring_out=None)
-        el.TransitModel(p, T).light_curve(p)
+        el.TransitModel(p, T, dtype=mx.float64).light_curve(p)
     with pytest.raises(ValueError, match="primary"):
-        el.TransitModel(P(fp=1e-4), T, transittype="secondary")
+        el.TransitModel(P(fp=1e-4), T, transittype="secondary", dtype=mx.float64)
     with pytest.raises(ValueError, match="ring_f"):
         p = P(ring_f=1.0)
-        el.TransitModel(p, T).light_curve(p)
+        el.TransitModel(p, T, dtype=mx.float64).light_curve(p)
     with pytest.raises(ValueError, match="equator"):
         p = P(ring_in=0.9)
-        el.TransitModel(p, T).light_curve(p)
+        el.TransitModel(p, T, dtype=mx.float64).light_curve(p)
     for f in (-0.1, 1.0, 1.2):              # as the oblate path, not NaN
         with pytest.raises(ValueError, match="flattening"):
             p = P(f=f)
-            el.TransitModel(p, T).light_curve(p)
+            el.TransitModel(p, T, dtype=mx.float64).light_curve(p)
         with pytest.raises(ValueError, match="flattening"):
-            el.TransitModel(P(f=0.2), T).light_curves([P(f=0.2), P(f=f)])
+            el.TransitModel(P(f=0.2), T, dtype=mx.float64).light_curves([P(f=0.2), P(f=f)])
     with pytest.raises(ValueError, match=r"\[0, 0.999\]"):  # cos i holds to 0.999
         p = P(ecc=0.9995, w=300.0)
-        el.TransitModel(p, T).light_curve(p)
+        el.TransitModel(p, T, dtype=mx.float64).light_curve(p)
     with pytest.raises(ValueError, match=r"\[0, 0.999\]"):
-        el.TransitModel(P(), T).light_curves([P(), P(ecc=0.9995, w=300.0)])
-    m = el.TransitModel(P(), T)
+        el.TransitModel(P(), T, dtype=mx.float64).light_curves([P(), P(ecc=0.9995, w=300.0)])
+    m = el.TransitModel(P(), T, dtype=mx.float64)
     bare = P()
     bare.ring_in = bare.ring_out = bare.ring_f = bare.theta = None
     with pytest.raises(ValueError, match="ring_in changed"):
@@ -335,7 +335,7 @@ def test_errors():
 def test_theta_alone_is_allowed_with_a_ring():
     """theta orients the ring of a spherical planet (no f needed)."""
     p = P(f=None, theta=60.0)
-    assert 1.0 - el.TransitModel(p, T).light_curve(p).min() > 1e-3
+    assert 1.0 - el.TransitModel(p, T, dtype=mx.float64).light_curve(p).min() > 1e-3
 
 
 def test_oblate_and_spherical_models_never_touch_the_ring_code():

@@ -194,7 +194,7 @@ class TestFrontend:
         p.ecc, p.w, p.u, p.limb_dark = 0.0, 90.0, u, law
         for k, v in kw.items():
             setattr(p, k, v)
-        return elome.TransitModel(p, self.T), p
+        return elome.TransitModel(p, self.T, dtype=mx.float64), p
 
     def test_polynomial_n2_equals_quadratic(self):
         mq, pq = self._model([0.4, 0.25], law="quadratic")

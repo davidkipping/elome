@@ -2,7 +2,8 @@
 
 This page takes ten minutes. It computes a light curve the way batman
 does, changes parameters, takes a gradient, evaluates many parameter sets
-at once, and finally makes the planet oblate.
+at once, and finally makes the planet oblate. Coming from batman, start
+with {ref}`coming-from-batman`.
 
 ## A light curve
 
@@ -25,6 +26,12 @@ t = np.linspace(-0.1, 0.1, 1000)
 m = elome.TransitModel(params, t)
 flux = m.light_curve(params)     # a numpy array, 1 out of transit
 ```
+
+On a Mac with Apple Silicon the model runs on the GPU in float32, through
+fused Metal kernels, to about $10^{-7}$ of the flux. For the exact float64
+path on the CPU, the reference, build it with `dtype=mx.float64` (with
+`import mlx.core as mx`); elsewhere, without the GPU kernels, float64 is
+the default. See {doc}`concepts`.
 
 As in batman, the model is built once for a set of times and then
 evaluated for any parameters:
@@ -55,28 +62,26 @@ params.ecc, params.w = 0.0, 90.0
 
 `light_curve_mx` returns the flux as an MLX array, differentiable in every
 field you set to an `mx.array`. Here is the gradient of a chi-squared in
-the planet's radius and the two limb-darkening coefficients:
+the planet's radius and the two limb-darkening coefficients, on the GPU:
 
 ```python
 import mlx.core as mx
 
 y = flux + 1e-4 * np.random.default_rng(1).standard_normal(t.size)   # fake data
-y64 = mx.array(y, dtype=mx.float64)   # mx.array alone would make float32
+y32 = mx.array(y)                # float32, as the model
 
 def chi2(rp, u1, u2):
     params.rp, params.u = rp, [u1, u2]
-    return mx.sum(((m.light_curve_mx(params) - y64) / 1e-4) ** 2)
+    return mx.sum(((m.light_curve_mx(params) - y32) / 1e-4) ** 2)
 
-with mx.stream(mx.cpu):          # float64 work runs on the CPU stream
-    g = mx.grad(chi2, argnums=(0, 1, 2))(mx.array(0.1, dtype=mx.float64),
-                                         mx.array(0.4, dtype=mx.float64),
-                                         mx.array(0.25, dtype=mx.float64))
+g = mx.grad(chi2, argnums=(0, 1, 2))(mx.array(0.1), mx.array(0.4), mx.array(0.25))
 params.rp, params.u = 0.1, [0.4, 0.25]
 ```
 
-The model above is float64 on the CPU, which is exact. For speed on the GPU,
-build it in float32 with `dtype=mx.float32`; see
-{doc}`concepts`.
+In float32 the gradients agree with float64's to about $10^{-3}$ of their
+size, plenty for a sampler. For the exact float64 gradient, build the
+model with `dtype=mx.float64`, use float64 arrays and run `mx.grad` inside
+`with mx.stream(mx.cpu):`; see {doc}`../guides/gradients-and-precision`.
 
 ## Many parameter sets at once
 
@@ -84,12 +89,11 @@ A sampler never wants one light curve. It wants hundreds, and it should
 ask for them in one call:
 
 ```python
-m32 = elome.TransitModel(params, t, dtype=mx.float32)
 batch = elome.TransitParams()
 for name in ("t0", "per", "a", "inc", "ecc", "w", "limb_dark", "u"):
     setattr(batch, name, getattr(params, name))
 batch.rp = np.linspace(0.08, 0.12, 500)       # 500 different planets
-fluxes = m32.light_curves(batch)              # shape (500, 1000), one GPU dispatch
+fluxes = m.light_curves(batch)                # shape (500, 1000), one GPU dispatch
 ```
 
 One batched call is two to three orders of magnitude faster than a

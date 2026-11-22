@@ -99,7 +99,7 @@ p.limb_dark = "quadratic"
 p.u = [0.40, 0.25]
 
 t = np.linspace(-0.12, 0.12, 2001)   # days around mid-transit
-m = el.TransitModel(p, t)            # float64 on the CPU by default
+m = el.TransitModel(p, t, dtype=mx.float64)            # float64, on the CPU
 flux = m.light_curve(p)
 
 b = p.a * math.cos(math.radians(p.inc))
@@ -145,7 +145,7 @@ print("hybrid5 weights:", np.round(w5, 4), "| centre-to-limb drop:", round(float
 
 ph = copy.copy(p)
 ph.limb_dark, ph.u = "hybrid5", list(w5)
-flux_h5 = el.TransitModel(ph, t).light_curve(ph)
+flux_h5 = el.TransitModel(ph, t, dtype=mx.float64).light_curve(ph)
 print(f"hybrid5 depth = {(1 - flux_h5.min()) * 1e6:.0f} ppm")
 
 # the intensity profiles behind the two curves: I/I(1) = 1 - sum_j w_j T_j(mu),
@@ -180,11 +180,11 @@ the same accuracy.
 code("""
 EXP = 29.4 / 60 / 24                      # Kepler long cadence [d]
 tc = np.linspace(-0.12, 0.12, 241)
-ref = el.TransitModel(p, tc, supersample_factor=401, exp_time=EXP).light_curve(p)
+ref = el.TransitModel(p, tc, supersample_factor=401, exp_time=EXP, dtype=mx.float64).light_curve(p)
 for label, kw in [("instantaneous", {}),
                   ("supersample x 7", dict(supersample_factor=7, exp_time=EXP)),
                   ("contact rule, n_gl = 5", dict(integration="contact", exp_time=EXP, n_gl=5))]:
-    f_ = el.TransitModel(p, tc, **kw).light_curve(p)
+    f_ = el.TransitModel(p, tc, **{"dtype": mx.float64, **kw}).light_curve(p)
     print(f"{label:24s} max |error| vs 401-point supersampling: {np.abs(f_ - ref).max():.1e}")
 """)
 
@@ -233,7 +233,7 @@ pa.rp = 0.1 * (1 + 0.05 * rng.standard_normal(n_sets))
 pa.inc = 87.0 + 0.5 * rng.standard_normal(n_sets)
 
 t_big = np.linspace(-0.12, 0.12, 20_000)
-m64 = el.TransitModel(p, t_big)
+m64 = el.TransitModel(p, t_big, dtype=mx.float64)
 m32 = el.TransitModel(p, t_big, dtype=mx.float32)
 print("fp32 vs fp64, one set:", f"{np.abs(m32.light_curve(p) - m64.light_curve(p)).max():.1e}")
 npts = n_sets * t_big.size
@@ -330,8 +330,8 @@ ps = copy.copy(ph)                       # the same planet, spherical
 ps.f, ps.theta = None, None
 
 t_hr = np.linspace(-0.12, 0.12, 4001)
-flux_obl = el.TransitModel(po, t_hr).light_curve(po)
-flux_sph = el.TransitModel(ps, t_hr).light_curve(ps)
+flux_obl = el.TransitModel(po, t_hr, dtype=mx.float64).light_curve(po)
+flux_sph = el.TransitModel(ps, t_hr, dtype=mx.float64).light_curve(ps)
 resid = (flux_obl - flux_sph) * 1e6
 print(f"depth: oblate {(1 - flux_obl.min()) * 1e6:.0f} ppm, spherical {(1 - flux_sph.min()) * 1e6:.0f} ppm")
 print(f"oblate - spherical: {resid.min():+.1f} .. {resid.max():+.1f} ppm")
@@ -358,7 +358,7 @@ code("""
 def residual(f, theta):
     q = copy.copy(po)
     q.f, q.theta = f, theta
-    return (el.TransitModel(q, t_hr).light_curve(q) - flux_sph) * 1e6
+    return (el.TransitModel(q, t_hr, dtype=mx.float64).light_curve(q) - flux_sph) * 1e6
 
 res_theta = {theta: residual(0.1, theta) for theta in (0.0, 30.0, 60.0, 90.0)}
 for theta, r_ in res_theta.items():
@@ -418,10 +418,10 @@ c_sph = [-phi[0] * to_min, -phi[1] * to_min, phi[1] * to_min, phi[0] * to_min]
 for name, c in (("oblate f=0.1, 30 deg", c_obl), ("sphere, same area", c_sph)):
     print(f"{name:22s} contacts [min from mid-transit]: " + "  ".join(f"{v:+8.3f}" for v in c))
 
-ref = el.TransitModel(po, tc, supersample_factor=401, exp_time=EXP).light_curve(po)
+ref = el.TransitModel(po, tc, supersample_factor=401, exp_time=EXP, dtype=mx.float64).light_curve(po)
 for label, kw in [("supersample x 7", dict(supersample_factor=7, exp_time=EXP)),
                   ("contact rule, n_gl = 5", dict(integration="contact", exp_time=EXP, n_gl=5))]:
-    f_ = el.TransitModel(po, tc, **kw).light_curve(po)
+    f_ = el.TransitModel(po, tc, **{"dtype": mx.float64, **kw}).light_curve(po)
     print(f"{label:24s} max |error| vs 401-point supersampling: {np.abs(f_ - ref).max():.1e}")
 """)
 
@@ -441,7 +441,7 @@ e_, w_ = 0.3, 40.0
 cosi = b_ * (1 + e_ * math.sin(math.radians(w_))) / (8.8 * (1 - e_**2))   # same b as circular
 pe = copy.copy(po)
 pe.ecc, pe.w, pe.inc = e_, w_, math.degrees(math.acos(cosi))
-flux_ecc = el.TransitModel(pe, t_hr).light_curve(pe)
+flux_ecc = el.TransitModel(pe, t_hr, dtype=mx.float64).light_curve(pe)
 dt_hr = (t_hr[1] - t_hr[0]) * 24
 print(f"b at conjunction: {b_:.3f} (both orbits)")
 print(f"depth: e = 0.3 {(1 - flux_ecc.min()) * 1e6:.0f} ppm, circular {(1 - flux_obl.min()) * 1e6:.0f} ppm")
@@ -458,7 +458,7 @@ its gradient is per degree.)
 
 code("""
 with mx.stream(mx.cpu):
-    mo = el.TransitModel(po, t_hr)
+    mo = el.TransitModel(po, t_hr, dtype=mx.float64)
     def loss(f, theta):
         q = copy.copy(po)
         q.f, q.theta = f, theta
@@ -497,7 +497,7 @@ pa_s.f = pa_s.theta = None
 mo32 = el.TransitModel(po, t_big, dtype=mx.float32)
 ms32 = el.TransitModel(ps, t_big, dtype=mx.float32)
 print("fp32 vs fp64, one oblate set:",
-      f"{np.abs(mo32.light_curve(po) - el.TransitModel(po, t_big).light_curve(po)).max():.1e}")
+      f"{np.abs(mo32.light_curve(po) - el.TransitModel(po, t_big, dtype=mx.float64).light_curve(po)).max():.1e}")
 t_o = timeit(lambda: mo32.light_curves(pa_o))
 t_s = timeit(lambda: ms32.light_curves(pa_s))
 print(f"light_curves, {n_sets} sets x {t_big.size:,} points (returned as numpy): "
@@ -585,7 +585,7 @@ for bad in (dict(limb_dark="quadratic", u=[0.4, 0.25]), dict(rp=0.6, f=0.5)):
     for k, v in bad.items():
         setattr(q, k, v)
     try:
-        el.TransitModel(q, t).light_curve(q)
+        el.TransitModel(q, t, dtype=mx.float64).light_curve(q)
     except ValueError as err:
         print(f"{bad}: ValueError: {err}")
 """)
@@ -610,7 +610,7 @@ pr.ring_in, pr.ring_out = 1.4, 2.6       # ... with a ring, in planet radii
 pr.ring_f, pr.theta = 0.7, 25.0          # |cos i| = 0.3; long axis 25 deg from the motion
 pr.ring_tau = None                       # opaque
 
-mr = el.TransitModel(pr, t_hr)
+mr = el.TransitModel(pr, t_hr, dtype=mx.float64)
 flux_ring = mr.light_curve(pr)
 hours = lambda f_: (f_ < 1).sum() * (t_hr[1] - t_hr[0]) * 24
 print(f"depth: ringed {(1 - flux_ring.min()) * 1e6:.0f} ppm, bare planet {(1 - flux_sph.min()) * 1e6:.0f} ppm")
@@ -675,7 +675,7 @@ names = ("ring_in", "ring_out", "ring_f", "ring_tau", "theta")
 x0 = [1.4, 2.6, 0.7, 0.6, 25.0]
 pg = copy.copy(pr)
 pg.ring_tau = 0.6
-mg = el.TransitModel(pg, t_g)
+mg = el.TransitModel(pg, t_g, dtype=mx.float64)
 
 with mx.stream(mx.cpu):
     def loss(*vals):
@@ -705,7 +705,7 @@ an oblate planet.
 code("""
 mr32 = el.TransitModel(pr, t_big, dtype=mx.float32)
 print("fp32 vs fp64, one ringed set:",
-      f"{np.abs(mr32.light_curve(pr) - el.TransitModel(pr, t_big).light_curve(pr)).max():.1e}")
+      f"{np.abs(mr32.light_curve(pr) - el.TransitModel(pr, t_big, dtype=mx.float64).light_curve(pr)).max():.1e}")
 k_r = timeit(lambda: mx.eval(el.flux_dev_from_tau(tau_b, 3.456, 8.8, b_b, rp_b,
                                                   limb_dark="hybrid5", u=w_b, theta=th_b,
                                                   ring_in=1.4, ring_out=2.6, ring_f=0.7)))

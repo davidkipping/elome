@@ -43,7 +43,7 @@ def _target(law="quadratic", ecc=0.0, w=90.0, moon_ecc=0.0, moon_w=0.0, n=300,
         mkw = (dict(exp_time=kw["exp_time"], integration="contact", n_gl=kw.get("n_gl", 5))
                if rule == "contact" else
                dict(exp_time=kw["exp_time"], supersample_factor=kw.get("n_sub", 1)))
-    flux = elome.TransitModel(p, t, **mkw).light_curve(p)
+    flux = elome.TransitModel(p, t, **{"dtype": mx.float64, **mkw}).light_curve(p)
     tt = make_transit_target(t, flux + yerr * rng.standard_normal(t.size), yerr,
                              T0 + 0.003, PER - 0.0005, limb_dark=law, moon=True,
                              moon_period_guess=MOON["moon_per"] + 0.0002,

@@ -235,5 +235,5 @@ def test_fp32_model_takes_the_ring_kernel_and_use_metal_false_the_graph():
         assert not seen
     finally:
         MR._make_core = orig
-    ref = el.TransitModel(p, t).light_curve(p)
+    ref = el.TransitModel(p, t, dtype=mx.float64).light_curve(p)
     assert np.abs(k - ref).max() < 3e-7 and np.abs(g - ref).max() < 3e-7

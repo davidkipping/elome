@@ -43,6 +43,7 @@ well-conditioned times).
 
 from __future__ import annotations
 
+import copy
 import math
 
 import mlx.core as mx
@@ -367,11 +368,14 @@ def _ld_coeffs(params, conv=float, u=None) -> tuple[float, float]:
             raise ValueError(f"{hl.name} takes {hl.n_w} weights; "
                              f"got {len(u)}")
         return None, None          # handled by the hybrid core
+    batman_law = law in ("nonlinear", "squareroot", "logarithmic", "power2", "exponential")
     raise ValueError(
         f"limb_dark {law!r} not supported; choose from {_supported_ld()} "
-        "or pass a HybridLaw. "
-        "Non-polynomial laws (nonlinear, squareroot, logarithmic) are "
-        "outside the ALFM19 formulation.")
+        "or pass a HybridLaw."
+        + (" The hybrid laws follow real stars as well as batman's four-parameter "
+           "law or better, and stay exact: elome.hybrid_weights(limb_dark, u) gives "
+           "hybrid4's weights for batman coefficients."
+           if batman_law else ""))
 
 
 def _need_scalar(x, name):
@@ -571,15 +575,18 @@ class TransitModel:
         params: TransitParams (validated here; values may change between
             light_curve calls, but the limb-darkening *law* and the
             transit type are fixed per model).
-        t: times, same units as params.t0/per (absolute values are fine —
-            computation is float64 on the CPU by default).
+        t: times, same units as params.t0/per (absolute values are fine:
+            they are re-centred on the host in float64 first).
         transittype: "primary" or "secondary".
         supersample_factor: average this many samples over exp_time.
         exp_time: exposure time (same units as t).
-        dtype: mx.float64 (default; CPU, exact) or mx.float32 (the GPU
-            kernels). In float32 the times are re-centred on the host in
-            float64 first, so absolute mission times are fine; over
-            hundreds of orbits the float32 phase loses precision.
+        dtype: mx.float32 (the GPU kernels, about 1e-7 in flux) or
+            mx.float64 (the CPU, exact to rounding). None (default): float32
+            where the Metal kernels run -- a Mac with Apple Silicon, MLX's
+            default device the GPU -- and float64 elsewhere. In float32 the
+            times are re-centred on the host in float64 first, so absolute
+            mission times are fine; over hundreds of orbits the float32
+            phase loses precision.
         integration: "supersample" (batman's rule) or "contact"
             (Gauss-Legendre on windows split at the contact times).
         n_gl: Gauss-Legendre nodes per piece for "contact" (7 here; the
@@ -587,12 +594,16 @@ class TransitModel:
         use_metal: float32 may use the fused Metal kernels (default);
             False runs the float32 MLX graph instead, as on a machine
             without Metal.
+        max_err, nthreads, fac: batman's, accepted so that batman scripts
+            run unchanged, and ignored: every law here is a closed form,
+            with no numerical integration to tune or thread.
     """
 
     def __init__(self, params, t, transittype: str = "primary",
                  supersample_factor: int = 1, exp_time: float = 0.0,
                  dtype=None, use_metal: bool = True,
-                 integration: str = "supersample", n_gl: int = 7):
+                 integration: str = "supersample", n_gl: int = 7,
+                 max_err=None, nthreads=None, fac=None):
         _ld_coeffs(params)  # validate law/coefficients early
         if transittype not in ("primary", "secondary"):
             raise ValueError("transittype must be 'primary' or 'secondary'")
@@ -695,7 +706,10 @@ class TransitModel:
         # per model, baked into the compiled graph
         self._n_vec = (len(_u_vector(params.u))
                        if _is_vector_law(params.limb_dark) else 0)
-        self.dtype = mx.float64 if dtype is None else dtype
+        if dtype is None:
+            # float32 where the GPU kernels run, the float64 graph elsewhere
+            dtype = mx.float32 if _gpu_stream_active() and metal_available() else mx.float64
+        self.dtype = dtype
         self._stream = mx.cpu if self.dtype == mx.float64 else None
         # fused Metal kernel for fp32 GPU evaluation (falls back on its
         # own for fp64/CPU, so leaving this True is always safe)
@@ -703,6 +717,7 @@ class TransitModel:
 
         t = np.asarray(t, dtype=np.float64)
         self.t = t
+        self._params0 = copy.copy(params)      # for get_true_anomaly, as batman
         self.supersample_factor = int(supersample_factor)
         self.exp_time = float(exp_time)
         if self.supersample_factor > 1 and integration == "supersample":
@@ -2009,6 +2024,60 @@ class TransitModel:
                 f"TransitModel")
         return u
 
+    # ------------------------------------------------------------------
+    # batman's orbit helpers (its formulas, from the true anomaly at
+    # transit, pi/2 - w, and at secondary eclipse, 3 pi/2 - w)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _orbit_phase(params, position):
+        """The mean anomaly at transit ("primary") or secondary eclipse, in
+        turns (batman's ``_get_phase``)."""
+        f = (0.5 if position == "primary" else 1.5) * math.pi - math.radians(params.w)
+        e = 0.0 if params.ecc is None else float(params.ecc)
+        E = 2.0 * math.atan(math.sqrt((1.0 - e) / (1.0 + e)) * math.tan(0.5 * f))
+        return (E - e * math.sin(E)) / _TWO_PI_
+
+    def get_t_periastron(self, params):
+        """The time of periastron passage, from ``params.t0`` (batman's)."""
+        return params.t0 - params.per * self._orbit_phase(params, "primary")
+
+    def get_t_secondary(self, params):
+        """The time of the secondary eclipse's centre, from ``params.t0``
+        (batman's). Light travel time is not included; see
+        ``elome.occultation_offset`` and ``elome.light_travel_delay``."""
+        return params.t0 + params.per * (self._orbit_phase(params, "secondary")
+                                         - self._orbit_phase(params, "primary"))
+
+    def get_t_conjunction(self, params):
+        """The time of the transit's centre, from ``params.t_secondary``
+        (batman's)."""
+        return params.t_secondary + params.per * (self._orbit_phase(params, "primary")
+                                                  - self._orbit_phase(params, "secondary"))
+
+    def get_true_anomaly(self):
+        """The true anomaly [radians] at each of the model's times -- each
+        supersampled time with supersampling, as batman -- for the
+        parameters it was built with."""
+        p = self._params0
+        e = 0.0 if p.ecc is None else float(p.ecc)
+        t = self.t
+        if self.supersample_factor > 1:
+            off = np.linspace(-0.5 * self.exp_time, 0.5 * self.exp_time,
+                              self.supersample_factor)
+            t = (t[:, None] + off).ravel()
+        t0 = p.t0 if p.t0 is not None else self.get_t_conjunction(p)
+        tp = t0 - p.per * self._orbit_phase(p, "primary")
+        M = np.mod(_TWO_PI_ * (t - tp) / p.per + math.pi, _TWO_PI_) - math.pi
+        E = M + e * np.sin(M)
+        for _ in range(50):
+            dE = (E - e * np.sin(E) - M) / (1.0 - e * np.cos(E))
+            E = E - dE
+            if np.max(np.abs(dE)) < 1e-15:
+                break
+        return 2.0 * np.arctan2(math.sqrt(1.0 + e) * np.sin(0.5 * E),
+                                math.sqrt(1.0 - e) * np.cos(0.5 * E))
+
     def light_curve(self, params) -> np.ndarray:
         """Model flux at the times given at construction (numpy array)."""
         uv = self._check_law(params)
@@ -2395,13 +2464,14 @@ class TransitModel:
           input. With an fp32 (GPU) model, differentiate float32 fields on
           the GPU; for an fp64 field such as an absolute t0, take the
           gradient inside ``with mx.stream(mx.cpu):`` (or use an fp64
-          model, the default, which lives there anyway).
+          model, which lives there anyway).
 
-        Precision: the graph is built on the model's own stream -- for the
-        default ``dtype=mx.float64`` that is the CPU, as MLX has no float64
-        on Metal. The result is a lazy fp64 array, so whatever you build on
-        it must stay on the CPU too: wrap your own ops (and ``mx.grad``) in
-        ``with mx.stream(mx.cpu):``.
+        Precision: the graph is built on the model's own stream -- for
+        ``dtype=mx.float64`` that is the CPU, as MLX has no float64 on Metal.
+        The result is then a lazy fp64 array, so whatever you build on it
+        must stay on the CPU too: wrap your own ops (and ``mx.grad``) in
+        ``with mx.stream(mx.cpu):``. A float32 model (the default on Apple
+        Silicon) lives on the GPU, as its inputs may.
         """
         uv = self._check_law(params)
         ctx = (mx.stream(self._stream) if self._stream is not None

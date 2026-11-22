@@ -450,15 +450,16 @@ T_CONTAINERS = {
 @pytest.mark.parametrize("dtype", [None, mx.float32, mx.float64],
                          ids=["default", "fp32", "fp64"])
 def test_transit_model_dtype_argument_decides(container, dtype):
-    """TransitModel's contract is batman's: an explicit ``dtype`` (fp64 by
-    default) whatever container ``t`` comes in; the times themselves are
-    the container's values. Checked against an fp64 model on the same
-    (possibly rounded) times."""
+    """TransitModel's contract is batman's: an explicit ``dtype`` whatever
+    container ``t`` comes in (by default fp32 where the GPU kernels run,
+    fp64 elsewhere); the times themselves are the container's values.
+    Checked against an fp64 model on the same (possibly rounded) times."""
     t = T_CONTAINERS[container]
     tv = _values(t)
-    ref = el.TransitModel(_params(), tv).light_curve(_params())
+    ref = el.TransitModel(_params(), tv, dtype=mx.float64).light_curve(_params())
     m = el.TransitModel(_params(), t, dtype=dtype)
-    want = mx.float64 if dtype is None else dtype
+    default = mx.float32 if KERNEL else mx.float64
+    want = default if dtype is None else dtype
     assert m.dtype == want
     got = m.light_curve(_params())
     tol = 2e-6 if want == mx.float32 else 1e-12
@@ -467,7 +468,7 @@ def test_transit_model_dtype_argument_decides(container, dtype):
 
 def test_transit_model_keyword_calls():
     p = _params()
-    m = el.TransitModel(params=p, t=T)
+    m = el.TransitModel(params=p, t=T, dtype=mx.float64)
     ref = m.light_curve(p)
     assert np.array_equal(m.light_curve(params=p), ref)
     assert np.array_equal(np.asarray(m.light_curve_mx(params=p)), ref)

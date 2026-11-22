@@ -30,7 +30,7 @@ T = np.linspace(-0.25, 3.0, 4000) + 0.31  # covers two transits
 class TestPrimaryParity:
     def test_circular_quadratic(self):
         p, b = _params()
-        got = elome.TransitModel(p, T).light_curve(p)
+        got = elome.TransitModel(p, T, dtype=mx.float64).light_curve(p)
         want = batman_pkg.TransitModel(b, T).light_curve(b)
         assert got.shape == want.shape
         assert np.max(np.abs(got - want)) < 3e-8
@@ -39,19 +39,19 @@ class TestPrimaryParity:
     def test_inclination_sweep(self):
         for inc in (90.0, 89.0, 87.0, 85.5, 84.9):
             p, b = _params(inc=inc, a=8.0)
-            got = elome.TransitModel(p, T).light_curve(p)
+            got = elome.TransitModel(p, T, dtype=mx.float64).light_curve(p)
             want = batman_pkg.TransitModel(b, T).light_curve(b)
             assert np.max(np.abs(got - want)) < 5e-8, f"inc={inc}"
 
     def test_non_transiting_is_flat(self):
         p, _ = _params(inc=70.0, a=6.0)  # b = a cos i ~ 2
-        got = elome.TransitModel(p, T).light_curve(p)
+        got = elome.TransitModel(p, T, dtype=mx.float64).light_curve(p)
         np.testing.assert_array_equal(got, np.ones_like(got))
 
     def test_linear_and_uniform_laws(self):
         for law, u in (("linear", [0.4]), ("uniform", [])):
             p, b = _params(limb_dark=law, u=u)
-            got = elome.TransitModel(p, T).light_curve(p)
+            got = elome.TransitModel(p, T, dtype=mx.float64).light_curve(p)
             want = batman_pkg.TransitModel(b, T).light_curve(b)
             assert np.max(np.abs(got - want)) < 3e-8, law
 
@@ -59,7 +59,7 @@ class TestPrimaryParity:
         for ecc, w in ((0.3, 45.0), (0.5, 130.0), (0.2, 271.0),
                        (0.65, 90.0)):
             p, b = _params(ecc=ecc, w=w, a=14.0, inc=88.2)
-            got = elome.TransitModel(p, T).light_curve(p)
+            got = elome.TransitModel(p, T, dtype=mx.float64).light_curve(p)
             want = batman_pkg.TransitModel(b, T).light_curve(b)
             assert np.max(np.abs(got - want)) < 1e-7, (ecc, w)
             assert got.min() < 0.999  # transiting configuration
@@ -67,7 +67,7 @@ class TestPrimaryParity:
     def test_supersampling(self):
         p, b = _params()
         got = elome.TransitModel(
-            p, T, supersample_factor=7, exp_time=0.02).light_curve(p)
+            p, T, supersample_factor=7, exp_time=0.02, dtype=mx.float64).light_curve(p)
         want = batman_pkg.TransitModel(
             b, T, supersample_factor=7, exp_time=0.02).light_curve(b)
         assert np.max(np.abs(got - want)) < 3e-8
@@ -75,7 +75,7 @@ class TestPrimaryParity:
     def test_param_update_between_calls(self):
         """batman workflow: build once, vary params per call."""
         p, b = _params()
-        m = elome.TransitModel(p, T)
+        m = elome.TransitModel(p, T, dtype=mx.float64)
         mb = batman_pkg.TransitModel(b, T)
         for rp in (0.05, 0.08, 0.13):
             p.rp = rp
@@ -89,7 +89,7 @@ class TestSecondary:
         p.fp = b.fp = 1.5e-3
         p.t_secondary = b.t_secondary = p.t0 + 0.5 * p.per
         got = elome.TransitModel(
-            p, T, transittype="secondary").light_curve(p)
+            p, T, transittype="secondary", dtype=mx.float64).light_curve(p)
         want = batman_pkg.TransitModel(
             b, T, transittype="secondary").light_curve(b)
         # both: 1 + fp out of eclipse, dipping to ~1 in eclipse
@@ -101,26 +101,26 @@ class TestValidation:
     def test_unsupported_law_raises(self):
         p, _ = _params(limb_dark="nonlinear", u=[0.1, 0.2, 0.3, 0.4])
         with pytest.raises(ValueError, match="not supported"):
-            elome.TransitModel(p, T)
+            elome.TransitModel(p, T, dtype=mx.float64)
 
     def test_wrong_coefficient_count_raises(self):
         p, _ = _params(limb_dark="quadratic", u=[0.1])
         with pytest.raises(ValueError):
-            elome.TransitModel(p, T)
+            elome.TransitModel(p, T, dtype=mx.float64)
 
     def test_supersample_needs_exp_time(self):
         p, _ = _params()
         with pytest.raises(ValueError, match="exp_time"):
-            elome.TransitModel(p, T, supersample_factor=5)
+            elome.TransitModel(p, T, supersample_factor=5, dtype=mx.float64)
 
 
 class TestLightCurveMx:
-    """light_curve_mx used to build its graph on the default device, so a
-    default (fp64) TransitModel raised 'float64 is not supported on the
+    """light_curve_mx used to build its graph on the default device, so an
+    fp64 TransitModel raised 'float64 is not supported on the
     GPU' unless the caller had already switched to the CPU stream."""
 
-    @pytest.mark.parametrize("dtype", [None, mx.float32],
-                             ids=["default_fp64", "fp32"])
+    @pytest.mark.parametrize("dtype", [mx.float64, mx.float32],
+                             ids=["fp64", "fp32"])
     @pytest.mark.parametrize("kw", [{}, dict(exp_time=0.02,
                                              integration="contact"),
                                     dict(exp_time=0.02,
@@ -246,7 +246,7 @@ def test_invalid_geometry_raises(bad, dtype):
 def test_invalid_traced_geometry_is_nan():
     t = np.linspace(-0.1, 0.1, 51)
     with mx.stream(mx.cpu):
-        m = elome.TransitModel(_mp(), t)
+        m = elome.TransitModel(_mp(), t, dtype=mx.float64)
         comp = mx.compile(lambda r: m.light_curve_mx(_mp(rp=r)))
         assert np.isnan(np.asarray(comp(mx.array(-0.1, dtype=mx.float64)))).all()
         assert np.isfinite(np.asarray(comp(mx.array(0.11, dtype=mx.float64)))).all()
@@ -254,7 +254,7 @@ def test_invalid_traced_geometry_is_nan():
 
 @pytest.mark.parametrize("u", [[0.3, 0.2, 0.5], [0.3]])
 def test_array_valued_light_curves_check_the_coefficient_count(u):
-    m = elome.TransitModel(_mp(), np.linspace(-0.1, 0.1, 51))
+    m = elome.TransitModel(_mp(), np.linspace(-0.1, 0.1, 51), dtype=mx.float64)
     p = _mp()
     p.rp = np.array([0.1, 0.11])
     p.u = u
@@ -269,7 +269,7 @@ def test_use_metal_false_gradients_finite_at_r1_z0():
     t = np.linspace(-0.01, 0.01, 21)
     for use_metal in (True, False):
         with mx.stream(mx.cpu):
-            m = elome.TransitModel(p, t, use_metal=use_metal)
+            m = elome.TransitModel(p, t, use_metal=use_metal, dtype=mx.float64)
 
             def loss(r):
                 q = _mp(t0=0.0, rp=r, inc=90.0, ecc=0.0)
@@ -302,7 +302,7 @@ _needs_gpu = pytest.mark.skipif(not metal_available(),
 def test_a_missing_field_raises_on_every_path(field):
     """light_curves turned a None field into 0.0 -- rp=None gave a flat
     curve, t0=None silently meant t0 = 0 -- where light_curve raised."""
-    m = elome.TransitModel(_mp(), _T)
+    m = elome.TransitModel(_mp(), _T, dtype=mx.float64)
     bad = _mp(**{field: None})
     with pytest.raises(ValueError, match=f"params.{field} is not set"):
         m.light_curve(bad)
@@ -317,7 +317,7 @@ def test_a_missing_field_raises_on_every_path(field):
 def test_secondary_eclipse_needs_fp_at_every_call():
     """fp was checked at construction only; a later fp=None gave a flat
     eclipse (fp = 0) without an error."""
-    m = elome.TransitModel(_mp(fp=1e-3), 1.35 + _T, transittype="secondary")
+    m = elome.TransitModel(_mp(fp=1e-3), 1.35 + _T, transittype="secondary", dtype=mx.float64)
     with pytest.raises(ValueError, match="params.fp is not set"):
         m.light_curve(_mp(fp=None))
     with pytest.raises(ValueError, match="params.fp is not set"):
@@ -325,8 +325,8 @@ def test_secondary_eclipse_needs_fp_at_every_call():
     with pytest.raises(ValueError, match="fp must be finite"):
         m.light_curve(_mp(fp=float("nan")))
     # a primary transit does not read fp: None or NaN stays fine there
-    assert np.isfinite(elome.TransitModel(_mp(), _T).light_curve(_mp())).all()
-    assert np.isfinite(elome.TransitModel(_mp(), _T).light_curve(
+    assert np.isfinite(elome.TransitModel(_mp(), _T, dtype=mx.float64).light_curve(_mp())).all()
+    assert np.isfinite(elome.TransitModel(_mp(), _T, dtype=mx.float64).light_curve(
         _mp(fp=float("nan")))).all()
 
 
@@ -353,11 +353,11 @@ def test_secondary_eclipse_of_a_point_planet(dtype):
 def test_contradictory_exposure_options_raise():
     with pytest.raises(ValueError, match="supersample_factor is for"):
         elome.TransitModel(_mp(), _T, integration="contact", exp_time=0.02,
-                           supersample_factor=10)
+                           supersample_factor=10, dtype=mx.float64)
     for n_gl in (0, -3):
         with pytest.raises(ValueError, match="n_gl must be >= 1"):
             elome.TransitModel(_mp(), _T, integration="contact",
-                               exp_time=0.02, n_gl=n_gl)
+                               exp_time=0.02, n_gl=n_gl, dtype=mx.float64)
 
 
 @_needs_gpu
@@ -414,7 +414,7 @@ def test_contact_rule_takes_the_tau_kernel(law, u, ecc):
     assert list(m._compiled) == [("sph-tau", "circ" if ecc == 0.0 else "kh")]
     graph = elome.TransitModel(p, _T_WIDE, dtype=mx.float32, use_metal=False,
                                **_CONTACT).light_curve(p)
-    f64 = elome.TransitModel(p, _T_WIDE, **_CONTACT).light_curve(p)
+    f64 = elome.TransitModel(p, _T_WIDE, **{"dtype": mx.float64, **_CONTACT}).light_curve(p)
     assert got.min() < 0.99
     assert np.abs(got - graph).max() < 1e-6
     assert np.abs(got - f64).max() < 2e-7
@@ -476,3 +476,75 @@ def test_contact_rule_gradients_through_the_tau_kernel(ecc):
         return np.array([float(np.asarray(x, np.float64)) for x in g])
     g32, g64 = grads(mx.float32), grads(mx.float64)
     assert np.abs(g32 - g64).max() / np.abs(g64).max() < 2e-3
+
+
+# ---------------------------------------------------------------------------
+# batman compatibility: the default precision, batman's keywords and helpers,
+# and its other limb-darkening laws through hybrid_weights
+# ---------------------------------------------------------------------------
+
+def test_default_precision_is_float32_where_the_kernels_run():
+    from elome.metal import metal_available
+    p, _ = _params()
+    want = mx.float32 if metal_available() else mx.float64
+    assert elome.TransitModel(p, T).dtype == want
+    dev = mx.default_device()
+    mx.set_default_device(mx.cpu)
+    try:
+        assert elome.TransitModel(p, T).dtype == mx.float64      # no GPU: the float64 graph
+    finally:
+        mx.set_default_device(dev)
+
+
+def test_batman_keywords_are_accepted_and_ignored():
+    p, _ = _params()
+    want = elome.TransitModel(p, T, dtype=mx.float64).light_curve(p)
+    got = elome.TransitModel(p, T, max_err=0.5, nthreads=4, fac=1e-3,
+                             dtype=mx.float64).light_curve(p)
+    assert np.array_equal(got, want)
+
+
+@pytest.mark.parametrize("ecc,w", [(0.0, 90.0), (0.3, 45.0), (0.6, 250.0)])
+def test_batman_time_helpers(ecc, w):
+    def mk(mod):
+        q = mod.TransitParams()
+        q.t0, q.per, q.rp, q.a, q.inc, q.ecc, q.w = 0.3, 2.7, 0.1, 12.0, 88.5, ecc, w
+        q.limb_dark, q.u, q.fp, q.t_secondary = "quadratic", [0.4, 0.25], 1e-3, 1.65
+        return q
+    t = np.linspace(-0.2, 0.3, 50)
+    for kw in ({}, dict(supersample_factor=5, exp_time=0.01)):
+        me = elome.TransitModel(mk(elome), t, dtype=mx.float64, **kw)
+        mb = batman_pkg.TransitModel(mk(batman_pkg), t, **kw)
+        for name in ("get_t_periastron", "get_t_secondary", "get_t_conjunction"):
+            assert getattr(me, name)(mk(elome)) == pytest.approx(getattr(mb, name)(mk(batman_pkg)),
+                                                                 abs=1e-12)
+        fe, fb = me.get_true_anomaly(), mb.get_true_anomaly()
+        assert fe.shape == fb.shape
+        # batman's Kepler solve stops at ~1e-7; this one at rounding
+        assert np.abs(np.angle(np.exp(1j * (fe - fb)))).max() < 1e-6
+
+
+@pytest.mark.parametrize("law,u", [("nonlinear", [0.55, -0.1, 0.6, -0.3]),
+                                   ("power2", [0.65, 0.6]), ("quadratic", [0.4, 0.25])])
+def test_hybrid_weights_reproduce_batman_laws(law, u):
+    """hybrid4 with hybrid_weights' weights: batman's light curve to a few
+    ppm (measured 2.6, 0.9 and 1.5)."""
+    t = np.linspace(-0.06, 0.06, 1001)
+    b = batman_pkg.TransitParams()
+    b.t0, b.per, b.rp, b.a, b.inc, b.ecc, b.w = 0.0, 3.0, 0.1, 10.0, 89.5, 0.0, 90.0
+    b.limb_dark, b.u = law, u
+    want = batman_pkg.TransitModel(b, t, max_err=0.01).light_curve(b)
+    p = elome.TransitParams()
+    p.t0, p.per, p.rp, p.a, p.inc, p.ecc, p.w = 0.0, 3.0, 0.1, 10.0, 89.5, 0.0, 90.0
+    p.limb_dark, p.u = "hybrid4", elome.hybrid_weights(law, u)
+    got = elome.TransitModel(p, t, dtype=mx.float64).light_curve(p)
+    assert np.abs(got - want).max() < 5e-6
+
+
+def test_batman_laws_point_to_hybrid_weights():
+    p, _ = _params()
+    p.limb_dark, p.u = "nonlinear", [0.5, 0.1, 0.1, -0.1]
+    with pytest.raises(ValueError, match="hybrid_weights"):
+        elome.TransitModel(p, T)
+    with pytest.raises(ValueError, match="singular|choose from"):
+        elome.hybrid_weights("exponential", [0.4, 0.1])

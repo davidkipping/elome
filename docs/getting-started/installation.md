@@ -12,8 +12,9 @@
   0.30 or later and NumPy. pip installs both for you.
 
 Without a usable Metal device (on Linux, say), `metal_available()`
-returns `False` with a warning, and float32 calls run an MLX graph of the
-same model instead of the fused kernels. The results agree to float32
+returns `False` with a warning, `TransitModel` defaults to float64, and
+float32 calls run an MLX graph of the same model instead of the fused
+kernels. The results agree to float32
 rounding, but on a Mac a forward evaluation is about 25 times slower and
 a value with its gradient about 12 times slower.
 

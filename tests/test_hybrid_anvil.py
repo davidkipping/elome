@@ -56,7 +56,7 @@ def _photometry(law="hybrid4", spots=False, ecc=0.0, w=90.0, exp_time=0.0,
     if spots:
         p.spots, p.prot, p.istar, p.lam, p.spot_epoch = SPOTS, PROT, ISTAR, LAM, EP
     kw = dict(exp_time=exp_time, integration="contact", n_gl=5) if exp_time else {}
-    flux = elome.TransitModel(p, t, **kw).light_curve(p)
+    flux = elome.TransitModel(p, t, **{"dtype": mx.float64, **kw}).light_curve(p)
     return t, flux + yerr * rng.standard_normal(t.size), yerr, flux
 
 
@@ -163,7 +163,7 @@ class TestHybridTarget:
         p = elome.TransitParams()
         p.t0, p.per, p.rp, p.a, p.inc, p.ecc, p.w = T0, PER, RP, A, INC, 0.0, 90.0
         p.limb_dark, p.u = "hybrid4", W["hybrid4"]
-        flux = elome.TransitModel(p, t, exp_time=exp, supersample_factor=7).light_curve(p)
+        flux = elome.TransitModel(p, t, exp_time=exp, supersample_factor=7, dtype=mx.float64).light_curve(p)
         tt = make_transit_target(t, y, yerr, T0 + 0.003, PER - 0.0005, limb_dark="hybrid4",
                                  exp_time=exp, integration="supersample", n_sub=7)
         assert np.max(np.abs(_model64(tt, _truth(tt)) - (flux - 1.0))) < 1e-12

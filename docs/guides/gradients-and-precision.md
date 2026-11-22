@@ -14,7 +14,7 @@ with `yerr` the data's errors:
 ```python
 import mlx.core as mx
 
-m = elome.TransitModel(params, t)            # float64, on the CPU
+m = elome.TransitModel(params, t, dtype=mx.float64)   # float64, on the CPU
 y64 = mx.array(y, dtype=mx.float64)
 with mx.stream(mx.cpu):
     def chi2(rp, ecc):

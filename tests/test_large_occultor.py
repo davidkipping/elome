@@ -291,7 +291,7 @@ def test_secondary_eclipse_has_no_dip_at_primary_conjunction():
     p = _params(7.28, 3.0)
     p.fp, p.t_secondary = 1e-3, 0.5 * P_
     t = np.linspace(-0.02, 0.02, 401)
-    f = el.TransitModel(p, t, transittype="secondary").light_curve(p)
+    f = el.TransitModel(p, t, transittype="secondary", dtype=mx.float64).light_curve(p)
     assert np.array_equal(f, np.full_like(f, 1.0 + 1e-3))
 
 
@@ -361,7 +361,7 @@ def test_contact_rule_against_the_exact_piecewise_integral(r, b):
                 f64(tc), P_, A_, b, r, *U, exp_time=EXP,
                 integration="contact", n_gl=n_gl))
         tm = el.TransitModel(p, tc, exp_time=EXP, integration="contact",
-                             n_gl=n_gl).light_curve(p) - 1.0
+                             n_gl=n_gl, dtype=mx.float64).light_curve(p) - 1.0
         assert np.abs(tau - ref).max() < tol, n_gl
         assert np.abs(tm - ref).max() < tol, n_gl
 
@@ -496,7 +496,7 @@ def test_transit_model_keeps_large_and_small_traces_apart():
     from elome.hybrid import large_occultors
     p = _params(0.1, 0.3, law="hybrid4")
     t = np.linspace(-0.003, 0.003, 401)
-    m = el.TransitModel(p, t)
+    m = el.TransitModel(p, t, dtype=mx.float64)
     small = m.light_curve(p)
     assert small.min() < 0.99
     q = _params(20.0, 19.5, law="hybrid4")      # partial overlap throughout
@@ -616,11 +616,11 @@ def test_white_dwarf_end_to_end(b):
     r^2 budget; the contact rule finite."""
     p = _params(7.28, b)
     t = np.linspace(-0.01, 0.01, 801)
-    f64_ = el.TransitModel(p, t).light_curve(p)
+    f64_ = el.TransitModel(p, t, dtype=mx.float64).light_curve(p)
     mid = f64_[400] - 1.0
     assert abs(mid - oracle(b, 7.28, "quadratic")) < 1e-12
     fc = el.TransitModel(p, t, exp_time=EXP, integration="contact",
-                         n_gl=9).light_curve(p)
+                         n_gl=9, dtype=mx.float64).light_curve(p)
     assert np.isfinite(fc).all() and fc.min() >= -1e-12
     if KERNEL:
         f32_ = el.TransitModel(p, t, dtype=mx.float32).light_curve(p)
@@ -634,7 +634,7 @@ def test_anvil_target_samples_large_occultors(b):
     A = pytest.importorskip("elome.anvil")
     p = _params(7.28, b)
     t = np.linspace(-0.01, 0.01, 1001)
-    y = el.TransitModel(p, t).light_curve(p)
+    y = el.TransitModel(p, t, dtype=mx.float64).light_curve(p)
     y = y + np.random.default_rng(0).normal(0.0, 1e-3, t.size)
     tg = A.make_transit_target(t, y, 1e-3, 0.0, P_, bounds={
         "r": (1.0, 12.0), "b": (0.0, 13.0), "a": (1.5, 1000.0)})
@@ -688,7 +688,7 @@ def test_fp32_ring_and_spot_kernels_beyond_the_star(name):
     radii."""
     kw, t = _OUTLINES[name]
     p = _wd(**kw)
-    f64 = el.TransitModel(p, t).light_curve(p)
+    f64 = el.TransitModel(p, t, dtype=mx.float64).light_curve(p)
     f32 = el.TransitModel(p, t, dtype=mx.float32).light_curve(p)
     assert 1.0 - f64.min() > 0.3
     assert np.abs(f32 - f64).max() < 2e-6
@@ -698,7 +698,7 @@ def test_fp32_ring_and_spot_kernels_beyond_the_star(name):
 def test_fp32_ring_and_spot_graphs_beyond_the_star(name):
     kw, t = _OUTLINES[name]
     p = _wd(**kw)
-    f64 = el.TransitModel(p, t).light_curve(p)
+    f64 = el.TransitModel(p, t, dtype=mx.float64).light_curve(p)
     f32 = el.TransitModel(p, t, dtype=mx.float32, use_metal=False).light_curve(p)
     assert np.abs(f32 - f64).max() < 2e-6
 

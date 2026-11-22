@@ -30,7 +30,7 @@ from .poly import flux_dev_poly, sn_dev_poly
 from .hybrid import (HYBRID2, HYBRID2_EPS, HYBRID4, HYBRID4_BASIS,
                      HYBRID4_EPS, HYBRID5, HybridLaw, LAWS as HYBRID_LAWS,
                      hybrid4_basis,
-                     flux_dev_hybrid, hybrid_norms, shape_cols)
+                     flux_dev_hybrid, hybrid_norms, hybrid_weights, shape_cols)
 from .oblate import flux_dev_oblate, shape_cols_oblate
 from .oblate_tau import (contact_offsets_oblate, contact_offsets_tidal,
                          tidal_hf_from_q, tidal_q_from_hf)
@@ -96,6 +96,7 @@ __all__ = [
     "HYBRID_LAWS",
     "flux_dev_hybrid",
     "hybrid_norms",
+    "hybrid_weights",
     "shape_cols",
     "hybrid2_from_q",
     "hybrid2_from_q_np",

@@ -106,7 +106,7 @@ def check_gradients(m, base_kw, tol, ct_seed=0, fixed=()):
 @pytest.mark.parametrize("ecc", [0.3, 0.0, 0.7], ids=["e0.3", "e0", "e0.7"])
 def test_gradients_fp64(mode, ecc):
     p = params(ecc=ecc)
-    m = elome.TransitModel(p, T, **MODES[mode])
+    m = elome.TransitModel(p, T, **{"dtype": mx.float64, **MODES[mode]})
     # one-sided FD at e = 0 under the contact rule is the loosest
     check_gradients(m, dict(ecc=ecc), tol=1e-4 if ecc == 0.0 else 2e-5)
 
@@ -115,14 +115,14 @@ def test_gradients_fp64(mode, ecc):
 def test_gradients_every_law(law):
     kw = dict(limb_dark=law, u=LAWS[law])
     m = elome.TransitModel(params(**kw), T,
-                                 exp_time=EXP, integration="contact")
+                                 exp_time=EXP, integration="contact", dtype=mx.float64)
     check_gradients(m, kw, tol=2e-5)
 
 
 def test_gradients_secondary_eclipse():
     kw = dict(fp=1e-3, t_secondary=3.45 / 2)
     p = params(**kw)
-    m = elome.TransitModel(p, T + 3.45 / 2, transittype="secondary")
+    m = elome.TransitModel(p, T + 3.45 / 2, transittype="secondary", dtype=mx.float64)
     check_gradients(m, kw, tol=2e-5)
 
 
@@ -221,7 +221,7 @@ def test_u_must_be_a_flat_vector_in_every_container(law, u, container):
     (3, 601) curve of a wrong-order model, 8.8e-4 off, no error. The
     shape is now judged before the count, in _check_law, which both
     entry points and light_curves call first."""
-    m = elome.TransitModel(params(limb_dark=law, u=u), T)
+    m = elome.TransitModel(params(limb_dark=law, u=u), T, dtype=mx.float64)
     n = len(u)
     ref = m.light_curve(params(limb_dark=law, u=u))
 
@@ -247,7 +247,7 @@ def test_u_must_be_a_flat_vector_in_every_container(law, u, container):
         # a wrong shape is rejected at construction too
         with pytest.raises(ValueError, match="^u must be a 1-D vector"):
             elome.TransitModel(params(limb_dark=law, u=make((n, 1))),
-                                     T)
+                                     T, dtype=mx.float64)
         if container == "mx":                 # 0-d used to die in list()
             with pytest.raises(ValueError, match="^u must be a 1-D vector"):
                 m.light_curve_mx(params(limb_dark=law,
@@ -256,7 +256,7 @@ def test_u_must_be_a_flat_vector_in_every_container(law, u, container):
 
 def test_vector_eccentricity_is_rejected():
     """A (601,) ecc used to run, one eccentricity per time sample."""
-    m = elome.TransitModel(params(), T)
+    m = elome.TransitModel(params(), T, dtype=mx.float64)
     with mx.stream(mx.cpu):
         with pytest.raises(ValueError, match="ecc must be a scalar"):
             m.light_curve_mx(params(ecc=mx.full((T.size,), 0.3,
@@ -280,7 +280,7 @@ def test_ew_route_is_as_accurate_as_the_kh_route_in_fp32():
     rounding, not a fold error -- a Python w (folded on the host) and an
     array w (in-graph) agree to 1 fp32 ulp (not bitwise: see below)."""
     m32 = elome.TransitModel(params(), T, dtype=mx.float32)
-    truth = elome.TransitModel(params(), T).light_curve(params())
+    truth = elome.TransitModel(params(), T, dtype=mx.float64).light_curve(params())
     kh = m32.light_curve(params())
     ew = np.asarray(m32.light_curve_mx(params(ecc=mx.array(0.3))),
                     dtype=np.float64)
@@ -428,9 +428,9 @@ def test_a_distant_t0_costs_nothing_in_fp32():
     per = 3.45
     p = params(t0=0.3, rp=0.16, limb_dark="hybrid5", u=[0.2, 0.2, 0.1, 0.1, 0.1])
     tt = 0.3 + 100 * per + T
-    ref = elome.TransitModel(p, tt).light_curve(p)
+    ref = elome.TransitModel(p, tt, dtype=mx.float64).light_curve(p)
     m = elome.TransitModel(p, tt, dtype=mx.float32, **MODES["contact"])
-    ref_c = elome.TransitModel(p, tt, **MODES["contact"]).light_curve(p)
+    ref_c = elome.TransitModel(p, tt, **{"dtype": mx.float64, **MODES["contact"]}).light_curve(p)
     m_plain = elome.TransitModel(p, tt, dtype=mx.float32)
     assert np.abs(m_plain.light_curve(p) - ref).max() < 2e-7
     assert np.abs(m.light_curve(p) - ref_c).max() < 2e-7
@@ -451,14 +451,14 @@ def test_a_distant_t0_costs_nothing_in_fp32():
             g = mx.grad(f, argnums=(0, 1))(*args)
             mx.eval(g)
         return np.array([float(x) for x in g])
-    g64 = grads(elome.TransitModel(p, tt, **MODES["contact"]))
+    g64 = grads(elome.TransitModel(p, tt, **{"dtype": mx.float64, **MODES["contact"]}))
     assert np.all(np.abs(grads(m) - g64) < 2e-5 * np.abs(g64))
 
 
 def test_callers_compile_and_grad():
     """No concrete-value branching on array fields, so a caller can wrap
     light_curve_mx in mx.compile and differentiate the result."""
-    m = elome.TransitModel(params(), T)
+    m = elome.TransitModel(params(), T, dtype=mx.float64)
     with mx.stream(mx.cpu):
         def loss(rp, ecc):
             return mx.sum(m.light_curve_mx(params(rp=rp, ecc=ecc)))
@@ -479,7 +479,7 @@ def test_eccentricity_out_of_range_raises_when_readable(bad):
     """Python ecc on both entry points (light_curve used to return a flat
     curve for e >= 1; light_curves always raised), and an array ecc
     wherever its value can be read: eagerly, and under mx.grad."""
-    m = elome.TransitModel(params(), T)
+    m = elome.TransitModel(params(), T, dtype=mx.float64)
     for f in (m.light_curve, m.light_curve_mx):
         with pytest.raises(ValueError, match="eccentricity"):
             f(params(ecc=bad))
@@ -499,7 +499,7 @@ def test_traced_eccentricity_out_of_range_is_nan_in_value_and_gradient():
     cannot raise: out of range, the output AND every gradient are NaN --
     never a plausible curve (e = 1.5 used to give a flat one) and never
     a zero gradient beside a NaN loss (it was once masked to zero)."""
-    m = elome.TransitModel(params(), T)
+    m = elome.TransitModel(params(), T, dtype=mx.float64)
     with mx.stream(mx.cpu):
         f64 = lambda v: mx.array(v, dtype=mx.float64)
         rows = mx.vmap(lambda e: m.light_curve_mx(params(ecc=e)))(
@@ -529,7 +529,7 @@ def test_traced_eccentricity_out_of_range_is_nan_in_value_and_gradient():
 def test_vector_limb_darkening(law, u, kind):
     """u as a numpy array (batman style) or an mx vector (to differentiate
     it whole); both used to crash light_curve_mx."""
-    m = elome.TransitModel(params(limb_dark=law, u=u), T)
+    m = elome.TransitModel(params(limb_dark=law, u=u), T, dtype=mx.float64)
     ref = m.light_curve(params(limb_dark=law, u=u))
     with mx.stream(mx.cpu):
         uu = (np.array(u) if kind == "numpy"
@@ -561,14 +561,14 @@ def test_fixed_eccentricity_keeps_light_curves_graph(ecc, key, mode):
     """With a Python ecc, light_curve_mx differentiating every other field
     runs light_curve's own compiled graph (and its fused kernel on fp32),
     and its gradients are right there too."""
-    m = elome.TransitModel(params(ecc=ecc), T, **MODES[mode])
+    m = elome.TransitModel(params(ecc=ecc), T, **{"dtype": mx.float64, **MODES[mode]})
     check_gradients(m, dict(ecc=ecc), tol=2e-5, fixed=("ecc",))
     assert "ew" not in m._compiled and (key, False) in m._compiled
 
 
 def test_works_on_the_default_stream():
     """The default model is fp64; no stream context anywhere."""
-    m = elome.TransitModel(params(), T)
+    m = elome.TransitModel(params(), T, dtype=mx.float64)
     out = m.light_curve_mx(params(rp=mx.array(0.1, dtype=mx.float64)))
     mx.eval(out)
     assert out.dtype == mx.float64
@@ -579,7 +579,7 @@ def test_mixed_u_list_does_not_borrow_a_dtype():
     u = [mx.array(1), 0.4] turned 0.4 into int 0 (flux 2e-3 off, no
     error), and an fp32 entry rounded its neighbours before the model
     cast. Each entry is now cast on its own, to the model dtype."""
-    m = elome.TransitModel(params(), T)
+    m = elome.TransitModel(params(), T, dtype=mx.float64)
     ref = m.light_curve(params(u=[1.0, 0.4]))
     with mx.stream(mx.cpu):
         got = np.asarray(m.light_curve_mx(params(u=[mx.array(1), 0.4])))
@@ -612,7 +612,7 @@ def test_array_valued_light_curves_with_per_set_u(law, u_sets):
     u_sets = np.asarray(u_sets)
     n = u_sets.shape[0]
     m = elome.TransitModel(params(limb_dark=law, u=list(u_sets[0])),
-                                 T)
+                                 T, dtype=mx.float64)
     pa = params(limb_dark=law, u=u_sets)
     pa.rp = np.linspace(0.09, 0.12, n)
     got = m.light_curves(pa)

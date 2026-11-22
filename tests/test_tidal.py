@@ -764,17 +764,17 @@ def test_frontend_refusals():
     p = params()
     p.f = 0.1
     with pytest.raises(ValueError, match="planet's shape"):
-        el.TransitModel(p, TAU)
+        el.TransitModel(p, TAU, dtype=mx.float64)
     p = params()
     p.fp = 1e-3
     with pytest.raises(ValueError, match="primary"):
-        el.TransitModel(p, TAU, transittype="secondary")
+        el.TransitModel(p, TAU, transittype="secondary", dtype=mx.float64)
     p = params()
     p.limb_dark, p.u = "quadratic", [0.3, 0.2]
     with pytest.raises(ValueError, match="hybrid"):
-        el.TransitModel(p, TAU)
+        el.TransitModel(p, TAU, dtype=mx.float64)
     p = params()
-    m = el.TransitModel(p, TAU)
+    m = el.TransitModel(p, TAU, dtype=mx.float64)
     p.tidal_q = None
     with pytest.raises(ValueError, match="tidal_q changed"):
         m.light_curve(p)
@@ -998,10 +998,10 @@ def test_frontend_stray_fields():
     p = params()
     p.tidal_q, p.mass_ratio = None, 1e-3
     with pytest.raises(ValueError, match="mass_ratio is a tidally locked"):
-        el.TransitModel(p, TAU)
+        el.TransitModel(p, TAU, dtype=mx.float64)
     p.mass_ratio, p.theta = None, 10.0
     with pytest.raises(ValueError, match="tidal_q"):
-        el.TransitModel(p, TAU)
+        el.TransitModel(p, TAU, dtype=mx.float64)
     with pytest.raises(ValueError, match="tidal_q"):
         el.flux_dev_from_tau(mx.array(TAU), P, A_RS, 0.3, RV,
                              limb_dark="hybrid5", u=W, theta=0.2)

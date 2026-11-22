@@ -244,7 +244,7 @@ TT = np.linspace(-0.12, 0.12, 121)
 @pytest.mark.parametrize("name", list(MODELS))
 def test_kernel_matches_the_fp64_model(name, rule):
     p = P(**MODELS[name])
-    ref = el.TransitModel(p, TT, **RULES[rule]).light_curve(p)
+    ref = el.TransitModel(p, TT, **{"dtype": mx.float64, **RULES[rule]}).light_curve(p)
     with mx.stream(mx.gpu):
         got = el.TransitModel(p, TT, dtype=mx.float32, **RULES[rule]).light_curve(p)
     assert 1.0 - ref.min() > 0.01
@@ -358,9 +358,9 @@ def test_fp32_model_takes_the_kernels_and_use_metal_false_the_graph():
             g = el.TransitModel(p, TT, dtype=mx.float32, use_metal=False,
                                 **RULES["contact"]).light_curve(p)
             assert not seen
-        el.TransitModel(p, TT, **RULES["contact"]).light_curve(p)
+        el.TransitModel(p, TT, **{"dtype": mx.float64, **RULES["contact"]}).light_curve(p)
         assert not seen
     finally:
         MS._cols_core, MS.spot_events_kernel = orig_c, orig_e
-    ref = el.TransitModel(p, TT, **RULES["contact"]).light_curve(p)
+    ref = el.TransitModel(p, TT, **{"dtype": mx.float64, **RULES["contact"]}).light_curve(p)
     assert np.abs(k - ref).max() < 2e-7 and np.abs(g - ref).max() < 2e-7

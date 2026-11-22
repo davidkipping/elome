@@ -42,6 +42,42 @@ t = np.linspace(-0.1, 0.1, 1000)
 flux = elome.TransitModel(params, t).light_curve(params)
 ```
 
+## Coming from batman
+
+Elómë has batman's interface, so most batman scripts run after one line:
+
+```python
+import elome as batman
+```
+
+`TransitParams`, `TransitModel` and `light_curve` work as in batman, with
+the uniform, linear and quadratic laws, eccentric orbits, supersampling
+and secondary eclipses, and so do batman's orbit helpers
+(`get_t_secondary`, `get_t_periastron`, `get_t_conjunction`,
+`get_true_anomaly`); its `max_err`, `nthreads` and `fac` are accepted and
+ignored, since every law here is a closed form. On a Mac with Apple
+Silicon the light curve is computed on the GPU, in float32, to about
+10⁻⁷ of the flux; `dtype=mx.float64` gives the exact float64 path on
+the CPU. On an Apple M2 Max, under the quadratic law, against batman on one
+thread:
+
+| | batman | Elómë (GPU) |
+|---|---:|---:|
+| one light curve, 10⁵ points | 1.9 ms | 0.38 ms |
+| one light curve, 10⁷ points | 193 ms | 9.5 ms |
+| 512 light curves, 10⁵ points each | 1.8 s | 0.010 s |
+
+batman's square-root, logarithmic, exponential, power-2 and four-parameter
+laws are not here. The hybrid laws take their place: they follow real
+stars' limb darkening as well as the four-parameter law or better, in
+closed form and with gradients, and `elome.hybrid_weights("nonlinear", u)`
+turns batman coefficients into hybrid4 weights (a light curve within a few
+ppm of batman's).
+
+Points are times spread evenly over a transit and its shoulders, about
+half of them in transit; see the
+[spherical comparison](https://elome.readthedocs.io/en/latest/spherical/accuracy-and-cost.html).
+
 ## Documentation
 
 **[elome.readthedocs.io](https://elome.readthedocs.io)**: installation,

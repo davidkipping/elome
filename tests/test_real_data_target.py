@@ -31,7 +31,7 @@ def _photometry(n=8000, yerr=3e-4, seed=7, ecc=0.0, w=90.0):
     p = elome.TransitParams()
     p.t0, p.per, p.rp, p.a, p.inc = T0, PER, RP, A, INC
     p.ecc, p.w, p.u, p.limb_dark = ecc, w, [0.42, 0.21], "quadratic"
-    flux = elome.TransitModel(p, t).light_curve(p)
+    flux = elome.TransitModel(p, t, dtype=mx.float64).light_curve(p)
     return t, flux + yerr * rng.standard_normal(n), yerr, flux
 
 

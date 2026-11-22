@@ -24,7 +24,7 @@ def _model(ecc=0.0, w=90.0, law="quadratic", u=(0.4, 0.25), **kw):
     p = elome.TransitParams()
     p.t0, p.per, p.rp, p.a, p.inc = 0.0, 3.456, 0.1, 8.8, 87.07
     p.ecc, p.w, p.u, p.limb_dark = ecc, w, list(u), law
-    return elome.TransitModel(p, T, **kw), p
+    return elome.TransitModel(p, T, **{"dtype": mx.float64, **kw}), p
 
 
 class TestQuadratureMachinery:
@@ -204,7 +204,7 @@ class TestIntegrationWithTheRest:
         p.ecc, p.w, p.u, p.limb_dark = 0.0, 90.0, [], "uniform"
         p.fp = 1e-3
         m = elome.TransitModel(p, T, transittype="secondary",
-                               exp_time=EXP, integration="contact")
+                               exp_time=EXP, integration="contact", dtype=mx.float64)
         assert np.isfinite(m.light_curve(p)).all()
 
 
@@ -234,7 +234,7 @@ class TestRegressions:
         p.t0, p.per, p.rp, p.a, p.inc = 0.0, 3.456, 0.1, 8.8, 87.07
         p.ecc, p.w, p.u, p.limb_dark = 0.0, 90.0, [0.4, 0.25], "quadratic"
         f = elome.TransitModel(
-            p, t, exp_time=EXP, integration="contact", n_gl=7).light_curve(p)
+            p, t, exp_time=EXP, integration="contact", n_gl=7, dtype=mx.float64).light_curve(p)
         phase = np.abs(((t + 3.456 / 2) % 3.456) - 3.456 / 2)
         far = phase > 0.5 * 0.126 + EXP
         assert far.sum() > 100
@@ -248,9 +248,9 @@ class TestRegressions:
         p.t0, p.per, p.rp, p.a, p.inc = 0.0, 3.456, 0.1, 8.8, 87.07
         p.ecc, p.w, p.u, p.limb_dark = 0.0, 90.0, [0.4, 0.25], "quadratic"
         mk = elome.TransitModel(p, t, exp_time=EXP,
-                                      integration="contact", n_gl=7)
+                                      integration="contact", n_gl=7, dtype=mx.float64)
         ref = elome.TransitModel(p, t, exp_time=EXP,
-                                       supersample_factor=4001)
+                                       supersample_factor=4001, dtype=mx.float64)
         assert np.abs(mk.light_curve(p) - ref.light_curve(p)).max() < 2e-6
         assert (mk.light_curve(p) < 0.99).sum() > 10   # transits present
 
@@ -260,7 +260,7 @@ class TestRegressions:
         p.t0, p.per, p.rp, p.a, p.inc = 0.0, 3.456, 0.1, 8.8, 87.07
         p.ecc, p.w, p.u, p.limb_dark = 0.0, 90.0, [0.4, 0.25], "quadratic"
         got = elome.TransitModel(
-            p, t, exp_time=0.30, integration="contact", n_gl=9).light_curve(p)
+            p, t, exp_time=0.30, integration="contact", n_gl=9, dtype=mx.float64).light_curve(p)
         ref = elome.TransitModel(
-            p, t, exp_time=0.30, supersample_factor=20001).light_curve(p)
+            p, t, exp_time=0.30, supersample_factor=20001, dtype=mx.float64).light_curve(p)
         assert np.abs(got - ref).max() < 1e-6

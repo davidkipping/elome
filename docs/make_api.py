@@ -49,7 +49,7 @@ SECTIONS = [
       "elome.simplex_from_q", "elome.simplex_from_q_np", "elome.q_from_simplex_np",
       "elome.HybridLaw", "elome.HYBRID2", "elome.HYBRID4", "elome.HYBRID5",
       "elome.HYBRID2_EPS", "elome.HYBRID4_EPS", "elome.HYBRID4_BASIS",
-      "elome.HYBRID_LAWS", "elome.hybrid_norms", "elome.hybrid4_basis",
+      "elome.HYBRID_LAWS", "elome.hybrid_norms", "elome.hybrid_weights", "elome.hybrid4_basis",
       "elome.hybrid.ladder"]),
     ("Light curves from separations (float64 reference graphs)",
      "Functions of the sky separation z (spherical), the planet's centre "

@@ -43,6 +43,23 @@ model, and they can be sampled.
 
 The definitions of the hybrid laws are in {doc}`../reference/hybrid-laws`.
 
+**From batman's laws.** batman's square-root, logarithmic, exponential,
+power-2 and four-parameter laws are not here. `elome.hybrid_weights`
+turns coefficients for any of them but the exponential into a hybrid law's
+weights, by a least-squares fit of the intensity over the disc:
+
+```python
+w = elome.hybrid_weights("nonlinear", [0.55, -0.1, 0.6, -0.3])   # hybrid4
+p.limb_dark, p.u = "hybrid4", w
+```
+
+With hybrid4 a planet of 0.1 stellar radii then has a light curve within a
+few ppm of batman's (2.6 ppm here; 0.9 ppm for power-2, 1.5 for the
+quadratic law); `hybrid2`, with two weights, follows a two-parameter
+profile only to tens of ppm. Where you can, fit the hybrid law to the
+star's own profile instead: a conversion reproduces the given law, errors
+included.
+
 [^coeffs]: Hybrid-law limb-darkening coefficients paper (in
     preparation); see {doc}`../about/citing`.
 

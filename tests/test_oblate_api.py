@@ -49,7 +49,7 @@ def test_matches_the_reference(ecc, w):
     """Absolute times, t0 the time of inferior conjunction, inc and w in
     degrees, theta in degrees."""
     p = P(ecc=ecc, w=w)
-    got = el.TransitModel(p, T).light_curve(p)
+    got = el.TransitModel(p, T, dtype=mx.float64).light_curve(p)
     X, Y, front = OR.sky_position(T - T0, PER, 8.8, math.radians(88.0), ecc, math.radians(w))
     th = math.radians(35.0)
     x0, y0 = X * math.cos(th) + Y * math.sin(th), -X * math.sin(th) + Y * math.cos(th)
@@ -63,15 +63,15 @@ def test_matches_the_reference(ecc, w):
 
 def test_theta_is_in_degrees_and_defaults_to_zero():
     p = P(theta=35.0)
-    got = el.TransitModel(p, T).light_curve(p)
+    got = el.TransitModel(p, T, dtype=mx.float64).light_curve(p)
     tau = (T - T0) - PER * np.round((T - T0) / PER)
     ref = 1.0 + np.asarray(el.flux_dev_from_tau(
         tau, PER, 8.8, 8.8 * math.cos(math.radians(88.0)), 0.1, limb_dark="hybrid5",
         u=W5, f=0.3, theta=math.radians(35.0)))
     assert np.abs(got - ref).max() < 1e-15
     a, b = P(theta=None), P(theta=0.0)
-    assert np.array_equal(el.TransitModel(a, T).light_curve(a),
-                          el.TransitModel(b, T).light_curve(b))
+    assert np.array_equal(el.TransitModel(a, T, dtype=mx.float64).light_curve(a),
+                          el.TransitModel(b, T, dtype=mx.float64).light_curve(b))
 
 
 @pytest.mark.parametrize("kw", [{}, {"supersample_factor": 7, "exp_time": EXP},
@@ -79,8 +79,8 @@ def test_theta_is_in_degrees_and_defaults_to_zero():
                          ids=["none", "supersample", "contact"])
 def test_f_zero_is_the_spherical_model(kw):
     o, s = P(f=0.0), spherical()
-    got = el.TransitModel(o, T, **kw).light_curve(o)
-    ref = el.TransitModel(s, T, **kw).light_curve(s)
+    got = el.TransitModel(o, T, **{"dtype": mx.float64, **kw}).light_curve(o)
+    ref = el.TransitModel(s, T, **{"dtype": mx.float64, **kw}).light_curve(s)
     assert np.abs(got - ref).max() < 1e-14
 
 
@@ -90,7 +90,7 @@ def test_f_zero_is_the_spherical_model(kw):
 @pytest.mark.parametrize("ecc", [0.0, 0.3])
 def test_fp32_model_matches_fp64(kw, ecc):
     p = P(ecc=ecc, w=40.0)
-    d64 = el.TransitModel(p, T, **kw).light_curve(p)
+    d64 = el.TransitModel(p, T, **{"dtype": mx.float64, **kw}).light_curve(p)
     d32 = el.TransitModel(p, T, dtype=mx.float32, **kw).light_curve(p)
     assert np.abs(d32 - d64).max() < 3e-7
 
@@ -116,7 +116,7 @@ def test_fp32_model_takes_the_oblate_kernel():
 @pytest.mark.parametrize("kw", [{}, {"integration": "contact", "exp_time": EXP}],
                          ids=["none", "contact"])
 def test_light_curves_equal_the_loop(kw):
-    m = el.TransitModel(P(), T, **kw)
+    m = el.TransitModel(P(), T, **{"dtype": mx.float64, **kw})
     sets = [P(f=0.1, theta=0.0), P(f=0.4, theta=80.0, ecc=0.2, w=10.0),
             P(rp=0.12, f=0.2, theta=150.0, u=[0.3, 0.1, 0.1, 0.05, 0.05])]
     loop = np.stack([m.light_curve(q) for q in sets])
@@ -134,7 +134,7 @@ def test_light_curve_mx_equals_light_curve_and_differentiates():
     p = P(ecc=0.2, w=30.0)
     ct = np.random.default_rng(0).normal(size=T.shape)
     with mx.stream(mx.cpu):
-        m = el.TransitModel(p, T)
+        m = el.TransitModel(p, T, dtype=mx.float64)
         assert np.abs(np.asarray(m.light_curve_mx(p)) - m.light_curve(p)).max() < 1e-15
         names = ("f", "theta", "rp", "t0", "inc", "ecc", "w")
         x = [0.3, 35.0, 0.1, T0, 88.0, 0.2, 30.0]
@@ -161,17 +161,17 @@ def test_light_curve_mx_equals_light_curve_and_differentiates():
 
 def test_errors():
     with pytest.raises(ValueError, match="hybrid law"):
-        el.TransitModel(P(limb_dark="quadratic", u=[0.4, 0.2]), T)
+        el.TransitModel(P(limb_dark="quadratic", u=[0.4, 0.2]), T, dtype=mx.float64)
     with pytest.raises(ValueError, match="set params.f, "):
         q = spherical()
         q.theta = 30.0
-        el.TransitModel(q, T)
+        el.TransitModel(q, T, dtype=mx.float64)
     with pytest.raises(ValueError, match="needs params.fp"):
-        el.TransitModel(P(), T, transittype="secondary")
-    m = el.TransitModel(P(), T)
+        el.TransitModel(P(), T, transittype="secondary", dtype=mx.float64)
+    m = el.TransitModel(P(), T, dtype=mx.float64)
     with pytest.raises(ValueError, match="build a new TransitModel"):
         m.light_curve(spherical())
-    ms = el.TransitModel(spherical(), T)
+    ms = el.TransitModel(spherical(), T, dtype=mx.float64)
     with pytest.raises(ValueError, match="build a new TransitModel"):
         ms.light_curve(P())
     with pytest.raises(ValueError, match="r_eff"):
@@ -180,7 +180,7 @@ def test_errors():
 
 def test_out_of_domain_array_is_nan():
     with mx.stream(mx.cpu):
-        m = el.TransitModel(P(), T)
+        m = el.TransitModel(P(), T, dtype=mx.float64)
         out = np.asarray(m.light_curve_mx(P(rp=mx.array(0.6, dtype=mx.float64),
                                             f=mx.array(0.5, dtype=mx.float64))))
     assert np.isnan(out[len(T) // 2])
@@ -191,9 +191,9 @@ def test_spherical_models_unchanged_by_the_new_fields():
     spherical model's batch keys are the spherical ones."""
     p = spherical()
     del p.f, p.theta
-    m = el.TransitModel(p, T)
+    m = el.TransitModel(p, T, dtype=mx.float64)
     assert m._batch_keys == el.TransitModel._BATCH_KEYS
-    ref = el.TransitModel(spherical(), T).light_curve(spherical())
+    ref = el.TransitModel(spherical(), T, dtype=mx.float64).light_curve(spherical())
     assert np.array_equal(m.light_curve(p), ref)
 
 
@@ -214,7 +214,7 @@ def test_array_ecc_gradient_at_zero_is_the_one_sided_derivative(dtype):
     """An array ecc enters as (e, w), exact at e = 0 (going through
     sqrt(e) and would return -0.06 against the true +1.02 here)."""
     with mx.stream(mx.cpu):
-        ref = _one_sided_fd_ecc(el.TransitModel(P(w=40.0), T), 40.0)
+        ref = _one_sided_fd_ecc(el.TransitModel(P(w=40.0), T, dtype=mx.float64), 40.0)
     stream = mx.cpu if dtype == mx.float64 else mx.default_device()
     with mx.stream(stream):
         m = el.TransitModel(P(w=40.0), T, dtype=dtype)
@@ -226,7 +226,7 @@ def test_array_ecc_gradient_at_zero_is_the_one_sided_derivative(dtype):
 
 def test_array_and_python_ecc_routes_agree():
     with mx.stream(mx.cpu):
-        m = el.TransitModel(P(), T)
+        m = el.TransitModel(P(), T, dtype=mx.float64)
         for e, w in ((0.2, 30.0), (0.6, -70.0)):
             arr = np.asarray(m.light_curve_mx(P(ecc=mx.array(e, dtype=mx.float64), w=w)))
             assert np.abs(arr - m.light_curve(P(ecc=e, w=w))).max() < 1e-13
@@ -234,7 +234,7 @@ def test_array_and_python_ecc_routes_agree():
 
 def test_array_ecc_out_of_range_raises_or_is_nan():
     with mx.stream(mx.cpu):
-        m = el.TransitModel(P(), T)
+        m = el.TransitModel(P(), T, dtype=mx.float64)
         for e in (1.5, -0.2, 1.0):
             with pytest.raises(ValueError, match="eccentricity"):
                 m.light_curve_mx(P(ecc=mx.array(e, dtype=mx.float64)))
@@ -249,7 +249,7 @@ def test_ecc_above_0999_raises_or_is_nan():
     e = 0.9995). The spherical model is exact there and still accepts it."""
     kw = dict(ecc=0.9995, w=300.0, inc=87.0)
     with mx.stream(mx.cpu):
-        m = el.TransitModel(P(ecc=0.99, w=300.0, inc=87.0), T)
+        m = el.TransitModel(P(ecc=0.99, w=300.0, inc=87.0), T, dtype=mx.float64)
         with pytest.raises(ValueError, match=r"\[0, 0.999\]"):
             m.light_curve(P(**kw))
         with pytest.raises(ValueError, match=r"\[0, 0.999\]"):
@@ -261,7 +261,7 @@ def test_ecc_above_0999_raises_or_is_nan():
         assert np.isfinite(np.asarray(comp(mx.array(0.999, dtype=mx.float64)))).all()
         assert np.isfinite(m.light_curve(P(**dict(kw, ecc=0.999)))).all()
         s = spherical(**kw)
-        assert np.isfinite(el.TransitModel(s, T).light_curve(s)).all()
+        assert np.isfinite(el.TransitModel(s, T, dtype=mx.float64).light_curve(s)).all()
 
 
 @pytest.mark.skipif(not KERNEL, reason="needs Metal and the GPU stream")
@@ -313,7 +313,7 @@ def test_long_grids_are_evaluated_in_blocks(pkw, mkw, monkeypatch):
     whole call, to rounding."""
     from elome import oblate_tau
     p = P(**pkw)
-    m = el.TransitModel(p, T, **mkw)
+    m = el.TransitModel(p, T, **{"dtype": mx.float64, **mkw})
     sets = [p, P(**{**pkw, "f": 0.1, "theta": 80.0, "rp": 0.08})]
     whole, whole_sets = m.light_curve(p), m.light_curves(sets)
     nodes = 5 * 2 if mkw.get("integration") == "contact" else 1
@@ -396,7 +396,7 @@ def test_secondary_matches_the_reference(ecc, w):
     at transit: through ingress, totality and egress."""
     p = P(ecc=ecc, w=w, fp=FP)
     t = _eclipse_times(ecc, w)
-    got = el.TransitModel(p, t, transittype="secondary").light_curve(p)
+    got = el.TransitModel(p, t, transittype="secondary", dtype=mx.float64).light_curve(p)
     ref = _eclipse_reference(t, p, ecc, w)
     assert ref.min() == 1.0 and ref.max() == 1.0 + FP      # totality and out of eclipse
     assert np.any((ref > 1.0) & (ref < 1.0 + FP))           # and the partial phases
@@ -406,7 +406,7 @@ def test_secondary_matches_the_reference(ecc, w):
 def test_secondary_grazing_matches_the_reference():
     p = P(inc=83.6, fp=FP, f=0.4, theta=70.0)       # b ~ 0.98: the star never covers it
     t = _eclipse_times(0.0, 90.0)
-    got = el.TransitModel(p, t, transittype="secondary").light_curve(p)
+    got = el.TransitModel(p, t, transittype="secondary", dtype=mx.float64).light_curve(p)
     X, Y, front = OR.sky_position(t - T0, PER, 8.8, math.radians(83.6))
     th = math.radians(70.0)
     x0, y0 = X * math.cos(th) + Y * math.sin(th), -X * math.sin(th) + Y * math.cos(th)
@@ -425,8 +425,8 @@ def test_secondary_grazing_matches_the_reference():
 def test_secondary_f_zero_is_the_spherical_model(kw, ecc):
     t = _eclipse_times(ecc, 40.0)
     o, s = P(f=0.0, fp=FP, ecc=ecc, w=40.0), spherical(fp=FP, ecc=ecc, w=40.0)
-    got = el.TransitModel(o, t, transittype="secondary", **kw).light_curve(o)
-    ref = el.TransitModel(s, t, transittype="secondary", **kw).light_curve(s)
+    got = el.TransitModel(o, t, transittype="secondary", **{"dtype": mx.float64, **kw}).light_curve(o)
+    ref = el.TransitModel(s, t, transittype="secondary", **{"dtype": mx.float64, **kw}).light_curve(s)
     assert ref.min() < 1.0 + 0.5 * FP
     assert np.abs(got - ref).max() < 1e-15
 
@@ -442,7 +442,7 @@ def test_secondary_is_the_uniform_transit_reflected():
     of a = 8.8. In fp32 the visible fraction is good to ~1e-4 at the
     contacts, as the spherical eclipse's is: times r^2, 1e-6.)"""
     tau = np.linspace(-0.15, 0.15, 241)
-    for dt, tol in ((None, 1e-14), (mx.float32, 2e-6)):
+    for dt, tol in ((mx.float64, 1e-14), (mx.float32, 2e-6)):
         pu = P(limb_dark="hybrid2", u=[0.0, 0.0])
         prim = el.TransitModel(pu, T0 + 2 * PER + tau, dtype=dt).light_curve(pu)
         ps = P(fp=1.0)
@@ -454,11 +454,11 @@ def test_secondary_is_the_uniform_transit_reflected():
 
 def test_secondary_takes_any_law_and_ignores_it():
     t = _eclipse_times(0.0, 90.0)
-    ref = el.TransitModel(P(fp=FP), t, transittype="secondary").light_curve(P(fp=FP))
+    ref = el.TransitModel(P(fp=FP), t, transittype="secondary", dtype=mx.float64).light_curve(P(fp=FP))
     for law, u in (("quadratic", [0.4, 0.2]), ("uniform", []), ("hybrid2", [0.3, 0.1]),
                    ("polynomial", [0.3, 0.1, 0.05])):
         p = P(fp=FP, limb_dark=law, u=u)
-        assert np.array_equal(el.TransitModel(p, t, transittype="secondary").light_curve(p),
+        assert np.array_equal(el.TransitModel(p, t, transittype="secondary", dtype=mx.float64).light_curve(p),
                               ref)
 
 
@@ -468,7 +468,7 @@ def test_secondary_takes_any_law_and_ignores_it():
 def test_secondary_fp32_model_matches_fp64(kw, ecc):
     p = P(ecc=ecc, w=40.0, fp=FP)
     t = _eclipse_times(ecc, 40.0)
-    d64 = el.TransitModel(p, t, transittype="secondary", **kw).light_curve(p)
+    d64 = el.TransitModel(p, t, transittype="secondary", **{"dtype": mx.float64, **kw}).light_curve(p)
     d32 = el.TransitModel(p, t, transittype="secondary", dtype=mx.float32,
                           **kw).light_curve(p)
     assert np.abs(d32 - d64).max() < 3e-7
@@ -476,7 +476,7 @@ def test_secondary_fp32_model_matches_fp64(kw, ecc):
 
 def test_secondary_light_curves_equal_the_loop():
     t = _eclipse_times(0.0, 90.0)
-    m = el.TransitModel(P(fp=FP), t, transittype="secondary")
+    m = el.TransitModel(P(fp=FP), t, transittype="secondary", dtype=mx.float64)
     sets = [P(fp=FP, f=0.1, theta=0.0), P(fp=1e-3, f=0.4, theta=80.0, ecc=0.2, w=10.0),
             P(fp=3e-3, rp=0.12, f=0.2, theta=150.0)]
     loop = np.stack([m.light_curve(q) for q in sets])
@@ -500,7 +500,7 @@ def test_secondary_light_curve_mx_differentiates():
     names = ("f", "theta", "rp", "t0", "inc", "ecc", "w", "fp", "a", "per")
     x = [0.3, 35.0, 0.1, T0, 88.0, 0.2, 30.0, FP, 8.8, PER]
     with mx.stream(mx.cpu):
-        m = el.TransitModel(P(ecc=0.2, w=30.0, fp=FP), t, transittype="secondary")
+        m = el.TransitModel(P(ecc=0.2, w=30.0, fp=FP), t, transittype="secondary", dtype=mx.float64)
 
         def loss(*v):
             q = P()
@@ -542,7 +542,7 @@ def test_secondary_long_grids_are_evaluated_in_blocks(monkeypatch):
     from elome import oblate_tau
     t = _eclipse_times(0.3, 40.0)
     p = P(fp=FP, ecc=0.3, w=40.0)
-    m = el.TransitModel(p, t, transittype="secondary")
+    m = el.TransitModel(p, t, transittype="secondary", dtype=mx.float64)
     sets = [p, P(fp=1e-3, ecc=0.3, w=40.0, f=0.1, theta=80.0, rp=0.08)]
     whole, whole_sets = m.light_curve(p), m.light_curves(sets)
     shapes, orig = [], oblate_tau._eclipse_graph

@@ -63,8 +63,9 @@ Three ways to evaluate the model:
 
 ## Precision and speed
 
-The default model is float64 on the CPU. It is the exact reference:
-light curves agree with a 30-digit direct integral of the occulted
+On a Mac with Apple Silicon the default model is float32, on the GPU;
+`dtype=mx.float64` gives the float64 path on the CPU (the default
+elsewhere). The float64 model is the exact reference: light curves agree with a 30-digit direct integral of the occulted
 intensity to $2\times10^{-16}$ on a circular orbit and $4\times10^{-16}$
 on an eccentric one. Against batman,
 the agreement is at batman's own accuracy, about $10^{-8}$. It computes
@@ -75,7 +76,7 @@ exposures under the contact rule about 2 ms. Inside your own
 `mx.compile` or `mx.vmap`, where the orbit cannot be read, it computes
 every time, with the same result.
 
-`dtype=mx.float32` runs on the GPU, in a single fused Metal kernel that
+The float32 model runs on the GPU, in a single fused Metal kernel that
 computes the orbit and the photometry together, and under the contact
 rule the exposure too. (The polynomial law has no kernel and runs as an
 MLX graph.) It is accurate to about

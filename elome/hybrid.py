@@ -112,7 +112,7 @@ from .dtypes import fp64_on_cpu
 __all__ = ["HybridLaw", "HYBRID2", "HYBRID4", "HYBRID5", "LAWS",
            "HYBRID2_EPS", "HYBRID4_ALPHA", "HYBRID4_EPS", "HYBRID4_BASIS",
            "hybrid4_basis", "ladder",
-           "find_law", "get_law", "hybrid_norms", "w_to_c",
+           "find_law", "get_law", "hybrid_norms", "hybrid_weights", "w_to_c",
            "shape_cols", "flux_dev_hybrid", "combine_cols", "shape_partials",
            "even_cols", "pole_col", "lens_geometry"]
 
@@ -396,6 +396,61 @@ def w_to_c(law, w):
     coef = -(w @ law.generator_matrix())
     coef[0] += 1.0
     return coef[:3], coef[3:]
+
+
+# ---------------------------------------------------------------------------
+# from batman's laws
+# ---------------------------------------------------------------------------
+
+#: batman's limb-darkening laws as intensity profiles I(mu, u), each checked
+#: against batman's light curves to its 1 ppm tolerance. Its exponential
+#: law, 1/(1 - e^mu) at the limb, is singular there and left out.
+_BATMAN_LAWS = {
+    "uniform": (0, lambda mu, u: np.ones_like(mu)),
+    "linear": (1, lambda mu, u: 1.0 - u[0] * (1.0 - mu)),
+    "quadratic": (2, lambda mu, u: 1.0 - u[0] * (1.0 - mu) - u[1] * (1.0 - mu) ** 2),
+    "squareroot": (2, lambda mu, u: 1.0 - u[0] * (1.0 - mu) - u[1] * (1.0 - np.sqrt(mu))),
+    "logarithmic": (2, lambda mu, u: 1.0 - u[0] * (1.0 - mu) - u[1] * mu * np.log(mu)),
+    "power2": (2, lambda mu, u: 1.0 - u[0] * (1.0 - mu ** u[1])),
+    "nonlinear": (4, lambda mu, u: 1.0 - sum(u[n] * (1.0 - mu ** (0.5 * (n + 1)))
+                                             for n in range(4))),
+}
+
+
+def hybrid_weights(limb_dark, u, law="hybrid4"):
+    """The shape weights of a hybrid law closest to one of batman's laws,
+    for ``params.u``: ``limb_dark`` "linear", "quadratic", "squareroot",
+    "logarithmic", "power2" or "nonlinear" (the four-parameter law) with
+    batman's coefficients ``u``; ``law`` the hybrid law ("hybrid2",
+    "hybrid4", "hybrid5" or a HybridLaw).
+
+    A least-squares fit of the intensity over the stellar disc, each ring
+    weighted by its area (mu dmu), with the overall scale free, as a light
+    curve does not see it. With hybrid4, light curves of a planet of 0.1
+    stellar radii agree with batman's to a few ppm for the four-parameter,
+    power-2 and quadratic laws; hybrid2, with two weights, follows a given
+    two-parameter profile only to tens of ppm. Fit the hybrid law to the
+    star itself when you can: this reproduces the given profile, with its
+    own errors."""
+    if limb_dark not in _BATMAN_LAWS:
+        raise ValueError(f"limb_dark {limb_dark!r}: choose from {tuple(_BATMAN_LAWS)}")
+    n_u, intensity = _BATMAN_LAWS[limb_dark]
+    u = [float(x) for x in (np.atleast_1d(u) if n_u else [])]
+    if len(u) != n_u:
+        raise ValueError(f"{limb_dark} takes {n_u} coefficients; got {len(u)}")
+    hl = get_law(law)
+    # mu = s^2 crowds the nodes towards the limb, where the poles vary fastest
+    s, ws = np.polynomial.legendre.leggauss(400)
+    s, ws = 0.5 * (s + 1.0), 0.5 * ws
+    mu = s * s
+    root_w = np.sqrt(ws * 2.0 * s * mu)                  # sqrt of mu dmu
+    mu2 = mu * mu
+    gen = np.stack([np.ones_like(mu), mu2, mu2 * mu2]
+                   + [(mu2 + e) ** -2 for e in hl.eps], axis=-1)
+    # I_w = g_0 - sum_j w_j (S g)_j; with the scale a free: a g_0 - sum_j v_j (S g)_j
+    A = np.concatenate([gen[:, :1], -(gen @ hl.generator_matrix().T)], axis=1)
+    coef = np.linalg.lstsq(A * root_w[:, None], intensity(mu, u) * root_w, rcond=None)[0]
+    return [float(v / coef[0]) for v in coef[1:]]
 
 
 # ---------------------------------------------------------------------------

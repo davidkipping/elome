@@ -85,7 +85,7 @@ def reference(p, t):
 ], ids=["aligned", "oblique", "retrograde, epoch", "eccentric", "umbra", "facula"])
 def test_against_the_reference(kw):
     p = P(**kw)
-    got = el.TransitModel(p, T).light_curve(p)
+    got = el.TransitModel(p, T, dtype=mx.float64).light_curve(p)
     assert np.max(np.abs(got - reference(p, T))) < 1e-13
 
 
@@ -94,7 +94,7 @@ def test_out_of_transit_is_the_rotational_modulation():
     own modulation: the planet's columns are exactly zero."""
     p = P()
     t = np.linspace(0.6, 0.6 + p.prot, 40) % p.per + 0.4       # never in transit
-    got = el.TransitModel(p, t).light_curve(p)
+    got = el.TransitModel(p, t, dtype=mx.float64).light_curve(p)
     assert np.max(np.abs(got - reference(p, t))) < 1e-13
     assert np.ptp(got) > 1e-3
 
@@ -103,8 +103,8 @@ def test_unspotted_is_the_plain_model():
     """Contrast 1 everywhere: the spherical hybrid model, to rounding."""
     p = P(spots=[[10.0, -10.0, 8.0, 1.0], [60.0, 20.0, 12.0, 1.0]])
     q = P(spots=None, prot=None)
-    a = el.TransitModel(p, T).light_curve(p)
-    b = el.TransitModel(q, T).light_curve(q)
+    a = el.TransitModel(p, T, dtype=mx.float64).light_curve(p)
+    b = el.TransitModel(q, T, dtype=mx.float64).light_curve(q)
     assert np.max(np.abs(a - b)) < 2e-15
 
 
@@ -129,7 +129,7 @@ def bump_time(p):
     t = np.linspace(-0.08, 0.08, 321)
     q = P(**{k: getattr(p, k) for k in ("inc", "lam", "istar", "prot")})
     q.spots = [[s[0], s[1], s[2], 1.0] for s in p.spots]
-    d = el.TransitModel(p, t).light_curve(p) - el.TransitModel(q, t).light_curve(q)
+    d = el.TransitModel(p, t, dtype=mx.float64).light_curve(p) - el.TransitModel(q, t, dtype=mx.float64).light_curve(q)
     return t[np.argmax(d)]
 
 
@@ -156,7 +156,7 @@ def test_lambda_sign():
         p = P(lam=lam, istar=60.0, spots=[[0.0, 90.0, 5.0, 0.5]])
         n = star_vectors(0.0, p.prot, 60.0, lam, p.spots, 0.0)[0][0]
         assert np.sign(n[0]) == sx and n[1] > 0
-        got = el.TransitModel(p, T[:3]).light_curve(p)
+        got = el.TransitModel(p, T[:3], dtype=mx.float64).light_curve(p)
         assert np.max(np.abs(got - reference(p, T[:3]))) < 1e-13
 
 
@@ -172,7 +172,7 @@ def test_recurrence_on_an_aligned_star():
     bumps = []
     for k in range(3):
         tk = t + k * p.per
-        bumps.append(el.TransitModel(p, tk).light_curve(p) - el.TransitModel(q, tk).light_curve(q))
+        bumps.append(el.TransitModel(p, tk, dtype=mx.float64).light_curve(p) - el.TransitModel(q, tk, dtype=mx.float64).light_curve(q))
     assert np.ptp(bumps[0]) > 1e-3                            # the crossing
     assert np.max(np.abs(bumps[2] - bumps[0])) < 1e-12
     assert np.max(np.abs(bumps[1])) < 1e-15                   # the spot on the far side
@@ -185,15 +185,15 @@ def test_recurrence_on_an_aligned_star():
 def test_supersampling_averages_the_instantaneous_curve():
     p = P()
     n, e = 7, 0.01
-    a = el.TransitModel(p, T, supersample_factor=n, exp_time=e).light_curve(p)
+    a = el.TransitModel(p, T, supersample_factor=n, exp_time=e, dtype=mx.float64).light_curve(p)
     offs = np.linspace(-e / 2, e / 2, n)
-    b = el.TransitModel(p, (T[:, None] + offs).ravel()).light_curve(p).reshape(-1, n).mean(1)
+    b = el.TransitModel(p, (T[:, None] + offs).ravel(), dtype=mx.float64).light_curve(p).reshape(-1, n).mean(1)
     assert np.max(np.abs(a - b)) < 1e-15
 
 
 def test_float32_matches_float64():
     p = P(lam=20.0, istar=70.0, ecc=0.2, w=60.0)
-    a = el.TransitModel(p, T).light_curve(p)
+    a = el.TransitModel(p, T, dtype=mx.float64).light_curve(p)
     b = el.TransitModel(p, T, dtype=mx.float32).light_curve(p)
     assert np.max(np.abs(a - b)) < 2e-6
 
@@ -203,7 +203,7 @@ def test_absolute_times_in_float32():
     t0 = 2459000.123
     p, q = P(t0=t0, spot_epoch=t0 - 5.0), P(spot_epoch=-5.0)
     a = el.TransitModel(p, T + t0, dtype=mx.float32).light_curve(p)
-    b = el.TransitModel(q, T).light_curve(q)
+    b = el.TransitModel(q, T, dtype=mx.float64).light_curve(q)
     assert np.max(np.abs(a - b)) < 2e-6
 
 
@@ -217,7 +217,7 @@ def test_light_curves_equals_the_loop():
               spots=[[rng.uniform(-40, 40), rng.uniform(-30, 30), rng.uniform(3, 15),
                       rng.uniform(0.2, 1.2)] for _ in range(2)])
         seq.append(p)
-    m = el.TransitModel(seq[0], T)
+    m = el.TransitModel(seq[0], T, dtype=mx.float64)
     got = m.light_curves(seq)
     for i, p in enumerate(seq):
         assert np.max(np.abs(got[i] - m.light_curve(p))) < 1e-15
@@ -232,7 +232,7 @@ def test_light_curves_equals_the_loop():
 
 def test_light_curves_shared_spots_and_eccentric_sets():
     seq = [P(ecc=0.0), P(ecc=0.2, w=30.0), P(ecc=0.4, w=200.0)]
-    m = el.TransitModel(seq[0], T)
+    m = el.TransitModel(seq[0], T, dtype=mx.float64)
     got = m.light_curves(seq)
     for i, p in enumerate(seq):
         assert np.max(np.abs(got[i] - m.light_curve(p))) < 1e-14
@@ -243,7 +243,7 @@ def test_light_curve_mx_gradients():
     against central differences of light_curve."""
     p0 = P(lam=20.0, istar=70.0)
     t = np.linspace(-0.06, 0.06, 13)
-    m = el.TransitModel(p0, t)
+    m = el.TransitModel(p0, t, dtype=mx.float64)
     names = ["rp", "inc", "prot", "istar", "lam"]
     base = {k: float(getattr(p0, k)) for k in names}
     sp0 = np.array(p0.spots, dtype=np.float64)
@@ -313,14 +313,14 @@ def test_ld_basis_contract_through_the_model():
 ])
 def test_construction_checks(kw, msg):
     with pytest.raises(ValueError, match=msg):
-        el.TransitModel(P(**kw), T)
+        el.TransitModel(P(**kw), T, dtype=mx.float64)
 
 
 def test_secondary_is_refused():
     p = P()
     p.fp = 1e-3
     with pytest.raises(ValueError, match="primary-transit only"):
-        el.TransitModel(p, T, transittype="secondary")
+        el.TransitModel(p, T, transittype="secondary", dtype=mx.float64)
 
 
 @pytest.mark.parametrize("spots, msg", [
@@ -329,13 +329,13 @@ def test_secondary_is_refused():
     ([[0.0, np.nan, 5.0, 0.5]], "finite")])
 def test_spot_domain(spots, msg):
     p = P(spots=spots)
-    m = el.TransitModel(P(spots=[[0.0, 0.0, 5.0, 0.5]]), T)
+    m = el.TransitModel(P(spots=[[0.0, 0.0, 5.0, 0.5]]), T, dtype=mx.float64)
     with pytest.raises(ValueError, match=msg):
         m.light_curve(p)
 
 
 def test_fixed_per_model():
-    m = el.TransitModel(P(), T)
+    m = el.TransitModel(P(), T, dtype=mx.float64)
     with pytest.raises(ValueError, match="number of spots"):
         m.light_curve(P(spots=[[0.0, 0.0, 5.0, 0.5]]))
     with pytest.raises(ValueError, match="params.spots changed"):
@@ -345,18 +345,18 @@ def test_fixed_per_model():
 def test_star_fields_need_spots():
     p = P(spots=None)
     with pytest.raises(ValueError, match="set params.spots"):
-        el.TransitModel(p, T)
+        el.TransitModel(p, T, dtype=mx.float64)
 
 
 def test_prot_required():
     with pytest.raises(ValueError, match="prot"):
-        el.TransitModel(P(prot=None), T).light_curve(P(prot=None))
+        el.TransitModel(P(prot=None), T, dtype=mx.float64).light_curve(P(prot=None))
 
 
 @pytest.mark.parametrize("prot", [0.0, -5.0, np.inf, mx.array(0.0, dtype=mx.float64)])
 def test_prot_domain(prot):
     """prot = 0 made every spot vector NaN, with nothing pointing at it."""
-    m = el.TransitModel(P(), T)
+    m = el.TransitModel(P(), T, dtype=mx.float64)
     with pytest.raises(ValueError, match="prot"):
         m.light_curve(P(prot=prot))
     if not isinstance(prot, mx.array):
@@ -365,7 +365,7 @@ def test_prot_domain(prot):
 
 
 def test_spot_table_per_set_only_in_light_curves():
-    m = el.TransitModel(P(), T)
+    m = el.TransitModel(P(), T, dtype=mx.float64)
     with pytest.raises(ValueError, match="light_curves"):
         m.light_curve(P(spots=np.tile(np.array(P().spots)[None], (3, 1, 1))))
 
@@ -374,7 +374,7 @@ def test_ecc_above_0999_raises():
     """The orbit is rebuilt from the impact parameter, whose cos i holds to
     e = 0.999, as for an oblate or ringed planet."""
     kw = dict(ecc=0.9995, w=300.0, a=900.0, inc=89.9)
-    m = el.TransitModel(P(**dict(kw, ecc=0.99)), T)
+    m = el.TransitModel(P(**dict(kw, ecc=0.99)), T, dtype=mx.float64)
     with pytest.raises(ValueError, match=r"\[0, 0.999\]"):
         m.light_curve(P(**kw))
     with pytest.raises(ValueError, match=r"\[0, 0.999\]"):
@@ -396,7 +396,7 @@ def exposure_mean(p, ti, e=EXP, n=40001):
     """The exposure average of the instantaneous curve, by the trapezoid
     rule on a fine grid (its kinks cost O(h^2))."""
     tt = np.linspace(ti - e / 2, ti + e / 2, n)
-    return np.trapezoid(el.TransitModel(p, tt).light_curve(p), tt) / e
+    return np.trapezoid(el.TransitModel(p, tt, dtype=mx.float64).light_curve(p), tt) / e
 
 
 @pytest.mark.parametrize("kw", [
@@ -414,7 +414,7 @@ def test_contact_rule_against_the_exposure_average(kw):
     ref = np.array([exposure_mean(p, ti) for ti in ts])
     err = {}
     for g in (5, 9):
-        got = el.TransitModel(p, ts, integration="contact", exp_time=EXP, n_gl=g).light_curve(p)
+        got = el.TransitModel(p, ts, integration="contact", exp_time=EXP, n_gl=g, dtype=mx.float64).light_curve(p)
         err[g] = np.max(np.abs(got - ref))
     assert err[9] < 1e-7
     assert err[9] < 0.2 * err[5]
@@ -424,8 +424,8 @@ def test_contact_rule_beats_supersampling():
     p = P(spots=[[8.0, LAT_CHORD, 5.0, 0.3]], prot=4.0)
     ts = np.array([0.0, 0.005, 0.01])
     ref = np.array([exposure_mean(p, ti) for ti in ts])
-    c = el.TransitModel(p, ts, integration="contact", exp_time=EXP, n_gl=5).light_curve(p)
-    s = el.TransitModel(p, ts, supersample_factor=35, exp_time=EXP).light_curve(p)
+    c = el.TransitModel(p, ts, integration="contact", exp_time=EXP, n_gl=5, dtype=mx.float64).light_curve(p)
+    s = el.TransitModel(p, ts, supersample_factor=35, exp_time=EXP, dtype=mx.float64).light_curve(p)
     assert np.max(np.abs(c - ref)) < 0.02 * np.max(np.abs(s - ref))
 
 
@@ -435,7 +435,7 @@ def test_contact_rule_out_of_transit_is_the_modulation():
     split (a curvature discontinuity: about 5e-9 here)."""
     p = P(prot=0.8)
     ts = np.array([0.5, 1.0, 1.4])
-    got = el.TransitModel(p, ts, integration="contact", exp_time=EXP, n_gl=7).light_curve(p)
+    got = el.TransitModel(p, ts, integration="contact", exp_time=EXP, n_gl=7, dtype=mx.float64).light_curve(p)
     ref = np.array([exposure_mean(p, ti, n=4001) for ti in ts])
     assert np.max(np.abs(got - ref)) < 2e-8
 
@@ -444,7 +444,7 @@ def test_contact_rule_batched_and_float32():
     seq = [P(spots=[[8.0, LAT_CHORD, 5.0, 0.3]], prot=4.0),
            P(spots=[[20.0, LAT_CHORD + 3.0, 8.0, 0.5]], prot=2.0, lam=20.0, ecc=0.1, w=80.0)]
     ts = np.linspace(-0.05, 0.05, 11)
-    m = el.TransitModel(seq[0], ts, integration="contact", exp_time=EXP)
+    m = el.TransitModel(seq[0], ts, integration="contact", exp_time=EXP, dtype=mx.float64)
     got = m.light_curves(seq)
     for i, p in enumerate(seq):
         assert np.max(np.abs(got[i] - m.light_curve(p))) < 1e-15
@@ -461,7 +461,7 @@ def test_contact_rule_gradient_across_blocks(monkeypatch):
     ts = np.linspace(-0.06, 0.06, 40)
 
     def grad():
-        m = el.TransitModel(p0, ts, integration="contact", exp_time=EXP)
+        m = el.TransitModel(p0, ts, integration="contact", exp_time=EXP, dtype=mx.float64)
 
         def F(prot, rp):
             p = P(spots=p0.spots)
@@ -488,7 +488,7 @@ def test_contact_rule_active_pieces_are_every_node(monkeypatch):
     ts = np.linspace(-0.06, 0.06, 30)
 
     def run():
-        m = el.TransitModel(p0, ts, integration="contact", exp_time=EXP)
+        m = el.TransitModel(p0, ts, integration="contact", exp_time=EXP, dtype=mx.float64)
 
         def F(prot, rp):
             p = P(spots=p0.spots, ecc=0.2, w=60.0)
@@ -523,7 +523,7 @@ def test_contact_rule_on_a_fast_eccentric_transit():
     p = P(spots=[[0.0, 0.0, 4.0, 0.2]], prot=3.0, ecc=0.8, w=90.0, inc=90.0)
     ts = np.linspace(-0.012, 0.012, 25)
     ref = np.array([exposure_mean(p, ti) for ti in ts])
-    got = el.TransitModel(p, ts, integration="contact", exp_time=EXP, n_gl=9).light_curve(p)
+    got = el.TransitModel(p, ts, integration="contact", exp_time=EXP, n_gl=9, dtype=mx.float64).light_curve(p)
     assert np.max(np.abs(got - ref)) < 5e-8
 
 
@@ -565,7 +565,7 @@ def test_sampler_api_is_the_model(kw, rule):
     t = np.linspace(-0.12, 0.12, 61)
     mk = dict(integration="contact", exp_time=EXP, n_gl=7) if rule == "contact" else {}
     sk = dict(integration="contact", exp_time=EXP, n_gl=7) if rule == "contact" else {}
-    ref = el.TransitModel(p, t, **mk).light_curve(p) - 1.0
+    ref = el.TransitModel(p, t, **{"dtype": mx.float64, **mk}).light_curve(p) - 1.0
     got = _sampler(p, t, **sk)
     assert np.max(np.abs(got - ref)) < 1e-14
 
@@ -588,7 +588,7 @@ def test_sampler_api_with_timing_variations():
         q = P(prot=4.0, spot_epoch=0.0)
         q.t0 = k * per + s
         tk = t[21 * k:21 * (k + 1)]
-        ref.append(el.TransitModel(q, tk, integration="contact", exp_time=EXP).light_curve(q) - 1)
+        ref.append(el.TransitModel(q, tk, integration="contact", exp_time=EXP, dtype=mx.float64).light_curve(q) - 1)
     assert np.max(np.abs(got - np.concatenate(ref))) < 1e-14
 
 
