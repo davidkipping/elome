@@ -3,7 +3,7 @@
 All notable changes to Elómë. Versioning: semantic-ish (MAJOR.MINOR.PATCH);
 every release is tagged `vX.Y.Z` in git.
 
-## [Unreleased]
+## [0.23.5] — 2026-11-22
 
 ### Changed
 - **A planet with a moon in float64, about 10% faster.** The contact
