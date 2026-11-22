@@ -331,3 +331,50 @@ def test_light_curves_in_float32():
     F64 = elome.TransitModel(ps[0], t).light_curves(ps)
     F32 = elome.TransitModel(ps[0], t, dtype=mx.float32).light_curves(ps)
     assert np.abs(F32 - F64).max() < 2e-7
+
+
+@pytest.mark.parametrize("law", ["hybrid4", "quadratic"])
+def test_a_disc_inside_the_other_is_the_union_of_the_larger(law):
+    """Where one disc lies wholly inside the other the light curve takes
+    the larger disc alone (moons_tau._photometry): the lens is then the
+    smaller disc, on the star or across its limb."""
+    from elome import moons
+    from elome.hybrid import declared, get_law
+    rng = np.random.default_rng(2)
+    n = 400
+    zc, th = rng.uniform(0.0, 1.1, n), rng.uniform(0, 2 * np.pi, n)
+    rp, rs = rng.uniform(0.05, 0.3, n), rng.uniform(0.01, 0.3, n)
+    d = np.abs(rp - rs) * rng.uniform(0.0, 0.999, n)
+    ph = rng.uniform(0, 2 * np.pi, n)
+    xp, yp = zc * np.cos(th), zc * np.sin(th)
+    with mx.stream(mx.cpu), declared(False):
+        v = [mx.array(a, dtype=mx.float64) for a in (xp, yp, rp, xp + d * np.cos(ph),
+                                                     yp + d * np.sin(ph), rs)]
+        small = [mx.where(v[5] <= v[2], v[3 + j], v[j]) for j in range(3)]
+        if law == "quadratic":
+            lens = moons.lens_flux_quad(*v, 0.4, 0.25)
+            disc = moons.disc_flux_quad(*small, 0.4, 0.25)
+        else:
+            lens = mx.stack(moons.lens_shape_cols(*v, get_law(law)), -1)
+            disc = mx.stack(moons.disc_shape_cols(*small, get_law(law)), -1)
+        assert np.abs(np.array(lens) + np.array(disc)).max() < 1e-13
+
+
+def test_the_event_screen_changes_nothing(monkeypatch):
+    """The contact rule searches for kinks only on the lanes whose exposure
+    may hold one (moons_tau._screen); every sign change it could find is
+    kept, so the light curves are those of a search on every lane, bit for
+    bit."""
+    from elome import moons_tau
+    for law, fast in ((HYB, False), (QUAD, True)):
+        p = system(law, moon_per=0.15 if fast else 0.9, moon_r=0.8 if fast else 0.4)
+        t = windows(p, epochs=(0, 2), step=EXP)
+        for dt in (mx.float64, mx.float32):
+            with mx.stream(mx.cpu if dt == mx.float64 else mx.gpu):
+                m = elome.TransitModel(p, t, exp_time=EXP, integration="contact", dtype=dt)
+                with_screen = np.array(m.light_curve(p))
+                with monkeypatch.context() as mp:
+                    mp.setattr(moons_tau, "_screen",
+                               lambda Q, cols, hw0, screen, dtype: np.arange(cols[0].shape[0]))
+                    every_lane = np.array(m.light_curve(p))
+            assert np.array_equal(with_screen, every_lane)

@@ -16,7 +16,8 @@ distance from t0.
 **What is evaluated.** A point whose barycentre is too far from the star
 for either body to reach it at any time in its exposure is exactly 0, and
 the lens is taken only at the nodes where the two discs overlap with both
-on the star: frozen choices made from host values, as
+on the star (where one lies wholly inside the other, the union is the
+larger disc): frozen choices made from host values, as
 ``TransitModel._event_view``'s, so the light curve and its gradients are
 those of the full model.
 
@@ -26,9 +27,10 @@ earliest first -- and each piece integrated by Gauss-Legendre. The kinks
 are where a disc touches the limb (z = 1 +- r, for the planet and the
 moon), where the discs touch each other (d = rp +- rs) near the star, and
 where a corner of the two discs crosses the limb. The moon moves between
-transits, so they are found per exposure: eight smooth event functions are
-sampled at n_sample + 1 times across the window, the sign changes read on
-the host, and only those refined (regula falsi, then bisection where it
+transits, so they are found per exposure: on the exposures whose bodies
+can reach a contact within them (``_screen``), eight smooth event
+functions are sampled at n_sample + 1 times across the window, the sign
+changes read on the host, and only those refined (regula falsi, then bisection where it
 is slow), on the GPU compiled from host copies of the parameters. Only
 the pieces with width are evaluated, each with its lane's parameters.
 The step (``sample_count``) is a quarter of the smaller radius at the
@@ -252,6 +254,41 @@ def _changes(Q, dt, o, u, dm):
     return mx.sum(change.astype(mx.uint8) * bits, axis=-1).astype(mx.uint8)
 
 
+def _centres(Q, dt, o, u):
+    """(xp, yp, xm, ym) at each lane's exposure centre, (lanes, 4)."""
+    xp, yp, _, xm, ym, _ = _pos(Q, dt, o, u, 0.0 * dt)
+    return mx.concatenate([xp, yp, xm, ym], axis=-1)
+
+
+def _screen(Q, cols, hw0, screen, dtype):
+    """The lanes whose exposure may hold a kink, host indices: from the
+    bodies at its centre and how far they can move in half an exposure.
+    screen: per lane (rp, rs, v_b, v_m), host arrays -- the radii, the
+    barycentre's largest sky speed and the moon's about the planet (each
+    body moves at most v_b + v_m, their separation at most v_m). A lane is
+    kept where an event function can change sign: a disc crossing either
+    of its contacts with the limb, the discs either tangency, or a corner
+    crossing the limb -- which needs the discs overlapping with both
+    reaching the limb (a corner appearing mid-exposure is a tangency).
+    Every sign change the event search can find is kept, spurious ones
+    included, so its result is unchanged."""
+    rp, rs, vb, vm = screen
+    c = np.array(_run(_centres, Q, *cols), dtype=np.float64)
+    zp, zm = np.hypot(c[:, 0], c[:, 1]), np.hypot(c[:, 2], c[:, 3])
+    d = np.hypot(c[:, 2] - c[:, 0], c[:, 3] - c[:, 1])
+    slack = 1e-5 if dtype == mx.float32 else 1e-10
+    with np.errstate(invalid="ignore"):
+        mb, mr = (vb + vm) * hw0 + slack, vm * hw0 + slack           # a body, the separation
+        near = lambda x, level, move: np.abs(x - level) <= move     # noqa: E731
+        keep = (near(zp, 1.0 + rp, mb) | near(zp, np.abs(1.0 - rp), mb)
+                | near(zm, 1.0 + rs, mb) | near(zm, np.abs(1.0 - rs), mb)
+                | near(d, rp + rs, mr) | near(d, np.abs(rp - rs), mr)
+                | ((d - mr < rp + rs) & (d + mr > np.abs(rp - rs))
+                   & near(zp, 1.0, rp + mb) & near(zm, 1.0, rs + mb))
+                | ~np.isfinite(mb + mr))
+    return np.nonzero(keep)[0]
+
+
 def _pick(Q, dt, o, u, f, delta):
     """Each kink's own event function f at its offset delta, (kinks,)."""
     G = _event_g(Q)(delta[:, None], dt, o, u)[:, 0, :]
@@ -361,7 +398,7 @@ class _Picker:
         return _pick(self.Q, *self.cols, self.f, delta)
 
 
-def _pieces(QL, cols, QH, cols_h, hw0, n_sample, n_gl, dtype):
+def _pieces(QL, cols, QH, cols_h, hw0, n_sample, n_gl, dtype, screen=None):
     """The contact rule's pieces, only those with width: per piece its lane
     (a host array) and its Gauss-Legendre offsets and normalised weights
     (pieces, n_gl). The kinks are found with the frozen parameters and
@@ -370,9 +407,20 @@ def _pieces(QL, cols, QH, cols_h, hw0, n_sample, n_gl, dtype):
     root, the gradient is the implicit one, -dg/dtheta / g', so the nodes
     move with the parameters and the gradient is that of the quadrature
     evaluated. QL, cols: the live values (``_prep``'s constants, the
-    lane columns), QH, cols_h their frozen copies."""
+    lane columns), QH, cols_h their frozen copies; screen: ``_screen``'s
+    bounds, the event search then only on the lanes that may hold a kink."""
     m = cols[0].shape[0]
-    lane, ff, lo, hi = _brackets(QH, cols_h, hw0, n_sample, dtype)
+    sub = np.arange(m) if screen is None else _screen(QH, cols_h, hw0, screen, dtype)
+    if sub.size == m:
+        lane, ff, lo, hi = _brackets(QH, cols_h, hw0, n_sample, dtype)
+    elif sub.size:
+        sx = mx.array(sub.astype(np.int32))
+        take = lambda v: mx.take(v, sx, axis=0)                     # noqa: E731
+        lane, ff, lo, hi = _brackets(_lanes(QH, take), [take(v) for v in cols_h], hw0,
+                                     n_sample, dtype)
+        lane = sub[lane]
+    else:
+        lane = ff = lo = hi = np.zeros(0, dtype=np.int64)
     if lane.size:
         # the frozen search on a bucketed count of kinks, the last repeated
         nk, pad = lane.size, _padded(np.arange(lane.size), _bucket(lane.size, dtype))
@@ -420,13 +468,11 @@ def _photometry(Q, kind, large, cols, T):
     full = lambda v: mx.broadcast_to(v, T.shape)
     with declared(large):
         if kind[0] == "hybrid":
-            law = kind[1]
-            cols = [a + b for a, b in zip(moons.disc_shape_cols(xp, yp, rp, law, fp),
-                                          moons.disc_shape_cols(xm, ym, rs, law, fm))]
+            dp = moons.disc_shape_cols(xp, yp, rp, kind[1], fp)
+            dm = moons.disc_shape_cols(xm, ym, rs, kind[1], fm)
         else:
-            u1, u2 = kind[1], kind[2]
-            cols = [moons.disc_flux_quad(xp, yp, rp, u1, u2, fp)
-                    + moons.disc_flux_quad(xm, ym, rs, u1, u2, fm)]
+            dp = [moons.disc_flux_quad(xp, yp, rp, kind[1], kind[2], fp)]
+            dm = [moons.disc_flux_quad(xm, ym, rs, kind[1], kind[2], fm)]
     # the lens, where the discs overlap with both on the star (host choice)
     reads = [_sg(v) for v in (xp, yp, xm, ym, rp, rs)] + [fp, fm]
     mx.eval(*reads)                                                 # one sync for them all
@@ -435,8 +481,18 @@ def _photometry(Q, kind, large, cols, T):
     zp_, zm_ = np.hypot(gx[0], gx[1]), np.hypot(gx[2], gx[3])
     dd = np.hypot(gx[2] - gx[0], gx[3] - gx[1])
     need = (np.array(reads[6]) & np.array(reads[7]) & (dd < (grp + grs) * (1.0 + 1e-9))
-            & (zp_ < 1.0 + grp) & (zm_ < 1.0 + grs)).ravel()
-    idx = np.nonzero(need)[0]
+            & (zp_ < 1.0 + grp) & (zm_ < 1.0 + grs))
+    # one disc wholly inside the other: the lens is the smaller disc, so the
+    # union is the larger one, whose columns are already here (the lens is
+    # C^1 at the internal tangency, so the switch leaves no kink)
+    inside = need & (dd <= np.abs(grp - grs))
+    if inside.any():
+        big_p = mx.array(np.broadcast_to(grp >= grs, T.shape))
+        ins = mx.array(inside)
+        cols = [mx.where(ins, mx.where(big_p, a, b), a + b) for a, b in zip(dp, dm)]
+    else:
+        cols = [a + b for a, b in zip(dp, dm)]
+    idx = np.nonzero((need & ~inside).ravel())[0]
     if idx.size:
         ix = mx.array(idx.astype(np.int32))
         flat = (lambda v: mx.take(full(v).reshape(-1), ix)
@@ -526,7 +582,15 @@ def flux_dev_moon_t(dt, k, turns, P, kind, large=False, exp_time=0.0, n_gl=7,
         lc = [d_s[:, None], *_lane_cols(PO, k_s, t_s, dtype)]       # (lanes, 1) each
         if exp_time > 0.0:
             # the pieces with width, each evaluated at its lane's values
-            pl, T, W = _pieces(QL, lc, QHL, _host(lc), hw0, int(n_sample or 64), n_gl, dtype)
+            # the speeds bounding how far the bodies move in an exposure
+            si = sel // m
+            mper = host(P["mper_ref"] + P["m_off"])
+            with np.errstate(divide="ignore", invalid="ignore"):
+                v_m = (_TWO_PI * a_ps / mper
+                       * np.sqrt((1.0 + e_m) / np.maximum(1.0 - e_m, 0.0)))
+            screen = (rp_h[si], rs_h[si], float(P["speed"]), v_m[si])
+            pl, T, W = _pieces(QL, lc, QHL, _host(lc), hw0, int(n_sample or 64), n_gl, dtype,
+                               screen)
         else:
             pl = np.arange(sel.size)
             T = mx.zeros((sel.size, 1), dtype=dtype)

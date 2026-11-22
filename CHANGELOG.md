@@ -3,6 +3,18 @@
 All notable changes to Elómë. Versioning: semantic-ish (MAJOR.MINOR.PATCH);
 every release is tagged `vX.Y.Z` in git.
 
+## [Unreleased]
+
+### Changed
+- **A planet with a moon in float64, about 10% faster.** The contact
+  rule searches for kinks only in the exposures whose bodies can reach a
+  contact within them, from where they are at its centre and how fast
+  they can move (about half of the exposures near a transit); the light
+  curve is unchanged, bit for bit. Where one disc lies wholly inside the
+  other, the light curve takes the larger disc alone, without computing
+  their overlap. 16 anvil chains take 0.28 s per value and gradient,
+  from 0.32 s.
+
 ## [0.23.4] — 2026-11-22
 
 ### Changed
