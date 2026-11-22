@@ -3,6 +3,13 @@
 All notable changes to Elómë. Versioning: semantic-ish (MAJOR.MINOR.PATCH);
 every release is tagged `vX.Y.Z` in git.
 
+## [0.24.1] — 2026-11-22
+
+### Documentation
+- The front page and the README give Elómë's batched speed against
+  pizzetti and batman, with the case it holds in (a spherical planet,
+  the quadratic law, 512 light curves of $10^5$ points) in a footnote.
+
 ## [0.24.0] — 2026-11-22
 
 ### Changed
