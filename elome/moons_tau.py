@@ -29,10 +29,11 @@ where a corner of the two discs crosses the limb. The moon moves between
 transits, so they are found per exposure: eight smooth event functions are
 sampled at n_sample + 1 times across the window, the sign changes read on
 the host, and only those refined (regula falsi, then bisection where it
-is slow). Only the pieces with width are evaluated, each with its lane's
-parameters. The step (``sample_count``) is a quarter of the smaller radius
-at the fastest sky speed; a pair of kinks closer than a step that cancel
--- a brief graze -- is missed, at a cost as small as its effect.
+is slow), on the GPU compiled from host copies of the parameters. Only
+the pieces with width are evaluated, each with its lane's parameters.
+The step (``sample_count``) is a quarter of the smaller radius at the
+fastest sky speed; a pair of kinks closer than a step that cancel -- a
+brief graze -- is missed, at a cost as small as its effect.
 """
 
 from __future__ import annotations
@@ -43,6 +44,7 @@ import mlx.core as mx
 import numpy as np
 
 from . import moons
+from .dtypes import _gpu_stream_active
 from .exposure import gauss_legendre
 from .hybrid import combine_cols, declared
 
@@ -68,50 +70,142 @@ def sample_count(exp_time, a, per, rp, a_ps, moon_per, rs, ecc=0.0, moon_ecc=0.0
     return int(min(max(math.ceil(exp_time * v / (0.25 * r)), _S_MIN), _S_MAX))
 
 
-def _geometry(P):
-    """pos(dt, k, turns, delta) -> (xp, yp, front_p, xm, ym, front_m, zB)
-    for the parameter dict P (graph values)."""
-    def pos(dt, k, turns, delta):
-        tau = dt + delta - (P["t0_off"] + k * P["p_off"])
-        XB, YB, ZB = moons.barycentre_sky((_TWO_PI / P["per"]) * tau, P["a"], P["inc"],
-                                          P["ecc"])
-        phi_m = moons.moon_phase(tau, k, turns, P["per_ref"], P["mper_ref"], P["p_off"],
-                                 P["m_off"], P["phase"])
-        d = moons.moon_offset(phi_m, P["a_ps"], P["moon_inc"], P["node"], P["orbit"])
-        (xp, yp, zp), (xm, ym, zm) = moons.body_positions(XB, YB, ZB, *d, P["q"])
-        return xp, yp, zp > 0.0, xm, ym, zm > 0.0, mx.sqrt(XB * XB + YB * YB)
-    return pos
+def _prep(P, dtype):
+    """The positions' constants per set, once, from P's values (graph or
+    host): 2 pi / P, the angles' (sin, cos), the bodies' shares of the
+    moon's offset, its period; each an array, so a frozen copy of them is
+    a compiled stage's input."""
+    c = lambda v: v if isinstance(v, (mx.array, tuple)) or v is None \
+        else mx.array(float(v), dtype=dtype)                        # noqa: E731
+    q = P["q"]
+    Q = dict(t0_off=P["t0_off"], p_off=P["p_off"], w=_TWO_PI / P["per"], a=P["a"],
+             ecc=P["ecc"], inc=moons._sincos_any(P["inc"]), a_ps=P["a_ps"],
+             orbit=P["orbit"], moon_inc=moons._sincos_any(P["moon_inc"]),
+             node=moons._sincos_any(P["node"]), fp=q / (1.0 + q), fm=1.0 / (1.0 + q),
+             moon_per=P["mper_ref"] + P["m_off"], phase=P["phase"], rp=P["rp"], rs=P["rs"])
+    return {key: tuple(c(x) for x in v) if key in ("inc", "moon_inc", "node") else c(v)
+            for key, v in Q.items()}
 
 
-def _freeze(v):
-    """Stop gradients through a parameter: an array, a tuple of them (the
-    anchored constants, the moon's orbit) or a host value."""
+def _lane_cols(P, k, turns, dtype):
+    """Per lane, (lanes, 1) each: t0_off + k p_off, and the moon's turns
+    fixed per orbit (``moons._turns_base``; in float32 its float-float
+    part, which is no compiled graph's). P: (lanes, 1) columns or shared."""
+    kk, tt = k[:, None], turns[:, None]
+    base, _ = moons._turns_base(kk, tt, P["per_ref"], P["mper_ref"], P["p_off"], P["m_off"],
+                                dtype)
+    return P["t0_off"] + kk * P["p_off"], base
+
+
+def _pos(Q, dt, o, u, delta):
+    """(xp, yp, front_p, xm, ym, front_m) at times dt + delta of lanes with
+    ``_lane_cols``' (o, u), for ``_prep``'s constants Q."""
+    tau = dt + delta - o
+    XB, YB, ZB = moons._barycentre(Q["w"] * tau, Q["a"], Q["inc"], Q["ecc"])
+    phi_m = moons._phase_at(tau, u, Q["moon_per"], Q["phase"])
+    d = moons._offset(phi_m, Q["a_ps"], Q["moon_inc"], Q["node"], Q["orbit"])
+    (xp, yp, zp), (xm, ym, zm) = moons._bodies(XB, YB, ZB, *d, Q["fp"], Q["fm"])
+    return xp, yp, zp > 0.0, xm, ym, zm > 0.0
+
+
+def _reach_z(Q, dt, k):
+    """The barycentre's separation at times dt of orbits k: a frozen stage."""
+    tau = dt - (Q["t0_off"] + k * Q["p_off"])
+    XB, YB, _ = moons._barycentre(Q["w"] * tau, Q["a"], Q["inc"], Q["ecc"])
+    return mx.sqrt(XB * XB + YB * YB)
+
+
+# --------------------------------------------------------------------------
+# compiled frozen stages
+# --------------------------------------------------------------------------
+
+_KERNELS = {}
+
+
+def _spec(v, leaves):
     if isinstance(v, mx.array):
-        return _sg(v)
-    if isinstance(v, tuple):
-        return tuple(_freeze(c) for c in v)
+        leaves.append(v)
+        return "a"
+    if v is None:
+        return None
+    if isinstance(v, dict):
+        return ("d", tuple((key, _spec(v[key], leaves)) for key in sorted(v)))
+    return ("t", tuple(_spec(c, leaves) for c in v))
+
+
+def _unspec(s, it):
+    if s == "a":
+        return next(it)
+    if s is None:
+        return None
+    if s[0] == "d":
+        return {key: _unspec(c, it) for key, c in s[1]}
+    return tuple(_unspec(c, it) for c in s[1])
+
+
+def _run(fn, *args):
+    """fn(*args), on the GPU compiled once per function and structure of
+    args: trees (dicts, tuples) of arrays and None. Only for frozen stages
+    fed host copies (``_host``): under a traced gradient mx.compile does
+    nothing for arrays computed from traced ones. MLX retraces per input
+    shape, hence the bucketed lane counts (``_bucket``). On the CPU eager:
+    there the compiled kernels are C++, built on first use at ~0.2 s each
+    (the event functions make over a hundred), for a gain of a third."""
+    leaves = []
+    specs = tuple(_spec(a, leaves) for a in args)
+    if not _compiling(mx.float64 if any(v.dtype == mx.float64 for v in leaves)
+                      else mx.float32):
+        return fn(*args)
+    key = (fn, specs)
+    f = _KERNELS.get(key)
+    if f is None:
+        def flat(*xs):
+            it = iter(xs)
+            return fn(*(_unspec(sp, it) for sp in specs))
+        f = _KERNELS[key] = mx.compile(flat)
+    return f(*leaves)
+
+
+def _host(v):
+    """A fresh copy of every array in v (a tree), no graph behind it."""
+    if isinstance(v, mx.array):
+        return mx.array(np.asarray(_sg(v)), dtype=v.dtype)
+    if isinstance(v, dict):
+        return {key: _host(c) for key, c in v.items()}
+    if isinstance(v, (tuple, list)):
+        return type(v)(_host(c) for c in v)
     return v
 
 
-def _frozen(P):
-    return {k: _freeze(v) for k, v in P.items()}
+def _compiling(dtype):
+    return dtype != mx.float64 and _gpu_stream_active()
 
 
-def _event_g(pos, P, dtype):
-    """g(delta, k, turns, dt) -> (..., 9): the event functions, whose sign
+def _bucket(n, dtype):
+    """A stage's lane count for n lanes: compiled, a power of two."""
+    return 1 << max(3, (int(n) - 1).bit_length()) if _compiling(dtype) else int(n)
+
+
+def _padded(ix, size):
+    """Indices ix, repeated at the last to ``size``."""
+    return np.concatenate([ix, np.full(size - ix.size, ix[-1], dtype=ix.dtype)])
+
+
+def _event_g(Q):
+    """g(delta, dt, o, u) -> (..., 9): the event functions, whose sign
     changes are the kinks: z_p^2 - (1 +- rp)^2, z_m^2 - (1 +- rs)^2,
     d^2 - (rp +- rs)^2 and |c|^2 - 1 for the discs' two corners c, then
     h^2, positive where the corners exist (no event function itself). Each
     is continuous in time -- without corners, c is the point on the line of
     centres the corners merge at -- so every root found moves with the
-    parameters as ``_live`` takes it to. A root of c where there are no
-    corners is no kink, and ``_events`` drops it; another that is no kink
+    parameters as ``_pieces`` takes it to. A root of c where there are no
+    corners is no kink, and ``_brackets`` drops it; another that is no kink
     (the discs touching off the star) only splits a smooth stretch."""
-    rp, rs = P["rp"], P["rs"]
-    tiny = 1e-300 if dtype == mx.float64 else 1e-30
+    rp, rs = Q["rp"], Q["rs"]
 
-    def g(delta, kk, tt, dtt):
-        xp, yp, _, xm, ym, _, _ = pos(dtt, kk, tt, delta)
+    def g(delta, dt, o, u):
+        tiny = 1e-300 if dt.dtype == mx.float64 else 1e-30
+        xp, yp, _, xm, ym, _ = _pos(Q, dt, o, u, delta)
         zp2, zm2 = xp * xp + yp * yp, xm * xm + ym * ym
         dx, dy = xm - xp, ym - yp
         d2 = dx * dx + dy * dy
@@ -130,35 +224,44 @@ def _event_g(pos, P, dtype):
     return g
 
 
-def _at(P, ix):
-    """P's per-lane (lanes, 1) columns at the lanes ix; shared values kept."""
-    return _lanes(P, lambda v: mx.take(v, ix, axis=0))
+def _changes(Q, dt, o, u, dm):
+    """The event functions' sign changes between samples dm (1, J + 1) of
+    lanes (dt, o, u), (lanes, J, 8): the corners' only where there are
+    corners at either end, a sign change of the merged point (the same in
+    both) being no kink. A frozen stage."""
+    G = _event_g(Q)(dm, dt, o, u)                                   # (lanes, J + 1, 9)
+    S = G[..., :8] > 0.0
+    change = S[:, :-1] != S[:, 1:]
+    corners = (G[:, :-1, 8:] > 0.0) | (G[:, 1:, 8:] > 0.0)
+    return mx.concatenate([change[..., :6], change[..., 6:] & corners], axis=-1)
 
 
-def _brackets(P_frozen, sets, dt, k, turns, hw0, n_sample, dtype):
+def _pick(Q, dt, o, u, f, delta):
+    """Each kink's own event function f at its offset delta, (kinks,)."""
+    G = _event_g(Q)(delta[:, None], dt, o, u)[:, 0, :]
+    return mx.take_along_axis(G, f[:, None], axis=-1)[:, 0]
+
+
+def _brackets(Q, cols, hw0, n_sample, dtype):
     """The kinks' brackets, read on the host from the event functions with
-    the frozen parameters, sampled at n_sample + 1 times across each exposure: per kink its lane,
-    its event function and its bracket (lo, hi) as offsets from the exposure
-    centre, host arrays ordered by lane, at most _K_SPLIT per lane (the
-    earliest). The samples are taken in blocks of lanes (no gradient is
-    kept, so each block's memory is freed with it)."""
+    frozen values (Q, lane columns cols = (dt, o, u)), sampled at n_sample +
+    1 times across each exposure: per kink its lane, its event function and
+    its bracket (lo, hi) as offsets from the exposure centre, host arrays
+    ordered by lane, at most _K_SPLIT per lane (the earliest). The samples
+    are taken in blocks of lanes (``_run``, each a bucketed count)."""
     j = np.arange(n_sample + 1, dtype=np.float64) / n_sample
     deltas = -hw0 + 2.0 * hw0 * j
     dm = mx.array(deltas, dtype=dtype)[None, :]
+    m = cols[0].shape[0]
     step = max(1, _EVENT_BLOCK // (n_sample + 1))
     found = []
-    for i in range(0, dt.shape[0], step):
-        e = lambda v: v[i:i + step, None]                           # noqa: E731
-        Pb = _lanes(P_frozen, lambda v: v[i:i + step]) if sets else P_frozen
-        g = _event_g(_geometry(Pb), Pb, dtype)
-        G = g(dm, e(k), e(turns), e(dt))                            # (block, J + 1, 9)
-        S = G[..., :8] > 0.0
-        change = S[:, :-1] != S[:, 1:]                              # (block, J, 8)
-        # the corners' functions only where there are corners at either
-        # end: a sign change of the merged point (the same in both) is no kink
-        corners = (G[:, :-1, 8:] > 0.0) | (G[:, 1:, 8:] > 0.0)
-        change = np.array(mx.concatenate([change[..., :6], change[..., 6:] & corners], axis=-1))
-        lb, jb, fb = np.nonzero(change)                             # lane, time, function order
+    for i in range(0, m, step):
+        c = min(step, m - i)
+        ix = mx.array(np.minimum(np.arange(i, i + min(_bucket(c, dtype), step)), m - 1)
+                      .astype(np.int32))
+        take = lambda v: mx.take(v, ix, axis=0)                     # noqa: E731
+        change = np.array(_run(_changes, _lanes(Q, take), *(take(v) for v in cols), dm))
+        lb, jb, fb = np.nonzero(change[:c])                         # lane, time, function order
         found.append((lb + i, jb, fb))
     lane, jj, ff = (np.concatenate(c) for c in zip(*found))
     if lane.size:
@@ -193,38 +296,47 @@ def _refine(gf, lo, hi, dtype):
     slow = np.nonzero(b - a > tol)[0]
     if slow.size:
         n = int(np.ceil(np.log2(np.max((b - a)[slow] / tol[slow]))))
-        lo_, hi_ = mx.array(a[slow], dtype=dtype), mx.array(b[slow], dtype=dtype)
-        pos = mx.array(fa[slow] > 0.0)
+        sp = _padded(slow, _bucket(slow.size, dtype))
+        gs = gf.at(sp)
+        lo_, hi_ = mx.array(a[sp], dtype=dtype), mx.array(b[sp], dtype=dtype)
+        pos = mx.array(fa[sp] > 0.0)
         for _ in range(n):
             mid = 0.5 * (lo_ + hi_)
-            same = (gf(mid, slow) > 0.0) == pos
+            same = (gs(mid) > 0.0) == pos
             lo_, hi_ = mx.where(same, mid, lo_), mx.where(same, hi_, mid)
-        a[slow], b[slow] = np.array(lo_), np.array(hi_)
+        a[slow], b[slow] = np.array(lo_)[:slow.size], np.array(hi_)[:slow.size]
     return 0.5 * (a + b)
 
 
-def _picker(P, d_s, k_s, t_s, lane, ff, sets, dtype):
-    """gf(delta, sub=None): each kink's own event function, with P (live or
-    frozen) at the kink's lane, at offsets delta (one per kink, or per kink
-    of the subset sub)."""
-    ix = mx.array(lane.astype(np.int32))
-    Pk = _at(P, ix) if sets else P
-    cols = [mx.take(v, ix)[:, None] for v in (k_s, t_s, d_s)]
-    f_all = mx.array(ff.astype(np.int32))
+class _Picker:
+    """gf(delta): each kink's own event function at offsets delta (one per
+    kink), with Q and the lane columns cols at the kinks' lanes -- compiled
+    for frozen values (``frozen``), else live. gf.at(sub): the same for the
+    kinks sub."""
 
-    def gf(delta, sub=None):
-        Pe, (kk, tt, dtt), f = Pk, cols, f_all
-        if sub is not None:
-            sx = mx.array(np.asarray(sub, np.int32))
-            Pe = _at(Pk, sx) if sets else Pk
-            kk, tt, dtt = (mx.take(v, sx, axis=0) for v in cols)
-            f = mx.take(f_all, sx)
-        G = _event_g(_geometry(Pe), Pe, dtype)(delta[:, None], kk, tt, dtt)[:, 0, :]
-        return mx.take_along_axis(G, f[:, None], axis=-1)[:, 0]
-    return gf
+    def __init__(self, Q, cols, f, frozen):
+        self.Q, self.cols, self.f, self.frozen = Q, cols, f, frozen
+
+    @classmethod
+    def of(cls, Q, cols, lane, ff, frozen):
+        ix = mx.array(lane.astype(np.int32))
+        take = lambda v: mx.take(v, ix, axis=0)                     # noqa: E731
+        return cls(_lanes(Q, take), [take(v) for v in cols], mx.array(ff.astype(np.int32)),
+                   frozen)
+
+    def at(self, sub):
+        sx = mx.array(np.asarray(sub, np.int32))
+        take = lambda v: mx.take(v, sx, axis=0)                     # noqa: E731
+        return _Picker(_lanes(self.Q, take), [take(v) for v in self.cols], take(self.f),
+                       self.frozen)
+
+    def __call__(self, delta):
+        if self.frozen:
+            return _run(_pick, self.Q, *self.cols, self.f, delta)
+        return _pick(self.Q, *self.cols, self.f, delta)
 
 
-def _pieces(PL, P_frozen, d_s, k_s, t_s, hw0, n_sample, n_gl, sets, dtype):
+def _pieces(QL, cols, QH, cols_h, hw0, n_sample, n_gl, dtype):
     """The contact rule's pieces, only those with width: per piece its lane
     (a host array) and its Gauss-Legendre offsets and normalised weights
     (pieces, n_gl). The kinks are found with the frozen parameters and
@@ -232,19 +344,22 @@ def _pieces(PL, P_frozen, d_s, k_s, t_s, hw0, n_sample, n_gl, sets, dtype):
     sg(g(t))] / g'(t) on each kink's own function: the value stays the
     root, the gradient is the implicit one, -dg/dtheta / g', so the nodes
     move with the parameters and the gradient is that of the quadrature
-    evaluated."""
-    m = d_s.shape[0]
-    lane, ff, lo, hi = _brackets(P_frozen, sets, d_s, k_s, t_s, hw0, n_sample, dtype)
+    evaluated. QL, cols: the live values (``_prep``'s constants, the
+    lane columns), QH, cols_h their frozen copies."""
+    m = cols[0].shape[0]
+    lane, ff, lo, hi = _brackets(QH, cols_h, hw0, n_sample, dtype)
     if lane.size:
-        gf = _picker(P_frozen, d_s, k_s, t_s, lane, ff, sets, dtype)
-        ev = _refine(gf, lo, hi, dtype)
+        # the frozen search on a bucketed count of kinks, the last repeated
+        nk, pad = lane.size, _padded(np.arange(lane.size), _bucket(lane.size, dtype))
+        gf = _Picker.of(QH, cols_h, lane[pad], ff[pad], True)
+        ev = _refine(gf, lo[pad], hi[pad], dtype)
         eps = (1e-7 if dtype == mx.float64 else 1e-3) * hw0
         evm = mx.array(ev, dtype=dtype)
-        slope = np.array((gf(evm + eps) - gf(evm - eps)) / (2.0 * eps))
+        slope = np.array((gf(evm + eps) - gf(evm - eps)) / (2.0 * eps))[:nk]
         keep = np.nonzero(slope != 0.0)[0]
-        lane, ff, ev, slope = lane[keep], ff[keep], ev[keep], slope[keep]
+        lane, ff, ev, slope = lane[keep], ff[keep], ev[:nk][keep], slope[keep]
     if lane.size:
-        gl = _picker(PL, d_s, k_s, t_s, lane, ff, sets, dtype)(mx.array(ev, dtype=dtype))
+        gl = _Picker.of(QL, cols, lane, ff, False)(mx.array(ev, dtype=dtype))
         live = mx.array(ev, dtype=dtype) - (gl - _sg(gl)) / mx.array(slope, dtype=dtype)
         live = mx.minimum(mx.maximum(live, -hw0), hw0)
         order = np.lexsort((ev, lane))                              # by lane, then time
@@ -270,13 +385,13 @@ def _pieces(PL, P_frozen, d_s, k_s, t_s, hw0, n_sample, n_gl, sets, dtype):
     return pl, T, W
 
 
-def _photometry(pos, P, kind, large, dt, k, turns, T):
+def _photometry(Q, kind, large, cols, T):
     """Per-node contributions on points (m,) at offsets T (m, n): the shape
-    columns (hybrid; a list) or F - 1 (quadratic). P and kind may hold
-    per-point (m, 1) columns (``_lanes``)."""
-    e = lambda v: mx.broadcast_to(v[:, None], T.shape)
-    xp, yp, fp, xm, ym, fm, _ = pos(e(dt), e(k), e(turns), T)
-    rp, rs = P["rp"], P["rs"]
+    columns (hybrid; a list) or F - 1 (quadratic). cols: the points' lane
+    columns (dt, o, u), (m, 1) each; Q and kind may hold per-point (m, 1)
+    columns (``_lanes``)."""
+    xp, yp, fp, xm, ym, fm = _pos(Q, *(mx.broadcast_to(v, T.shape) for v in cols), T)
+    rp, rs = Q["rp"], Q["rs"]
     full = lambda v: mx.broadcast_to(v, T.shape)
     with declared(large):
         if kind[0] == "hybrid":
@@ -361,30 +476,30 @@ def flux_dev_moon_t(dt, k, turns, P, kind, large=False, exp_time=0.0, n_gl=7,
     q_h = np.maximum(host(P["q"]), 0.0)
     R = a_ps * (1.0 + e_m) / (1.0 + q_h)
     reach = 1.0 + np.maximum(rs_h + R, rp_h + q_h * R) + P["speed"] * hw0
-    col = _lanes(_frozen(P), lambda v: v.reshape(-1, 1))           # (n, 1) columns
-    tau = dt_m[None] - (col["t0_off"] + k_m[None] * col["p_off"])
-    XB, YB, _ = moons.barycentre_sky((_TWO_PI / col["per"]) * tau, col["a"], col["inc"],
-                                     col["ecc"])
-    zB = np.broadcast_to(np.array(mx.sqrt(XB * XB + YB * YB)), (n, m))
+    Q = _prep(P, dtype)
+    QH = _host(Q)                                                   # frozen, no graph
+    col = _lanes(QH, lambda v: v.reshape(-1, 1))                    # (n, 1) columns
+    zB = np.broadcast_to(np.array(_run(_reach_z, col, dt_m[None], k_m[None])), (n, m))
     sel = np.nonzero((zB < reach[:, None]).reshape(-1))[0]
     out_cols = None
     if sel.size:
         six = mx.array(sel.astype(np.int32))
         pix = mx.array((sel % m).astype(np.int32))
         sets = n_sets is not None
+        PO = {key: P[key] for key in ("t0_off", "p_off", "m_off", "per_ref", "mper_ref")}
         if not sets:
-            PL, lkind = P, kind
+            QL, QHL, lkind = Q, QH, kind
         else:
             sx = mx.array((sel // m).astype(np.int32))
             gather = lambda v: mx.take(v, sx, axis=0)[:, None]
-            PL = _lanes(P, gather)
+            QL, QHL, PO = _lanes(Q, gather), _lanes(QH, gather), _lanes(PO, gather)
             lkind = kind if kind[0] == "hybrid" else (kind[0],) + tuple(
                 _map_sets(v, gather) for v in kind[1:])
         d_s, k_s, t_s = (mx.take(v, pix) for v in (dt_m, k_m, tu_m))
+        lc = [d_s[:, None], *_lane_cols(PO, k_s, t_s, dtype)]       # (lanes, 1) each
         if exp_time > 0.0:
             # the pieces with width, each evaluated at its lane's values
-            pl, T, W = _pieces(PL, _frozen(PL), d_s, k_s, t_s, hw0, int(n_sample or 64), n_gl,
-                               sets, dtype)
+            pl, T, W = _pieces(QL, lc, QHL, _host(lc), hw0, int(n_sample or 64), n_gl, dtype)
         else:
             pl = np.arange(sel.size)
             T = mx.zeros((sel.size, 1), dtype=dtype)
@@ -398,13 +513,12 @@ def flux_dev_moon_t(dt, k, turns, P, kind, large=False, exp_time=0.0, n_gl=7,
                 take = lambda v: mx.take(v, ix, axis=0)             # noqa: E731
             else:
                 take = lambda v: v[j]                               # noqa: E731
-            Pj, kj = PL, lkind
+            Qj, kj = QL, lkind
             if sets:
-                Pj = _lanes(PL, take)
+                Qj = _lanes(QL, take)
                 if lkind[0] == "quad":
                     kj = (lkind[0],) + tuple(_map_sets(v, take) for v in lkind[1:])
-            cols = _photometry(_geometry(Pj), Pj, kj, large, take(d_s), take(k_s), take(t_s),
-                               T[j])
+            cols = _photometry(Qj, kj, large, [take(v) for v in lc], T[j])
             part = [mx.sum(c * W[j], axis=-1) for c in cols]
             if sub is None:
                 sub = [mx.zeros((sel.size,), dtype=dtype) for _ in part]

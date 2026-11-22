@@ -131,10 +131,18 @@ def moon_phase(tau, k, turns_ref, per_ref, moon_per_ref, p_off, m_off, phase):
     tau_from_epochs``); turns_ref: ``moon_turns_ref(k, per_ref,
     moon_per_ref)``; p_off, m_off: the planet's and the moon's period offsets
     from the references; phase: the moon's phase at t0 [radians]."""
+    base, moon_per = _turns_base(k, turns_ref, per_ref, moon_per_ref, p_off, m_off,
+                                 tau.dtype)
+    return _phase_at(tau, base, moon_per, phase)
+
+
+def _turns_base(k, turns_ref, per_ref, moon_per_ref, p_off, m_off, dtype):
+    """(turns_ref + k d_ratio, P_m): the part of ``moon_phase``'s turns fixed
+    per orbit, and the moon's period."""
     moon_per = moon_per_ref + m_off
     d_ratio = (p_off * moon_per_ref - per_ref * m_off) / (moon_per * moon_per_ref)
     kd = k * d_ratio
-    if tau.dtype == mx.float32:
+    if dtype == mx.float32:
         # k d_ratio runs to hundreds of turns when the periods are offset,
         # and float32's rounding of d_ratio with it: reduced to a turn
         # before it is added, its value taken in float-float arithmetic,
@@ -142,7 +150,12 @@ def moon_phase(tau, k, turns_ref, per_ref, moon_per_ref, p_off, m_off, phase):
         kd = kd - mx.round(kd)
         corr = _sg(_k_d_ratio(k, per_ref, moon_per_ref, p_off, m_off) - kd)
         kd = kd + (corr - mx.round(corr))
-    turns = turns_ref + kd + tau / moon_per
+    return turns_ref + kd, moon_per
+
+
+def _phase_at(tau, base, moon_per, phase):
+    """``moon_phase`` from ``_turns_base``'s (base, moon_per)."""
+    turns = base + tau / moon_per
     turns = turns - mx.round(turns)
     return _TWO_PI * turns + phase
 
@@ -248,13 +261,18 @@ def moon_offset(phi_m, a_ps, moon_inc, node, orbit=None):
     frame. phi_m: mean phase (``moon_phase``); a_ps: semi-major axis of the
     relative orbit [stellar radii]; moon_inc, node [radians]; orbit: None
     (circular) or ``moon_orbit(e_m, w_m)``."""
+    return _offset(phi_m, a_ps, _sincos_any(moon_inc), _sincos_any(node), orbit)
+
+
+def _offset(phi_m, a_ps, sc_inc, sc_node, orbit):
+    """``moon_offset`` with (sin, cos) of moon_inc and node given."""
     if orbit is None:
         u, v = _orbit_uv(phi_m, a_ps, None)
     else:
         consts, off = orbit
         u, v = _orbit_uv(phi_m + off, a_ps, consts)
-    si, ci = _sincos_any(moon_inc)
-    sn, cn = _sincos_any(node)
+    si, ci = sc_inc
+    sn, cn = sc_node
     vc = v * ci
     return -(cn * u - sn * vc), -(sn * u + cn * vc), v * si
 
@@ -262,7 +280,12 @@ def moon_offset(phi_m, a_ps, moon_inc, node, orbit=None):
 def barycentre_sky(phi, a, inc, ecc=None):
     """(X, Y, Z) of the barycentre at phase phi = 2 pi tau / P; inc in
     radians; ``ecc`` None (circular) or the anchored constants of (e, w)."""
-    si, ci = _sincos_any(inc)
+    return _barycentre(phi, a, _sincos_any(inc), ecc)
+
+
+def _barycentre(phi, a, sc_inc, ecc):
+    """``barycentre_sky`` with (sin, cos) of inc given."""
+    si, ci = sc_inc
     u, v = _orbit_uv(phi, a, ecc)
     return -u, -(v * ci), v * si
 
@@ -270,8 +293,11 @@ def barycentre_sky(phi, a, inc, ecc=None):
 def body_positions(XB, YB, ZB, dX, dY, dZ, q):
     """((Xp, Yp, Zp), (Xm, Ym, Zm)): the planet and the moon on either side
     of the barycentre, q = M_moon / M_planet."""
-    fp = q / (1.0 + q)
-    fm = 1.0 / (1.0 + q)
+    return _bodies(XB, YB, ZB, dX, dY, dZ, q / (1.0 + q), 1.0 / (1.0 + q))
+
+
+def _bodies(XB, YB, ZB, dX, dY, dZ, fp, fm):
+    """``body_positions`` with the shares fp = q / (1 + q), fm = 1 / (1 + q)."""
     return ((XB - fp * dX, YB - fp * dY, ZB - fp * dZ),
             (XB + fm * dX, YB + fm * dY, ZB + fm * dZ))
 
@@ -458,7 +484,13 @@ def _sorted_arcs(bps, valid, start, period, vals=None):
     return los, his, oks, (vlo, vhi)
 
 
-def _J(psi, amb, apb, Q, dt):
+def _half(psi):
+    """(sin, cos, tan) of psi / 2, for ``_J`` (tan 0 where cos <= 0)."""
+    sh, ch = sincos(0.5 * psi)
+    return sh, ch, sh / mx.where(ch > 0.0, ch, 1.0)
+
+
+def _J(half, amb, apb, Q, dt):
     """An antiderivative of 1 / (a + b cos psi) at psi in (-2 pi, 2 pi),
     continuous wherever a + b cos psi > 0 -- every point of an arc on the
     star; amb = a - b, apb = a + b > 0 (a circle reaching the star), Q =
@@ -469,9 +501,9 @@ def _J(psi, amb, apb, Q, dt):
         |x| < _X_SER, x = (a - b) / (a + b) tan^2(psi/2), |psi| < pi:
                 (2 / (a + b)) tan(psi/2) sum_k (-x)^k / (2k + 1),
 
-    the series bridging Q = 0, where both closed forms are 0/0."""
-    sh, ch = sincos(0.5 * psi)
-    t = sh / mx.where(ch > 0.0, ch, 1.0)
+    the series bridging Q = 0, where both closed forms are 0/0. ``half``:
+    ``_half(psi)``, shared by the poles."""
+    sh, ch, t = half
     x = (amb / apb) * t * t
     ser = (mx.abs(x) < _X_SER[dt]) & (ch > 0.0)
     xs = mx.where(ser, x, 0.0)
@@ -517,6 +549,7 @@ def _arc_cols(z, r, lo, hi, eps, sc=None):
             g = (r * r * h[k] if k < len(h) else 0.0) - r * z * h[k - 1]
             col = col + g * A[k]
         cols.append(col)
+    h_lo, h_hi = (_half(lo), _half(hi)) if eps else (None, None)
     for e in eps:
         p = 1.0 + e
         sp = math.sqrt(p)
@@ -527,7 +560,7 @@ def _arc_cols(z, r, lo, hi, eps, sc=None):
         # so its masked lanes carry no NaN into the gradient
         reach = apb > 0.0
         amb, apb = mx.where(reach, amb, 0.5), mx.where(reach, apb, 1.0)
-        J = _J(hi, amb, apb, amb * apb, dt) - _J(lo, amb, apb, amb * apb, dt)
+        J = _J(h_hi, amb, apb, amb * apb, dt) - _J(h_lo, amb, apb, amb * apb, dt)
         pd = (sp - z) * (sp + z) + r * r                  # p + r^2 - z^2, no cancellation
         cols.append(-(hi - lo) / (4.0 * p) + pd / (4.0 * p) * J)
     return cols

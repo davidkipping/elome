@@ -166,6 +166,26 @@ def test_the_event_search_in_blocks_is_the_same(monkeypatch):
     assert np.array_equal(m.light_curves(ps), whole)
 
 
+def test_the_compiled_event_search_is_the_eager_one(monkeypatch):
+    """In float32 on the GPU the frozen event search runs compiled, on
+    padded lane counts: the light curves are the eager search's to
+    float32's rounding, in blocks or not."""
+    from elome import moons_tau
+    ps = sets(HYB)
+    with mx.stream(mx.gpu):
+        m = elome.TransitModel(ps[0], windows(ps[0], step=EXP), exp_time=EXP,
+                               integration="contact", n_gl=5, dtype=mx.float32)
+        moons_tau._KERNELS.clear()
+        fast = m.light_curves(ps)
+        assert moons_tau._KERNELS
+        monkeypatch.setattr(moons_tau, "_EVENT_BLOCK", 3000)
+        blocks = m.light_curves(ps)
+        monkeypatch.setattr(moons_tau, "_compiling", lambda dtype: False)
+        eager = m.light_curves(ps)
+    assert np.abs(fast - eager).max() < 2e-7
+    assert np.abs(blocks - eager).max() < 2e-7
+
+
 def test_supersampling_averages_the_instantaneous_curve():
     p = system()
     t = windows(p, step=EXP)
