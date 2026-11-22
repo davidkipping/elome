@@ -3,7 +3,7 @@
 All notable changes to Elómë. Versioning: semantic-ish (MAJOR.MINOR.PATCH);
 every release is tagged `vX.Y.Z` in git.
 
-## [Unreleased]
+## [0.23.0] — 2026-11-22
 
 ### Added
 - **Exomoons.** `TransitParams` takes a moon: `moon_r` and `moon_a` (its
