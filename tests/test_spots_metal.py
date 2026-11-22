@@ -94,12 +94,36 @@ def test_tangency_where_an_uncut_outline_is_read(name):
     assert eB < 5e-7
 
 
+def ref64_lanes(law, X, Y, rp, n, al, c, wct):
+    """ref64 for N points at once, each with its own K spots (n (N, K, 3)):
+    the lanes are independent, so the gradient of their sum is each one's."""
+    K = n.shape[1]
+    f = lambda v: mx.array(np.asarray(v, dtype=np.float64), dtype=mx.float64)
+    with mx.stream(mx.cpu):
+        def F(X, Y, rp, n, al, c):
+            B = spots._shape_cols(law, K)(
+                X, Y, rp, *[v for k in range(K) for v in (n[:, k, 0], n[:, k, 1], n[:, k, 2],
+                                                            al[:, k])],
+                *[c[:, k] for k in range(K)])
+            return mx.sum(B * f(wct)), B
+        args = [f(X), f(Y), f(rp), f(n), f(al), f(c)]
+        B = np.array(F(*args)[1])
+        g = [np.array(v) for v in mx.grad(lambda *a: F(*a)[0], argnums=list(range(6)))(*args)]
+    out = [g[0], g[1], g[2]]
+    for k in range(K):
+        out += [g[3][:, k, 0], g[3][:, k, 1], g[3][:, k, 2], g[4][:, k], g[5][:, k]]
+    return B, np.stack(out, -1)
+
+
 def test_random_configurations():
     """A planet near one of one to three random spots: the fp32 floor is
     a rim grazing the limb or the planet straddling it under hybrid5's
-    innermost pole (1.5e-6 of a column norm, 7e-5 of a gradient)."""
+    innermost pole (1.5e-6 of a column norm, 7e-5 of a gradient). The
+    points are evaluated in one call per spot count, kernel and graph."""
+    from elome import metal_spots as MS
+    law = HYBRID5
     rng = np.random.default_rng(0)
-    worst = [0.0, 0.0]
+    groups = {}
     for _ in range(120):
         K = int(rng.integers(1, 4))
         n = spots.spot_vector(np.radians(rng.uniform(-100, 100, K)),
@@ -107,8 +131,20 @@ def test_random_configurations():
         al, c = np.radians(rng.uniform(2, 25, K)), rng.uniform(0.2, 0.9, K)
         j = int(rng.integers(K))
         X, Y = n[j, 0] + rng.normal(0, 0.1), n[j, 1] + rng.normal(0, 0.1)
-        e = errors(HYBRID5, X, Y, rng.uniform(0.03, 0.2), n, al, c, seed=int(rng.integers(99)))
-        worst = [max(w, v) for w, v in zip(worst, e)]
+        rp = rng.uniform(0.03, 0.2)
+        wct = np.random.default_rng(int(rng.integers(99))).normal(size=law.n_col)
+        groups.setdefault(K, []).append((X, Y, rp, n, al, c, wct))
+    worst = [0.0, 0.0]
+    for K, pts in groups.items():
+        X, Y, rp, n, al, c, wct = [np.array(v) for v in zip(*pts)]
+        B32, g32 = MS._point_cols(X, Y, rp, n, al, c, law, wct=wct, grad=True)
+        B64, g64 = ref64_lanes(law, X, Y, rp, n, al, c, wct)
+        assert np.all(np.isfinite(B32)) and np.all(np.isfinite(g32))
+        for i in range(len(pts)):
+            e = (np.max(np.abs(B32[i] - B64[i]) / hybrid_norms(law)),
+                 np.max(np.abs(tangent(g32[i], n[i]) - tangent(g64[i], n[i])))
+                 / np.max(np.abs(tangent(g64[i], n[i]))))
+            worst = [max(w, v) for w, v in zip(worst, e)]
     assert worst[0] < 3e-6
     assert worst[1] < 2e-4
 

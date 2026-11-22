@@ -2,6 +2,7 @@
 twin against the ring oracle (tests/ring_oracle.py), the identities a
 ringed planet must satisfy, and gradients in every parameter."""
 
+import functools
 import math
 
 import mlx.core as mx
@@ -211,6 +212,34 @@ GRAD_CASES = ["inner edge cut", "both edges cut, translucent", "four limb crossi
               "face-on ring", "face-on ring, centred"]
 
 
+@functools.lru_cache(maxsize=None)
+def _fd(cs):
+    """Central differences of the weighted column sum, every perturbed
+    point evaluated in one elementwise call (the corner terms are
+    gradient-only, so these serve with or without them)."""
+    steps = []                              # (parameter, offsets, weights / h)
+    for i in range(8):
+        if not np.isfinite(cs[i]):
+            continue
+        h = 1e-6 * max(abs(cs[i]), 0.1)
+        if i in (3, 6) and cs[i] == 0.0:
+            # f = 0 / ring_f = 0, a circle (the prior's edge): one-sided
+            steps.append((i, (0.0, h, 2 * h), np.array([-3.0, 4.0, -1.0]) / (2 * h)))
+        else:
+            steps.append((i, (h, -h), np.array([1.0, -1.0]) / (2 * h)))
+    lanes = np.array([[v + (d if j == i else 0.0) for j, v in enumerate(cs)]
+                      for i, ds, _ in steps for d in ds])
+    with mx.stream(mx.cpu):
+        g = rings.generator_cols_ring(*[mx.array(lanes[:, j], dtype=mx.float64)
+                                        for j in range(8)], ALL)
+        vals = np.array(mx.sum(mx.stack(g, -1) * mx.array(1.0 / NORM, dtype=mx.float64), -1))
+    fd, k = np.zeros(8), 0
+    for i, ds, c in steps:
+        fd[i] = vals[k:k + len(ds)] @ c
+        k += len(ds)
+    return fd
+
+
 def _grads(cs, corners=True):
     w = mx.array(1.0 / NORM, dtype=mx.float64)
 
@@ -223,21 +252,9 @@ def _grads(cs, corners=True):
     try:
         with mx.stream(mx.cpu):
             ad = np.array([g.item() for g in mx.grad(F, argnums=list(range(8)))(*args)])
-            fd = np.zeros(8)
-            at = lambda i, d: F(*[arr(v + (d if j == i else 0.0), mx.float64)
-                                  for j, v in enumerate(cs)]).item()
-            for i in range(8):
-                if not np.isfinite(cs[i]):
-                    continue
-                h = 1e-6 * max(abs(cs[i]), 0.1)
-                if i in (3, 6) and cs[i] == 0.0:
-                    # f = 0 / ring_f = 0, a circle (the prior's edge): one-sided
-                    fd[i] = (-3.0 * at(i, 0.0) + 4.0 * at(i, h) - at(i, 2 * h)) / (2 * h)
-                else:
-                    fd[i] = (at(i, h) - at(i, -h)) / (2 * h)
     finally:
         rings._h = saved
-    return ad, fd
+    return ad, _fd(tuple(cs))
 
 
 @pytest.mark.parametrize("name", GRAD_CASES)
@@ -258,13 +275,19 @@ def test_corner_terms_are_required(name):
 
 
 def test_gradients_finite_in_fp32():
+    """Every case as one lane of one call: the lanes are independent, so
+    the gradient of their sum is each lane's own."""
     w = mx.array((1.0 / NORM).astype(np.float32))
-    for cs in CASES.values():
-        def F(*args):
-            return mx.sum(mx.stack(rings.generator_cols_ring(*args, ALL), -1) * w)
-        with mx.stream(mx.cpu):
-            g = mx.grad(F, argnums=list(range(8)))(*[arr(v, mx.float32) for v in cs])
-        assert all(np.isfinite(x.item()) for x in g), cs
+    lanes = np.array(list(CASES.values()))
+
+    def F(*args):
+        return mx.sum(mx.stack(rings.generator_cols_ring(*args, ALL), -1) * w)
+    with mx.stream(mx.cpu):
+        g = mx.grad(F, argnums=list(range(8)))(*[mx.array(lanes[:, j], dtype=mx.float32)
+                                                  for j in range(8)])
+    g = np.stack([np.array(x) for x in g], -1)
+    for name, row in zip(CASES, g):
+        assert np.isfinite(row).all(), name
 
 
 def test_batched_equals_one_at_a_time():

@@ -351,7 +351,10 @@ def test_gradients_match_finite_differences(integration, extra, tol):
         args = [mx.array(np.asarray(v, dtype=np.float64), dtype=mx.float64) for v in x]
         grads = mx.grad(loss, argnums=tuple(range(10)))(*args)
         mx.eval(grads)
+        # every perturbation one chain of one call: (tau (n, m), per-chain
+        # parameters and (n, 4) weights)
         h = 1e-6
+        rows, checks = [], []
         for i, name in enumerate(_NAMES):
             g = np.asarray(grads[i])
             if name == "tau":                       # spot-check a few points
@@ -361,22 +364,23 @@ def test_gradients_match_finite_differences(integration, extra, tol):
             else:
                 idx = [None]
             for j in idx:
-                up = [mx.array(a) for a in args]
-                dn = [mx.array(a) for a in args]
-                base = np.asarray(args[i]).copy()
-                if j is None:
-                    up[i] = mx.array(base + h, dtype=mx.float64)
-                    dn[i] = mx.array(base - h, dtype=mx.float64)
-                    gi = float(g)
-                else:
-                    bu, bd = base.copy(), base.copy()
-                    bu[j] += h
-                    bd[j] -= h
-                    up[i] = mx.array(bu, dtype=mx.float64)
-                    dn[i] = mx.array(bd, dtype=mx.float64)
-                    gi = float(g[j])
-                fd = (float(loss(*up)) - float(loss(*dn))) / (2 * h)
-                assert abs(gi - fd) <= tol * max(abs(fd), 1.0), (name, j, gi, fd)
+                for s in (h, -h):
+                    row = [np.array(v, dtype=np.float64) for v in x]
+                    if j is None:
+                        row[i] = row[i] + s
+                    else:
+                        row[i][j] += s
+                    rows.append(row)
+                checks.append((name, j, float(g) if j is None else float(g[j])))
+        cols = [mx.array(np.stack([r[i] for r in rows]), dtype=mx.float64) for i in range(10)]
+        ct = mx.array(np.random.default_rng(1).normal(size=TAU.shape), dtype=mx.float64)
+        out = el.flux_dev_from_tau(*cols[:5], limb_dark="hybrid4", u=cols[7], f=cols[5],
+                                   theta=cols[6], secosw=cols[8], sesinw=cols[9],
+                                   integration=integration, **extra)
+        vals = np.array(mx.sum(ct * out, axis=-1))
+        for c, (name, j, gi) in enumerate(checks):
+            fd = (vals[2 * c] - vals[2 * c + 1]) / (2 * h)
+            assert abs(gi - fd) <= tol * max(abs(fd), 1.0), (name, j, gi, fd)
 
 
 @pytest.mark.parametrize("dtype", [mx.float64, mx.float32], ids=["fp64", "fp32"])

@@ -3,6 +3,7 @@ and its fp32 twin against the spot oracle (tests/spot_oracle.py), the
 identities a spotted star must satisfy, and gradients in every
 parameter."""
 
+import functools
 import math
 
 import mlx.core as mx
@@ -305,9 +306,27 @@ def _F(dt, corners=True):
     return F
 
 
-def _grads(case, corners=True):
-    from elome import rings
-    p = _flat(case)
+@functools.lru_cache(maxsize=None)
+def _fd(name):
+    """Central differences of the weighted column sum, every perturbed
+    point one lane (with its own spots) of one call (the corner terms are
+    gradient-only, so these serve with or without them)."""
+    p = _flat(CASES[name])
+    K = (len(p) - 3) // 4
+    hs = [1e-6 * max(abs(v), 0.1) for v in p]
+    lanes = np.array([[v + (s * hs[i] if j == i else 0.0) for j, v in enumerate(p)]
+                      for i in range(len(p)) for s in (1.0, -1.0)])
+    q = lambda j: mx.array(lanes[:, j], dtype=mx.float64)            # noqa: E731
+    sp = lambda o: mx.stack([q(3 + 4 * k + o) for k in range(K)], -1)  # noqa: E731
+    with mx.stream(mx.cpu):
+        g = spots.generator_cols_spots(q(0), q(1), q(2), spots.spot_vector(sp(0), sp(1)),
+                                       sp(2), sp(3), ALL)
+        vals = np.array(mx.sum(mx.stack(g, -1) * mx.array(1.0 / NORM, dtype=mx.float64), -1))
+    return (vals[0::2] - vals[1::2]) / (2 * np.array(hs))
+
+
+def _grads(name, corners=True):
+    p = _flat(CASES[name])
     F = _F(mx.float64)
     saved = spots._h
     if not corners:
@@ -316,15 +335,9 @@ def _grads(case, corners=True):
         with mx.stream(mx.cpu):
             args = [mx.array(v, dtype=mx.float64) for v in p]
             ad = np.array([g.item() for g in mx.grad(F, argnums=list(range(len(p))))(*args)])
-            at = lambda i, d: F(*[mx.array(v + (d if j == i else 0.0), dtype=mx.float64)
-                                  for j, v in enumerate(p)]).item()
-            fd = np.zeros(len(p))
-            for i in range(len(p)):
-                h = 1e-6 * max(abs(p[i]), 0.1)
-                fd[i] = (at(i, h) - at(i, -h)) / (2 * h)
     finally:
         spots._h = saved
-    return ad, fd
+    return ad, _fd(name)
 
 
 GRAD_CASES = ["planet across a rim", "spot straddling the limb, planet on it",
@@ -336,7 +349,7 @@ GRAD_CASES = ["planet across a rim", "spot straddling the limb, planet on it",
 
 @pytest.mark.parametrize("name", GRAD_CASES)
 def test_gradients_match_finite_differences(name):
-    ad, fd = _grads(CASES[name])
+    ad, fd = _grads(name)
     assert np.isfinite(ad).all()
     assert np.max(np.abs(ad - fd)) < 1e-7 * np.max(np.abs(fd))
 
@@ -345,7 +358,7 @@ def test_gradients_match_finite_differences(name):
 def test_corner_terms_are_required(name):
     """Without the gradient-only corner terms the frozen arc endpoints
     leave O(1) errors: a guard that the terms stay wired in."""
-    ad, fd = _grads(CASES[name], corners=False)
+    ad, fd = _grads(name, corners=False)
     assert np.max(np.abs(ad - fd)) > 0.1 * np.max(np.abs(fd))
 
 

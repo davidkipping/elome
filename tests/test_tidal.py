@@ -570,6 +570,21 @@ def _value_and_grad(dt, stream, per, a, b, rv, q, tw, k, h, mu, w, ecc=False, **
     return (float(v.item()), [np.asarray(x, dtype=np.float64).ravel() for x in g])
 
 
+def _values(rows, w, ecc=False, **kw):
+    """_value_and_grad's value (fp64) for many parameter rows, one chain
+    each, in one call."""
+    rng = np.random.default_rng(7)
+    ct = rng.normal(size=TAU.size)
+    with mx.stream(mx.cpu):
+        per, a, b, rv, q, tw, k, h, mu = [mx.array(c, dtype=mx.float64)
+                                          for c in np.array(rows, dtype=np.float64).T]
+        orb = dict(secosw=k, sesinw=h) if ecc else {}
+        out = el.flux_dev_from_tau(mx.array(TAU, dtype=mx.float64), per, a, b, rv,
+                                   limb_dark="hybrid5", u=w, tidal_q=q, theta=tw,
+                                   mass_ratio=mu, **orb, **kw)
+        return np.array(mx.sum(mx.array(ct, dtype=mx.float64) * out, axis=-1))
+
+
 GRAD_CASES = [(0.05, 0.08, 0.0, 0.0, 0.0), (-0.05, 0.3, 0.0, 0.0, 0.0),
               (0.0, 0.3, 0.0, 0.0, 0.0), (1e-6, 0.3, 0.0, 0.0, 0.0),
               (-1e-6, 0.3, 0.0, 0.0, 0.0), (0.05, 0.3, 0.6, 0.0, 0.0),
@@ -582,14 +597,19 @@ GRAD_MU = 0.05
 def test_gradients_match_finite_differences(kw, q, b, tw, k, h):
     ecc = (k, h) != (0.0, 0.0)
     v0 = [P, A_RS, b, RV, q, tw, k, h, GRAD_MU]
-    call = lambda v: _value_and_grad(mx.float64, mx.cpu, *v, W, ecc=ecc, **kw)
-    _, g = call(v0)
-    for j in (range(9) if ecc else (0, 1, 2, 3, 4, 5, 8)):
+    _, g = _value_and_grad(mx.float64, mx.cpu, *v0, W, ecc=ecc, **kw)
+    js = list(range(9) if ecc else (0, 1, 2, 3, 4, 5, 8))
+    rows, ds = [], []
+    for j in js:
         d = 1e-6 * max(abs(v0[j]), 0.1)
         up, dn = list(v0), list(v0)
         up[j] += d
         dn[j] -= d
-        fd = (call(up)[0] - call(dn)[0]) / (2 * d)
+        rows += [up, dn]
+        ds.append(d)
+    vals = _values(rows, W, ecc=ecc, **kw)       # every perturbation, one chain each
+    for i, (j, d) in enumerate(zip(js, ds)):
+        fd = (vals[2 * i] - vals[2 * i + 1]) / (2 * d)
         # contacts are detached split points: FD moves them, autodiff does
         # not (test_oblate_tau's note), so the rule's own error shows here:
         # measured 1e-6 at 5 nodes, 1e-7 at 12, 3e-9 at 40

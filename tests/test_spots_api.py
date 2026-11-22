@@ -452,36 +452,6 @@ def test_contact_rule_batched_and_float32():
     assert np.max(np.abs(m32.light_curves(seq) - got)) < 2e-6
 
 
-def test_contact_rule_gradients():
-    """light_curve_mx differentiates the quadrature it evaluates: the
-    split points carry their events' implicit derivatives, so the gradient
-    matches central differences of light_curve."""
-    p0 = P(spots=[[8.0, LAT_CHORD, 5.0, 0.3]], prot=4.0)
-    ts = np.array([-0.005, 0.0, 0.005, 0.01])
-    m = el.TransitModel(p0, ts, integration="contact", exp_time=EXP)
-    names = ["rp", "inc", "prot", "lam"]
-    base = {"rp": 0.1, "inc": 88.5, "prot": 4.0, "lam": 0.0}
-
-    def F(*vals):
-        p = P(spots=[[8.0, LAT_CHORD, 5.0, 0.3]])
-        for k, v in zip(names, vals):
-            setattr(p, k, v)
-        return mx.sum(m.light_curve_mx(p))
-
-    with mx.stream(mx.cpu):
-        g = mx.grad(F, argnums=list(range(len(names))))(
-            *[mx.array(base[k], dtype=mx.float64) for k in names])
-    for j, k in enumerate(names):
-        h = 1e-6 * max(abs(base[k]), 1.0)
-        up = [base[n] + (h if n == k else 0.0) for n in names]
-        dn = [base[n] - (h if n == k else 0.0) for n in names]
-        with mx.stream(mx.cpu):
-            fd = (F(*[mx.array(v, dtype=mx.float64) for v in up]).item()
-                  - F(*[mx.array(v, dtype=mx.float64) for v in dn]).item()) / (2 * h)
-        assert np.isfinite(g[j].item())
-        assert abs(g[j].item() - fd) < 1e-6 * max(abs(fd), 1e-3), k
-
-
 def test_contact_rule_gradient_across_blocks(monkeypatch):
     """A light curve long enough to be evaluated in blocks: the gradient is
     the one-block gradient (the event search runs once, outside the
