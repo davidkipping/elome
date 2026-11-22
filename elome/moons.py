@@ -604,16 +604,19 @@ def _separation(x, y, r, front):
 
 
 def _disc(fn, x, y, r, front):
-    """fn(z, r) for one disc (a list of columns or one array), 0 where r^2
-    underflows -- a moon of zero size. Its flux and the flux's derivative
-    in r both vanish there, while the closed forms' derivatives at r = 0
-    are 0/0 off the star, so those lanes take a stand-in radius."""
+    """fn(z, r) for one disc (a list of columns or one array), 0 where r is
+    below the precision's epsilon -- a moon of zero size, whose flux (r^2)
+    is below its rounding. The closed forms' derivatives are 0/0 at r = 0
+    off the star, and where 1 +- r rounds to 1 a contact rule's node can
+    sit on both of its contacts at once, so those lanes take a stand-in
+    radius."""
     dt = x.dtype
+    tiny = 1.2e-7 if dt == mx.float32 else 2.3e-16
     if not isinstance(r, mx.array):
-        if r * r > _TINY[dt]:
+        if r > tiny:
             return fn(_separation(x, y, r, front), r)
         r = mx.array(float(r), dtype=dt)
-    ok = r * r > _TINY[dt]
+    ok = r > tiny
     rr = mx.where(ok, r, 0.1)
     out = fn(_separation(x, y, rr, front), rr)
     if isinstance(out, mx.array):

@@ -27,8 +27,10 @@ are where a disc touches the limb (z = 1 +- r, for the planet and the
 moon), where the discs touch each other (d = rp +- rs) near the star, and
 where a corner of the two discs crosses the limb. The moon moves between
 transits, so they are found per exposure: eight smooth event functions are
-sampled at n_sample + 1 times across the window and each sign change
-bisected. The step (``sample_count``) is a quarter of the smaller radius
+sampled at n_sample + 1 times across the window, the sign changes read on
+the host, and only those refined (regula falsi, then bisection where it
+is slow). Only the pieces with width are evaluated, each with its lane's
+parameters. The step (``sample_count``) is a quarter of the smaller radius
 at the fastest sky speed; a pair of kinks closer than a step that cancel
 -- a brief graze -- is missed, at a cost as small as its effect.
 """
@@ -49,7 +51,8 @@ __all__ = ["flux_dev_moon_t", "sample_count"]
 _TWO_PI = 2.0 * math.pi
 _K_SPLIT = 8                                       # split points per exposure
 _S_MIN, _S_MAX = 4, 256                            # event samples per exposure
-_N_BISECT = {mx.float64: 30, mx.float32: 16}
+_N_BISECT = {mx.float64: 30, mx.float32: 16}       # the kinks' bracket, in halvings
+_N_FALSI = 8                                       # Illinois steps before them
 _BLOCK = 1 << 14                                   # evaluation nodes per block
 _sg = mx.stop_gradient
 
@@ -126,75 +129,136 @@ def _event_g(pos, P, dtype):
     return g
 
 
-def _events(g, dt, k, turns, hw, n_sample, dtype):
-    """Kink times (offsets from each exposure's centre), their validity and
-    which event function each is a root of, (m, _K_SPLIT) each, earliest
-    first: found with the frozen event functions g."""
-    j = mx.arange(n_sample + 1, dtype=dtype) / n_sample
-    hw2 = hw[:, None]
-    deltas = -hw2 + 2.0 * hw2 * j[None, :]                         # (m, J + 1)
+def _at(P, ix):
+    """P's per-lane (lanes, 1) columns at the lanes ix; shared values kept."""
+    return _lanes(P, lambda v: mx.take(v, ix, axis=0))
+
+
+def _brackets(g, dt, k, turns, hw0, n_sample, dtype):
+    """The kinks' brackets, read on the host from the frozen event functions
+    g sampled at n_sample + 1 times across each exposure: per kink its lane,
+    its event function and its bracket (lo, hi) as offsets from the exposure
+    centre, host arrays ordered by lane, at most _K_SPLIT per lane (the
+    earliest)."""
+    j = np.arange(n_sample + 1, dtype=np.float64) / n_sample
+    deltas = -hw0 + 2.0 * hw0 * j
     e = lambda v: v[:, None]
-    G = g(deltas, e(k), e(turns), e(dt))                            # (m, J + 1, 9)
+    G = g(mx.array(deltas, dtype=dtype)[None, :], e(k), e(turns), e(dt))   # (m, J + 1, 9)
     S = G[..., :8] > 0.0
     change = S[:, :-1] != S[:, 1:]                                  # (m, J, 8)
     # the corners' functions only where there are corners at either end: a
     # sign change of the merged point (the same in both) is no kink
     corners = (G[:, :-1, 8:] > 0.0) | (G[:, 1:, 8:] > 0.0)
-    change = mx.concatenate([change[..., :6], change[..., 6:] & corners], axis=-1)
-    m, J, F = change.shape
-    key = mx.where(change, mx.arange(J * F, dtype=mx.int32).reshape(1, J, F), J * F)
-    key = mx.sort(key.reshape(m, J * F), axis=-1)[:, :_K_SPLIT]
-    ok = key < J * F
-    keyc = mx.where(ok, key, 0)
-    jj, ff = keyc // F, keyc % F
-    lo = mx.take_along_axis(deltas, jj, axis=-1)
-    hi = mx.take_along_axis(deltas, jj + 1, axis=-1)
-    kk, tt, dtt = (mx.broadcast_to(e(v), lo.shape) for v in (k, turns, dt))
-
-    def gf(delta):
-        return mx.take_along_axis(g(delta, kk, tt, dtt), ff[..., None], axis=-1)[..., 0]
-    glo = gf(lo)
-    for _ in range(_N_BISECT[dtype]):
-        mid = 0.5 * (lo + hi)
-        same = (gf(mid) > 0.0) == (glo > 0.0)
-        lo, hi = mx.where(same, mid, lo), mx.where(same, hi, mid)
-    return _sg(0.5 * (lo + hi)), ok, ff
+    change = np.array(mx.concatenate([change[..., :6], change[..., 6:] & corners], axis=-1))
+    lane, jj, ff = np.nonzero(change)                               # lane, time, function order
+    if lane.size:
+        start = np.searchsorted(lane, lane, side="left")
+        keep = np.arange(lane.size) - start < _K_SPLIT
+        lane, jj, ff = lane[keep], jj[keep], ff[keep]
+    return lane, ff, deltas[jj], deltas[jj + 1]
 
 
-def _live(events, ok, ff, g_live, g_frozen, dt, k, turns, hw, dtype):
-    """The events moved with the parameters: one gradient-only Newton step
-    t - [g(t) - sg(g(t))] / g'(t) on each event's own function, live -- the
-    value stays the bisected root, and the gradient is the implicit one,
-    -dg/dtheta / g', so the contact rule's nodes move with the parameters
-    and the gradient is that of the quadrature evaluated."""
-    e = lambda v: mx.broadcast_to(v[:, None], events.shape)
-    kk, tt, dtt = e(k), e(turns), e(dt)
+def _refine(gf, lo, hi, dtype):
+    """Each kink's time in its bracket (lo, hi) (host arrays), where its event
+    function gf changes sign: regula falsi with the Illinois rule, which
+    keeps the bracket and narrows it superlinearly, then bisection on any
+    bracket not yet as narrow as _N_BISECT halvings make it (a tangency's
+    slow root). The final bracket's midpoint, a host array."""
+    tol = (hi - lo) * 2.0 ** -_N_BISECT[dtype]
+    a, b = mx.array(lo, dtype=dtype), mx.array(hi, dtype=dtype)
+    fa, fb = gf(a), gf(b)
+    side = mx.zeros(a.shape, dtype=mx.int32)
+    for _ in range(_N_FALSI):
+        den = fb - fa
+        c = mx.where(den != 0.0, (a * fb - b * fa) / mx.where(den != 0.0, den, 1.0),
+                     0.5 * (a + b))
+        c = mx.minimum(mx.maximum(c, a), b)
+        fc = gf(c)
+        right = (fc > 0.0) == (fb > 0.0)                            # c replaces b
+        a, b, fa, fb = (mx.where(right, a, c), mx.where(right, c, b),
+                        mx.where(right, mx.where(side == -1, 0.5 * fa, fa), fc),
+                        mx.where(right, fc, mx.where(side == 1, 0.5 * fb, fb)))
+        side = mx.where(right, -1, 1)
+    a, b, fa = np.array(a), np.array(b), np.array(fa)
+    slow = np.nonzero(b - a > tol)[0]
+    if slow.size:
+        n = int(np.ceil(np.log2(np.max((b - a)[slow] / tol[slow]))))
+        lo_, hi_ = mx.array(a[slow], dtype=dtype), mx.array(b[slow], dtype=dtype)
+        pos = mx.array(fa[slow] > 0.0)
+        for _ in range(n):
+            mid = 0.5 * (lo_ + hi_)
+            same = (gf(mid, slow) > 0.0) == pos
+            lo_, hi_ = mx.where(same, mid, lo_), mx.where(same, hi_, mid)
+        a[slow], b[slow] = np.array(lo_), np.array(hi_)
+    return 0.5 * (a + b)
 
-    def pick(gfun, delta):
-        return mx.take_along_axis(gfun(delta, kk, tt, dtt), ff[..., None], axis=-1)[..., 0]
-    eps = (1e-7 if dtype == mx.float64 else 1e-3) * hw[:, None]
-    slope = _sg((pick(g_frozen, events + eps) - pick(g_frozen, events - eps)) / (2.0 * eps))
-    ok = ok & (mx.abs(slope) > 0.0)
-    gl = pick(g_live, events)
-    step = (gl - _sg(gl)) / mx.where(ok, slope, 1.0)
-    return mx.where(ok, events - step, events), ok
+
+def _picker(P, d_s, k_s, t_s, lane, ff, sets, dtype):
+    """gf(delta, sub=None): each kink's own event function, with P (live or
+    frozen) at the kink's lane, at offsets delta (one per kink, or per kink
+    of the subset sub)."""
+    ix = mx.array(lane.astype(np.int32))
+    Pk = _at(P, ix) if sets else P
+    cols = [mx.take(v, ix)[:, None] for v in (k_s, t_s, d_s)]
+    f_all = mx.array(ff.astype(np.int32))
+
+    def gf(delta, sub=None):
+        Pe, (kk, tt, dtt), f = Pk, cols, f_all
+        if sub is not None:
+            sx = mx.array(np.asarray(sub, np.int32))
+            Pe = _at(Pk, sx) if sets else Pk
+            kk, tt, dtt = (mx.take(v, sx, axis=0) for v in cols)
+            f = mx.take(f_all, sx)
+        G = _event_g(_geometry(Pe), Pe, dtype)(delta[:, None], kk, tt, dtt)[:, 0, :]
+        return mx.take_along_axis(G, f[:, None], axis=-1)[:, 0]
+    return gf
 
 
-def _nodes(events, ok, hw, n_k, n_gl, dtype):
-    """Gauss-Legendre offsets and weights (normalised) over each exposure
-    split at its first n_k events: (m, (n_k + 1) n_gl) each."""
-    hw2 = hw[:, None]
-    ev = mx.where(ok[:, :n_k], events[:, :n_k], hw2)
-    ev = mx.minimum(mx.maximum(ev, -hw2), hw2)
-    # sorted by argsort and gathered: the event times carry gradients
-    ev = mx.take_along_axis(ev, _sg(mx.argsort(ev, axis=-1)), axis=-1)
-    edges = mx.concatenate([-hw2, ev, hw2], axis=-1)
-    lo, hi = edges[:, :-1], edges[:, 1:]
-    xg, wg = (mx.array(v, dtype=dtype) for v in gauss_legendre(n_gl))
-    mid, half = 0.5 * (lo + hi), 0.5 * (hi - lo)
-    T = (mid[..., None] + half[..., None] * xg).reshape(lo.shape[0], -1)
-    W = (half[..., None] * wg).reshape(lo.shape[0], -1)
-    return T, W / mx.sum(W, axis=-1, keepdims=True)
+def _pieces(PL, P_frozen, d_s, k_s, t_s, hw0, n_sample, n_gl, sets, dtype):
+    """The contact rule's pieces, only those with width: per piece its lane
+    (a host array) and its Gauss-Legendre offsets and normalised weights
+    (pieces, n_gl). The kinks are found with the frozen parameters and
+    moved with the live ones by one gradient-only Newton step t - [g(t) -
+    sg(g(t))] / g'(t) on each kink's own function: the value stays the
+    root, the gradient is the implicit one, -dg/dtheta / g', so the nodes
+    move with the parameters and the gradient is that of the quadrature
+    evaluated."""
+    m = d_s.shape[0]
+    g = _event_g(_geometry(P_frozen), P_frozen, dtype)
+    lane, ff, lo, hi = _brackets(g, d_s, k_s, t_s, hw0, n_sample, dtype)
+    if lane.size:
+        gf = _picker(P_frozen, d_s, k_s, t_s, lane, ff, sets, dtype)
+        ev = _refine(gf, lo, hi, dtype)
+        eps = (1e-7 if dtype == mx.float64 else 1e-3) * hw0
+        evm = mx.array(ev, dtype=dtype)
+        slope = np.array((gf(evm + eps) - gf(evm - eps)) / (2.0 * eps))
+        keep = np.nonzero(slope != 0.0)[0]
+        lane, ff, ev, slope = lane[keep], ff[keep], ev[keep], slope[keep]
+    if lane.size:
+        gl = _picker(PL, d_s, k_s, t_s, lane, ff, sets, dtype)(mx.array(ev, dtype=dtype))
+        live = mx.array(ev, dtype=dtype) - (gl - _sg(gl)) / mx.array(slope, dtype=dtype)
+        live = mx.minimum(mx.maximum(live, -hw0), hw0)
+        order = np.lexsort((ev, lane))                              # by lane, then time
+        lane, live = lane[order], mx.take(live, mx.array(order.astype(np.int32)))
+    n_ev = np.bincount(lane, minlength=m)
+    # edges per lane: -hw, its kinks in time order, hw; source vector
+    # [kinks..., -hw, hw]
+    first = np.concatenate([[0], np.cumsum(n_ev)[:-1]])
+    pl = np.repeat(np.arange(m), n_ev + 1)                          # each piece's lane
+    jp = np.arange(pl.size) - np.repeat(first + np.arange(m), n_ev + 1)   # its index in the lane
+    ne, base = lane.size, first[pl] + jp
+    lo_ix = np.where(jp == 0, ne, base - 1)
+    hi_ix = np.where(jp == n_ev[pl], ne + 1, base)
+    hwv = mx.array([-hw0, hw0], dtype=dtype)
+    src = mx.concatenate([live, hwv]) if ne else hwv
+    lo_e = mx.take(src, mx.array(lo_ix.astype(np.int32)))
+    hi_e = mx.take(src, mx.array(hi_ix.astype(np.int32)))
+    xg, wg = gauss_legendre(n_gl)
+    mid, half = 0.5 * (lo_e + hi_e), 0.5 * (hi_e - lo_e)
+    T = mid[:, None] + half[:, None] * mx.array(xg, dtype=dtype)
+    # each lane's halves sum to hw exactly (the kinks telescope)
+    W = half[:, None] * mx.array(wg / (hw0 * np.sum(wg)), dtype=dtype)
+    return pl, T, W
 
 
 def _photometry(pos, P, kind, large, dt, k, turns, T):
@@ -260,8 +324,9 @@ def flux_dev_moon_t(dt, k, turns, P, kind, large=False, exp_time=0.0, n_gl=7,
     per, a, inc [rad], ecc (``moons.anchored_constants`` or None), rp, rs,
     a_ps (stellar radii), q, m_off, moon_inc, node, phase [rad], orbit
     (``moons.moon_orbit`` or None) -- and the host values per_ref, mper_ref
-    (the references) and speed (the barycentre's largest sky speed, an
-    upper bound). kind: ("hybrid", law, w) or ("quad", u1, u2). ``large``: rp
+    (the references), speed (the barycentre's largest sky speed, an upper
+    bound) and optionally moon_e (the moon's eccentricity, for the reach
+    bound; None or absent: 1). kind: ("hybrid", law, w) or ("quad", u1, u2). ``large``: rp
     may exceed 1. ``exp_time`` > 0: the contact rule, ``n_gl`` nodes per
     piece, ``n_sample`` event samples per exposure (None: 64).
 
@@ -277,21 +342,28 @@ def flux_dev_moon_t(dt, k, turns, P, kind, large=False, exp_time=0.0, n_gl=7,
     hw0 = 0.5 * exp_time
     dt_m, k_m, tu_m = (v.astype(dtype) if isinstance(v, mx.array) else mx.array(v, dtype=dtype)
                        for v in (dt, k, turns))
-    # the lanes either body can reach the star from, in their exposure
-    hmax = lambda v: float(np.max(np.array(_sg(v)))) if isinstance(v, mx.array) else float(v)
-    reach = (1.0 + 2.0 * hmax(P["a_ps"]) + hmax(P["rp"]) + hmax(P["rs"])
-             + P["speed"] * 2.0 * hw0)
+    # the lanes either body can reach the star from, in their exposure: each
+    # body lies within its share of the moon's apoapsis of the barycentre,
+    # which moves at most speed hw in half an exposure
+    host = lambda v: np.broadcast_to(np.asarray(                    # noqa: E731
+        _sg(v) if isinstance(v, mx.array) else 1.0 if v is None else v,
+        np.float64).reshape(-1), (n,))
+    a_ps, rp_h, rs_h, e_m = (host(P.get(key)) for key in ("a_ps", "rp", "rs", "moon_e"))
+    q_h = np.maximum(host(P["q"]), 0.0)
+    R = a_ps * (1.0 + e_m) / (1.0 + q_h)
+    reach = 1.0 + np.maximum(rs_h + R, rp_h + q_h * R) + P["speed"] * hw0
     col = _lanes(_frozen(P), lambda v: v.reshape(-1, 1))           # (n, 1) columns
     tau = dt_m[None] - (col["t0_off"] + k_m[None] * col["p_off"])
     XB, YB, _ = moons.barycentre_sky((_TWO_PI / col["per"]) * tau, col["a"], col["inc"],
                                      col["ecc"])
-    zB = np.broadcast_to(np.array(mx.sqrt(XB * XB + YB * YB)), (n, m)).reshape(-1)
-    sel = np.nonzero(zB < reach)[0]
+    zB = np.broadcast_to(np.array(mx.sqrt(XB * XB + YB * YB)), (n, m))
+    sel = np.nonzero((zB < reach[:, None]).reshape(-1))[0]
     out_cols = None
     if sel.size:
         six = mx.array(sel.astype(np.int32))
         pix = mx.array((sel % m).astype(np.int32))
-        if n_sets is None:
+        sets = n_sets is not None
+        if not sets:
             PL, lkind = P, kind
         else:
             sx = mx.array((sel // m).astype(np.int32))
@@ -299,35 +371,36 @@ def flux_dev_moon_t(dt, k, turns, P, kind, large=False, exp_time=0.0, n_gl=7,
             PL = _lanes(P, gather)
             lkind = kind if kind[0] == "hybrid" else (kind[0],) + tuple(
                 _map_sets(v, gather) for v in kind[1:])
-        pos = _geometry(PL)
-        frozen = _geometry(_frozen(PL))
         d_s, k_s, t_s = (mx.take(v, pix) for v in (dt_m, k_m, tu_m))
         if exp_time > 0.0:
-            hw = mx.full(d_s.shape, hw0, dtype=dtype)
-            g_frozen = _event_g(frozen, _frozen(PL), dtype)
-            ev, ok, ff = _events(g_frozen, d_s, k_s, t_s, hw, int(n_sample or 64), dtype)
-            n_k = int(np.max(np.sum(np.array(ok), axis=-1))) if ok.size else 0
-            ev, ok = _live(ev, ok, ff, _event_g(pos, PL, dtype), g_frozen, d_s, k_s, t_s, hw,
-                           dtype)
-            T, W = _nodes(ev, ok, hw, n_k, n_gl, dtype)
+            # the pieces with width, each evaluated at its lane's values
+            pl, T, W = _pieces(PL, _frozen(PL), d_s, k_s, t_s, hw0, int(n_sample or 64), n_gl,
+                               sets, dtype)
         else:
+            pl = np.arange(sel.size)
             T = mx.zeros((sel.size, 1), dtype=dtype)
             W = mx.ones((sel.size, 1), dtype=dtype)
-        per_pt = T.shape[1]
-        step = max(1, _BLOCK // per_pt)
-        blocks = []
-        for i in range(0, sel.size, step):
-            j = slice(i, min(i + step, sel.size))
-            if n_sets is None:
-                Pj, kj = PL, lkind
+        step = max(1, _BLOCK // T.shape[1])
+        sub = None
+        for i in range(0, pl.size, step):
+            j = slice(i, min(i + step, pl.size))
+            ix = mx.array(pl[j].astype(np.int32))
+            if exp_time > 0.0:
+                take = lambda v: mx.take(v, ix, axis=0)             # noqa: E731
             else:
-                Pj = _lanes(PL, lambda v: v[j])
-                kj = (lkind[0],) + tuple(_map_sets(v, lambda c: c[j]) for v in lkind[1:]) \
-                    if lkind[0] == "quad" else lkind
-            cols = _photometry(_geometry(Pj), Pj, kj, large, d_s[j], k_s[j], t_s[j], T[j])
-            blocks.append([mx.sum(c * W[j], axis=-1) for c in cols])
-        sub = [mx.concatenate([b[c] for b in blocks]) for c in range(len(blocks[0]))]
-        out_cols = [mx.zeros((n * m,), dtype=dtype).at[six].add(s) for s in sub]
+                take = lambda v: v[j]                               # noqa: E731
+            Pj, kj = PL, lkind
+            if sets:
+                Pj = _lanes(PL, take)
+                if lkind[0] == "quad":
+                    kj = (lkind[0],) + tuple(_map_sets(v, take) for v in lkind[1:])
+            cols = _photometry(_geometry(Pj), Pj, kj, large, take(d_s), take(k_s), take(t_s),
+                               T[j])
+            part = [mx.sum(c * W[j], axis=-1) for c in cols]
+            if sub is None:
+                sub = [mx.zeros((sel.size,), dtype=dtype) for _ in part]
+            sub = [s_.at[ix].add(c) for s_, c in zip(sub, part)]
+        out_cols = [mx.zeros((n * m,), dtype=dtype).at[six].add(s_) for s_ in sub]
         if n_sets is not None:
             out_cols = [c.reshape(n, m) for c in out_cols]
     shape = (m,) if n_sets is None else (n, m)

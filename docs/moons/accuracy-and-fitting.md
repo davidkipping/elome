@@ -70,8 +70,9 @@ overlap, so each call pays a fixed cost for building the graph, and then
 a few operations per point that is evaluated. Points far from transit
 cost nothing. The overlap is computed only where the discs overlap on
 the star, and mutual events are brief. Under the contact rule each
-exposure also pays for its event search, and up to nine pieces of
-`n_gl` nodes each, though most need one or two. Batch parameter sets
+exposure also pays for its event search, and for one piece of `n_gl`
+nodes per stretch between its kinks: most exposures have none, and so
+one piece. Batch parameter sets
 with `light_curves` or the anvil model rather than calling
 `light_curve` in a loop. Spherical, oblate, ringed and spotted models
 never load or run any of the moon code.

@@ -199,8 +199,9 @@ only those, gathering each parameter set's values per point so that many
 sets share one pass. The contact rule's events are the sign changes of
 eight smooth functions of time: each disc against the limb, from outside
 and inside; the discs against each other; and each corner against the
-limb. Bisection finds them, and one Newton step taken only in the
-gradient gives them their implicit derivatives.
+limb. Regula falsi refines each sign change, with bisection where it is
+slow, and one Newton step taken only in the gradient gives the events
+their implicit derivatives. Only the pieces between them are evaluated.
 
 ## MLX caveats
 

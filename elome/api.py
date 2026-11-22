@@ -1891,6 +1891,7 @@ class TransitModel:
         e = hv["ecc"] if known else 0.0
         P["speed"] = (_TWO_PI_ * hv["a"] / hv["per"] * math.sqrt((1.0 + e) / (1.0 - e))
                       if known else math.inf)
+        P["moon_e"] = hv["moon_ecc"]
         if self._hlaw is not None:
             kind = ("hybrid", self._hlaw, cast(uv))
         else:
@@ -1939,6 +1940,7 @@ class TransitModel:
         e = cols["ecc"]
         P["speed"] = float(np.max(_TWO_PI_ * cols["a"] / cols["per"]
                                   * np.sqrt((1.0 + e) / (1.0 - e))))
+        P["moon_e"] = np.asarray(cols["moon_ecc"], np.float64)
         if self._hlaw is not None:
             kind = ("hybrid", self._hlaw, c(u_np))
         else:

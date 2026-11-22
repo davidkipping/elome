@@ -457,6 +457,7 @@ def make_moon_transit_flux(period_ref: float, moon_period_ref: float,
             mper=moon_period_ref + P["m_off"]).items()}
         P["speed"] = float(np.max(2.0 * math.pi * hv["a"] / hv["per"]
                                   * np.sqrt((1.0 + hv["e"]) / (1.0 - hv["e"]))))
+        P["moon_e"] = hv["e_m"]
         if limb_dark == "quadratic":
             kind = ("quad",) + tuple(q_to_u(v[:, iq], v[:, iq + 1]))
         else:
