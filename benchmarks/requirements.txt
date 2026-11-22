@@ -1,0 +1,14 @@
+# The spherical cross-code benchmark (bench_precision.py, bench_speed.py,
+# bench_law_cost.py): the other codes and their versions as measured.
+# Elómë itself from this repository: pip install -e . -r benchmarks/requirements.txt
+numpy==2.3.5
+scipy==1.17.1
+mpmath==1.4.1
+numba==0.63.1
+batman-package==2.5.3
+pytransit==2.9.1
+jax==0.10.2
+jaxlib==0.10.2
+jaxoplanet==0.1.0
+exoplanet-core==0.3.1
+pizzetti==0.6.6

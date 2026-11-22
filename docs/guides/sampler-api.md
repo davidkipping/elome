@@ -63,7 +63,7 @@ The exposure rule runs per output point in registers, so the
 sub-exposure axis never becomes an array. Expanding it instead multiplies
 every intermediate and every gradient array by the number of
 sub-exposures. At 512 chains × 5,000 points with 15 sub-exposures
-(`benchmarks/bench_tau_kernel.py`, M2 Max), against computing the
+([`benchmarks/bench_tau_kernel.py`](https://github.com/davidkipping/elome/blob/main/benchmarks/bench_tau_kernel.py), M2 Max), against computing the
 separations, evaluating the kernel and averaging outside it:
 
 | | forward | value + gradient | peak memory |
@@ -119,7 +119,7 @@ This works for oblate planets and eccentric orbits too. The gradient
 takes an `(n, m, k)` cotangent and returns gradients in every geometric
 input. The cost is that of one ordinary call to within a few per cent,
 and three times less than forming three separate light curves
-(`benchmarks/bench_ld_basis.py`).
+([`benchmarks/bench_ld_basis.py`](https://github.com/davidkipping/elome/blob/main/benchmarks/bench_ld_basis.py)).
 
 ## Eccentric orbits: `secosw`, `sesinw`
 
@@ -143,7 +143,7 @@ dev = flux_dev_from_tau(tau, period, a, b, r, u1, u2,
 
 The eccentric orbit costs a Kepler solve at each quadrature node: at
 512 × 5,000 under the contact rule, 2.3–3.3 times the circular cost
-(`benchmarks/bench_tau_ecc.py`). Chains at $e = 0$ skip the solve but
+([`benchmarks/bench_tau_ecc.py`](https://github.com/davidkipping/elome/blob/main/benchmarks/bench_tau_ecc.py)). Chains at $e = 0$ skip the solve but
 still run in the larger kernel, so leave `secosw` and `sesinw` unset for
 a purely circular fit.
 
@@ -227,7 +227,7 @@ uniform disc of flux ratio `fp`: the same model as
   may be compiled. Rings, spots and `ld_basis` are for transits.
 
 The eclipse kernels, 512 chains × 5,000 points around the eclipse on a
-circular orbit (`benchmarks/bench_eclipse.py`, M2 Max), against the
+circular orbit ([`benchmarks/bench_eclipse.py`](https://github.com/davidkipping/elome/blob/main/benchmarks/bench_eclipse.py), M2 Max), against the
 transit of the same planet with hybrid4 under the same exposure rule
 ($f = 0.2$ for the oblate planet):
 
@@ -327,7 +327,7 @@ exposure integration.
 With the hybrid laws, the GPU kernels are faster than with the
 quadratic law, because no term needs an elliptic integral; only
 hybrid5's gradient, with three poles, costs more. At 512 × 5,000
-points under the contact rule (`benchmarks/bench_hybrid.py`):
+points under the contact rule ([`benchmarks/bench_hybrid.py`](https://github.com/davidkipping/elome/blob/main/benchmarks/bench_hybrid.py)):
 
 | law | forward | vs quadratic | value + gradient | vs quadratic |
 |---|---:|---:|---:|---:|

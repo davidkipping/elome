@@ -32,12 +32,14 @@ are `tau`, `period`, `a`, `b`, `r`, `f`, `theta`, every weight, and
 
 ## Cost
 
+Measured on an Apple M2 Max; each table names the script that produced it, and {doc}`../reference/benchmarks` says how to run them on your own machine.
+
 A spherical planet's light curve is a closed form at each point. An
 oblate planet's also needs the roots of a quartic per point and per
 limb-darkening pole (and one more where the planet crosses the limb),
 which the GPU kernel seeds from the closed-form (Ferrari) solution and
 polishes. Fused float32 kernels, 512 chains × 5,000 points around a
-transit (`benchmarks/bench_oblate.py`, M2 Max):
+transit ([`benchmarks/bench_oblate.py`](https://github.com/davidkipping/elome/blob/main/benchmarks/bench_oblate.py), M2 Max):
 
 | | forward | vs spherical | value + gradient | vs spherical |
 |---|---:|---:|---:|---:|
@@ -77,7 +79,7 @@ The other public codes for oblate planets are
 
 The benchmark is the spherical one's transit with $f = 0.2$ at 30°, and
 the one limb-darkening profile all five codes express exactly,
-$I(\mu) = 1 - 0.5\,(1 - \mu^2)$ (`benchmarks/oblate_compare/`):
+$I(\mu) = 1 - 0.5\,(1 - \mu^2)$ ([`benchmarks/oblate_compare/`](https://github.com/davidkipping/elome/tree/main/benchmarks/oblate_compare)):
 
 | | Elómë float32 (GPU) | GreenLantern (GPU) | JoJo | squishyplanet | eclipsoid | Elómë float64 (CPU) |
 |---|---:|---:|---:|---:|---:|---:|

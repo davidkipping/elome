@@ -14,6 +14,7 @@ Capability notes (measured on this machine, macOS/arm64):
     roadrunner    : PyTransit's RoadRunnerModel; its nthreads (numba)
     exoplanet-core: single-threaded C++ ops loop
     jaxoplanet    : XLA CPU thread pool (not user-partitionable cleanly)
+    pizzetti      : single-threaded numba (ignores nthreads)
     elome   : MLX — one GPU (all cores; not partitionable) or CPU
     ellc          : needs a Fortran toolchain; unavailable without
                     gfortran (`brew install gcc` would enable it)
@@ -27,10 +28,11 @@ import numpy as np
 IMPORTS = {"elome": ["mlx.core", "elome"], "batman": ["batman"],
            "pytransit": ["pytransit"], "roadrunner": ["pytransit"],
            "exoplanet": ["exoplanet_core"],
-           "jaxoplanet": ["jax", "jaxoplanet.core.limb_dark"]}
+           "jaxoplanet": ["jax", "jaxoplanet.core.limb_dark"], "pizzetti": ["pizzetti"],
+           "roadrunner_h2": ["pytransit", "numba", "elome.hybrid"]}
 
 from scenario import (A_RS, B_IMPACT, ECC, INC_DEG, INC_ECC_DEG,
-                      OMEGA_DEG, PER, RP, T0, U1, U2, batch_params,
+                      OMEGA_DEG, PER, RP, T0, U1, U2, W_H2, batch_params,
                       mean_anomaly_at_transit, time_grid, time_grid_ecc,
                       z_of_t, z_of_t_ecc)
 
@@ -39,17 +41,18 @@ from scenario import (A_RS, B_IMPACT, ECC, INC_DEG, INC_ECC_DEG,
 # Elómë
 # ---------------------------------------------------------------------------
 
-def _mp_params():
+def _mp_params(law="quadratic"):
     import elome
     p = elome.TransitParams()
     p.t0, p.per, p.rp, p.a, p.inc = T0, PER, RP, A_RS, INC_DEG
-    p.ecc, p.w, p.u, p.limb_dark = 0.0, 90.0, [U1, U2], "quadratic"
+    p.ecc, p.w, p.limb_dark = 0.0, 90.0, law
+    p.u = list(W_H2) if law == "hybrid2" else [U1, U2]
     return p
 
 
-def elome_fp64_prepare(n):
+def elome_fp64_prepare(n, law="quadratic"):
     import elome
-    p = _mp_params()
+    p = _mp_params(law)
     m = elome.TransitModel(p, time_grid(n))
     m.light_curve(p)  # warm
     return (m, p)
@@ -60,10 +63,10 @@ def elome_fp64_run(state):
     return m.light_curve(p)
 
 
-def elome_fp32_prepare(n):
+def elome_fp32_prepare(n, law="quadratic"):
     import mlx.core as mx
     import elome
-    p = _mp_params()
+    p = _mp_params(law)
     m = elome.TransitModel(p, time_grid(n), dtype=mx.float32)
     m.light_curve(p)
     return (m, p)
@@ -74,23 +77,29 @@ def elome_fp32_run(state):
     return m.light_curve(p)
 
 
-def elome_gpu_batch_prepare(_n=None):
+def elome_gpu_batch_prepare(_n=None, law="quadratic"):
     """Engine-contract batched model: (npv, 8) params x (2, npt) times,
-    fp32 on the GPU — Elómë's design center."""
+    fp32 on the GPU — Elómë's design center. hybrid2: anvil's hybrid model,
+    its shape weights as the unit square's (q1, q2)."""
     import mlx.core as mx
-    from elome.anvil import make_quad_transit_flux
-    from elome.ld import u_to_q_np
+    from elome.anvil import make_hybrid_transit_flux, make_quad_transit_flux
+    from elome.ld import hybrid2_to_q_np, u_to_q_np
     from scenario import BATCH_NPT, BATCH_NPV
 
     bp = batch_params()
-    q1, q2 = u_to_q_np(bp["u1"], bp["u2"])
+    if law == "hybrid2":
+        l1, l2 = hybrid2_to_q_np(bp["w1"], bp["w2"])
+        flux = make_hybrid_transit_flux(PER, "hybrid2")
+    else:
+        l1, l2 = u_to_q_np(bp["u1"], bp["u2"])
+        flux = make_quad_transit_flux(PER)
     v = np.stack([
-        bp["t0"], bp["per"] - PER, bp["rp"], bp["b"], bp["a"], q1, q2,
+        bp["t0"], bp["per"] - PER, bp["rp"], bp["b"], bp["a"], l1, l2,
         np.zeros(BATCH_NPV),
     ], axis=1).astype(np.float32)
     t = time_grid(BATCH_NPT)
     x = np.stack([t, np.zeros_like(t)]).astype(np.float32)
-    model = mx.compile(make_quad_transit_flux(PER))
+    model = mx.compile(flux)
     v_mx, x_mx = mx.array(v), mx.array(x)
     out = model(v_mx, x_mx)
     mx.eval(out)  # warm/compile
@@ -135,7 +144,7 @@ def batman_batch_prepare(_n=None):
     return (m, p, bp)
 
 
-def batman_batch_run(state):
+def _loop_batch_run(state):
     m, p, bp = state
     out = []
     for i in range(bp["rp"].size):
@@ -147,6 +156,45 @@ def batman_batch_run(state):
         p.u = [bp["u1"][i], bp["u2"][i]]
         out.append(m.light_curve(p))
     return np.stack(out)
+
+
+batman_batch_run = _loop_batch_run
+
+
+# ---------------------------------------------------------------------------
+# pizzetti: batman's interface; its interior series to its default bound
+# (series_tol=1e-9 of the stellar flux), or None: the series off, the exact
+# Mandel & Agol solution everywhere
+# ---------------------------------------------------------------------------
+
+def _pz_model(p, t, series_tol=1e-9):
+    import pizzetti
+    kw = {} if series_tol == 1e-9 else {"series_tol": 0.0}
+    m = pizzetti.TransitModel(p, t, **kw)
+    m.light_curve(p)
+    return (m, p)
+
+
+def pizzetti_prepare(n, series_tol=1e-9):
+    import pizzetti
+    p = pizzetti.TransitParams()
+    p.t0, p.per, p.rp, p.a, p.inc = T0, PER, RP, A_RS, INC_DEG
+    p.ecc, p.w, p.u, p.limb_dark = 0.0, 90.0, [U1, U2], "quadratic"
+    return _pz_model(p, time_grid(n), series_tol)
+
+
+def pizzetti_run(state):
+    m, p = state
+    return m.light_curve(p)
+
+
+def pizzetti_batch_prepare(_n=None):
+    from scenario import BATCH_NPT
+    m, p = pizzetti_prepare(BATCH_NPT)
+    return (m, p, batch_params())
+
+
+pizzetti_batch_run = _loop_batch_run    # batman's loop, on pizzetti's model
 
 
 # ---------------------------------------------------------------------------
@@ -341,17 +389,17 @@ def jaxoplanet_batch_run(state):
 # differentiable codes only (Elómë, jaxoplanet)
 # ---------------------------------------------------------------------------
 
-def _elome_grad_prepare(n, dtype):
+def _elome_grad_prepare(n, dtype, law="quadratic"):
     import mlx.core as mx
     import elome
-    p = _mp_params()
+    p = _mp_params(law)
     stream = mx.cpu if dtype == mx.float64 else mx.gpu
     m = elome.TransitModel(p, time_grid(n), dtype=dtype)
     ct = mx.array(np.random.default_rng(0).normal(size=n), dtype=dtype)
-    x0 = [mx.array(v, dtype=dtype) for v in (RP, T0, PER, A_RS, B_IMPACT, U1, U2)]
+    x0 = [mx.array(v, dtype=dtype) for v in (RP, T0, PER, A_RS, B_IMPACT, *p.u)]
 
     def loss(rp, t0, per, a, b, u1, u2):
-        q = _mp_params()
+        q = _mp_params(law)
         q.rp, q.t0, q.per, q.a = rp, t0, per, a
         q.inc = mx.arccos(b / a) * (180.0 / math.pi)
         q.u = [u1, u2]
@@ -427,11 +475,12 @@ _W_RAD = math.radians(OMEGA_DEG)
 _COSI_ECC = math.cos(math.radians(INC_ECC_DEG))
 
 
-def _mp_params_ecc():
+def _mp_params_ecc(law="quadratic"):
     import elome
     p = elome.TransitParams()
     p.t0, p.per, p.rp, p.a, p.inc = T0, PER, RP, A_RS, INC_ECC_DEG
-    p.ecc, p.w, p.u, p.limb_dark = ECC, OMEGA_DEG, [U1, U2], "quadratic"
+    p.ecc, p.w, p.limb_dark = ECC, OMEGA_DEG, law
+    p.u = list(W_H2) if law == "hybrid2" else [U1, U2]
     return p
 
 
@@ -473,6 +522,19 @@ def batman_ecc_prepare(n, nthreads=1):
 
 
 def batman_ecc_run(state):
+    m, p = state
+    return m.light_curve(p)
+
+
+def pizzetti_ecc_prepare(n, series_tol=1e-9):
+    import pizzetti
+    p = pizzetti.TransitParams()
+    p.t0, p.per, p.rp, p.a, p.inc = T0, PER, RP, A_RS, INC_ECC_DEG
+    p.ecc, p.w, p.u, p.limb_dark = ECC, OMEGA_DEG, [U1, U2], "quadratic"
+    return _pz_model(p, time_grid_ecc(n), series_tol)
+
+
+def pizzetti_ecc_run(state):
     m, p = state
     return m.light_curve(p)
 
@@ -557,3 +619,131 @@ def jaxoplanet_ecc_prepare(n, order=10):
 def jaxoplanet_ecc_run(state):
     f, t = state
     return np.asarray(f(t).block_until_ready())
+
+
+# ---------------------------------------------------------------------------
+# the hybrid2 law (W_H2): Elómë in closed form; RoadRunner tabulating it as
+# a function of mu, with its exact disc integral. The others cannot take it
+# (batman's custom law needs its C rebuilt; pizzetti and jaxoplanet take
+# sums of powers of mu, exoplanet-core the quadratic law).
+# ---------------------------------------------------------------------------
+
+def elome_fp64_h2_prepare(n):
+    return elome_fp64_prepare(n, "hybrid2")
+
+
+def elome_fp32_h2_prepare(n):
+    return elome_fp32_prepare(n, "hybrid2")
+
+
+def elome_fp64_h2_ecc_prepare(n):
+    import elome
+    p = _mp_params_ecc("hybrid2")
+    m = elome.TransitModel(p, time_grid_ecc(n))
+    m.light_curve(p)
+    return (m, p)
+
+
+def elome_fp32_h2_ecc_prepare(n):
+    import mlx.core as mx
+    import elome
+    p = _mp_params_ecc("hybrid2")
+    m = elome.TransitModel(p, time_grid_ecc(n), dtype=mx.float32)
+    m.light_curve(p)
+    return (m, p)
+
+
+def elome_gpu_h2_batch_prepare(_n=None):
+    return elome_gpu_batch_prepare(law="hybrid2")
+
+
+def elome_fp32_h2_grad_prepare(n):
+    import mlx.core as mx
+    return _elome_grad_prepare(n, mx.float32, "hybrid2")
+
+
+def elome_fp64_h2_grad_prepare(n):
+    import mlx.core as mx
+    return _elome_grad_prepare(n, mx.float64, "hybrid2")
+
+
+elome_fp64_h2_run = elome_fp32_h2_run = elome_fp64_run
+elome_fp64_h2_ecc_run = elome_fp32_h2_ecc_run = elome_fp64_run
+elome_gpu_h2_batch_run = elome_gpu_batch_run
+elome_fp32_h2_grad_run = elome_fp64_h2_grad_run = elome_grad_run
+
+
+def _h2_ld():
+    """(I(mu, w), its disc integral(w)) of hybrid2 for RoadRunner, numba
+    functions of the shape weights w: I = c0 + c1 mu^2 + c2 mu^4 + sum_k
+    d_k (mu^2 + eps_k)^-2, (c, d) affine in w (elome.hybrid.w_to_c), and
+    2 pi int I mu dmu = 2 pi [c0/2 + c1/4 + c2/6 + sum_k d_k / (2 eps_k (1 + eps_k))]."""
+    from numba import njit
+    from elome.hybrid import get_law, w_to_c
+    law = get_law("hybrid2")
+    eps = np.array(law.eps, dtype=np.float64)
+    flat = lambda w: np.concatenate([np.asarray(x, np.float64) for x in w_to_c(law, w)])  # noqa: E731
+    base = flat([0.0, 0.0])
+    A = np.stack([flat(e) - base for e in np.eye(2)], axis=1)
+    w_test = np.array([0.37, -0.21])
+    assert np.allclose(flat(w_test), base + A @ w_test, rtol=0, atol=1e-13), "w_to_c not affine"
+    K = eps.size
+
+    @njit
+    def coef(pv):
+        return base + A[:, 0] * pv[0] + A[:, 1] * pv[1]
+
+    @njit
+    def ld(mu, pv):
+        c = coef(pv)
+        mu2 = mu * mu
+        out = c[0] + c[1] * mu2 + c[2] * mu2 * mu2
+        for k in range(K):
+            out = out + c[3 + k] / (mu2 + eps[k]) ** 2
+        return out
+
+    @njit
+    def ldi(pv):
+        c = coef(pv)
+        s = c[0] / 2.0 + c[1] / 4.0 + c[2] / 6.0
+        for k in range(K):
+            s += c[3 + k] / (2.0 * eps[k] * (1.0 + eps[k]))
+        return 2.0 * math.pi * s
+    return ld, ldi
+
+
+def roadrunner_h2_prepare(n, t=None):
+    return roadrunner_prepare(n, ld=_h2_ld(), ldc=W_H2, t=t)
+
+
+roadrunner_h2_run = roadrunner_run
+
+
+def roadrunner_h2_ecc_prepare(n):
+    import os
+    tm = _rr_model(_h2_ld(), int(os.environ.get("BENCH_NTHREADS", "1")))
+    tm.set_data(time_grid_ecc(n))
+    kw = dict(k=RP, ldc=np.asarray(W_H2, dtype=np.float64), t0=T0, p=PER, a=A_RS,
+              i=math.radians(INC_ECC_DEG), e=ECC, w=_W_RAD)
+    tm.evaluate(**kw)
+    return (tm, kw)
+
+
+roadrunner_h2_ecc_run = roadrunner_run
+
+
+def roadrunner_h2_batch_prepare(_n=None):
+    import os
+    from scenario import BATCH_NPT
+    bp = batch_params()
+    tm = _rr_model(_h2_ld(), nthreads=int(os.environ.get("NUMBA_NUM_THREADS", "1")))
+    tm.set_data(time_grid(BATCH_NPT))
+    kw = dict(k=bp["rp"][:, None], ldc=np.stack([bp["w1"], bp["w2"]], axis=1),
+              t0=bp["t0"][:, None], p=bp["per"], a=bp["a"],
+              i=np.arccos(bp["b"] / bp["a"]))
+    tm.evaluate(**kw)
+    return (tm, kw)
+
+
+roadrunner_h2_batch_run = roadrunner_run
+

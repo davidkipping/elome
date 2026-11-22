@@ -50,6 +50,8 @@ float32 times are.
 
 ## Cost
 
+Measured on an Apple M2 Max; each table names the script that produced it, and {doc}`../reference/benchmarks` says how to run them on your own machine.
+
 Every spot's visible outline is integrated at every time, in transit or
 not, and each splits into arcs where it meets the limb, the planet and
 the other spots. The cost therefore grows with the number of spots. Under
@@ -60,7 +62,7 @@ and only the nodes of non-empty pieces are evaluated.
 Fused float32 kernels, 512 parameter sets × 5,000 points around a
 transit, `hybrid4`, spots of 6–12°, two of them on the transit chord, on
 a star turning in 12 days, against the same transit with no spots
-(`benchmarks/bench_spots.py`, M2 Max):
+([`benchmarks/bench_spots.py`](https://github.com/davidkipping/elome/blob/main/benchmarks/bench_spots.py), M2 Max):
 
 | | forward | vs no spots | value + grad | vs no spots |
 |---|---:|---:|---:|---:|
@@ -100,7 +102,7 @@ parameter, and batched float32 kernels on the GPU.
 The other two differentiable codes, jaxoplanet's `starry` module and
 spotter, approximate the star's surface: their accuracy is set by a
 resolution (the spherical-harmonic degree `ydeg`, the HEALPix `nside`),
-which also sets their cost. In the benchmark (`benchmarks/spot_compare/`)
+which also sets their cost. In the benchmark ([`benchmarks/spot_compare/`](https://github.com/davidkipping/elome/tree/main/benchmarks/spot_compare))
 a planet of radius 0.1 crosses one spot, two overlapping spots, and a
 spot near the limb, under the one limb-darkening profile all three codes
 express exactly, $I(\mu) = 1 - 0.4\,(1 - \mu^2)$. The error is the

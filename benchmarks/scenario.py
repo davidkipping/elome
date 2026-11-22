@@ -1,4 +1,5 @@
-"""Shared benchmark scenario: one standard quadratic-LD transit.
+"""Shared benchmark scenario: one standard transit, under the quadratic
+law and, for the codes that can take it, the hybrid2 law.
 
 Every code computes the same physical light curve so precision and speed
 are comparable. Circular orbit (all codes support it), parameters chosen
@@ -17,6 +18,9 @@ B_IMPACT = 0.45
 INC_DEG = math.degrees(math.acos(B_IMPACT / A_RS))
 RP = 0.1
 U1, U2 = 0.40, 0.25
+# the hybrid2 law's shape weights (positive, darkening to the limb; as
+# bench_law_cost.py's)
+W_H2 = (0.5, 0.2)
 
 # time window: full transit (T14 ~ 0.127 d) plus out-of-transit shoulders
 T_HALF = 0.12
@@ -55,6 +59,9 @@ def batch_params(npv: int = BATCH_NPV, seed: int = 0):
         "b": np.clip(B_IMPACT + 0.05 * rng.standard_normal(npv), 0, 0.9),
         "u1": np.clip(U1 + 0.05 * rng.standard_normal(npv), 0, 1),
         "u2": np.clip(U2 + 0.05 * rng.standard_normal(npv), -0.2, 0.6),
+        # drawn last, so the draws above are unchanged
+        "w1": np.clip(W_H2[0] + 0.05 * rng.standard_normal(npv), 0.0, 1.0),
+        "w2": np.clip(W_H2[1] + 0.05 * rng.standard_normal(npv), 0.0, 1.0),
     }
 
 

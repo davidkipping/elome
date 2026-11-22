@@ -2,8 +2,10 @@
 
 All measurements are on an Apple M2 Max (12 CPU cores, 30-core GPU), each
 configuration in its own process on a quiet machine. The scripts are in
-the repository's `benchmarks/` directory, and each table names the one
-that produced it.
+the repository's
+[`benchmarks/`](https://github.com/davidkipping/elome/tree/main/benchmarks)
+directory, each table names the one that produced it, and
+{doc}`benchmarks` says how to run them on your own machine.
 
 ## Against other codes
 
@@ -11,8 +13,8 @@ Each planet type is compared with the other public codes for it -- what
 each covers, accuracy, speed, batches and gradients -- in its own
 section:
 
-- spherical planets, against batman, PyTransit, jaxoplanet and
-  exoplanet-core: {doc}`../spherical/accuracy-and-cost`;
+- spherical planets, against batman, PyTransit, jaxoplanet,
+  exoplanet-core and pizzetti: {doc}`../spherical/accuracy-and-cost`;
 - oblate planets, against squishyplanet, JoJo, GreenLantern and
   eclipsoid: {doc}`../oblate/accuracy-and-cost`;
 - ringed planets, against pyPplusS, squishyplanet, JoJo and pryngles:
@@ -22,14 +24,14 @@ section:
 
 In short, Elómë's float32 GPU kernels are the fastest code for oblate
 and ringed planets at every size measured, and for spherical planets
-past about $10^4$ points, below which the GPU's fixed dispatch cost
+past about $10^5$ points, below which the GPU's fixed dispatch cost
 dominates and the fastest CPU codes win. For a planet crossing
 starspots they are faster than jaxoplanet and spotter at every
 resolution measured, and Elómë is the one of the three whose accuracy
 is not set by a resolution. For batches of parameter sets the margin is
 from about 11 times (spherical, against PyTransit's RoadRunner) to
 about 1,700 times (ringed). A float32 light curve of $10^7$ points holds
-under 300 MB of memory for each planet type. The float64 path is exact
+under 400 MB of memory for each planet type. The float64 path is exact
 to rounding.
 
 ## Gradients
@@ -38,7 +40,7 @@ Of the spherical codes only Elómë and jaxoplanet are differentiable in
 every parameter (exoplanet-core has gradients in $b$ and $r$), and
 Elómë's gradients are analytic, fused into Metal kernels. For the gradient of a chunked
 log-likelihood at 1024 chains × 65,536 points, compiled, in float32
-(`benchmarks/bench_vjp.py`, which records them in `benchmarks/vjp.json`):
+([`benchmarks/bench_vjp.py`](https://github.com/davidkipping/elome/blob/main/benchmarks/bench_vjp.py), which records them in [`benchmarks/vjp.json`](https://github.com/davidkipping/elome/blob/main/benchmarks/vjp.json)):
 
 | | forward | value + gradient |
 |---|---:|---:|

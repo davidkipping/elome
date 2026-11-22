@@ -1,7 +1,7 @@
 [
  {
   "code": "elome fp64",
-  "max_err": 4.440892098500626e-16,
+  "max_err": 3.3306690738754696e-16,
   "median_err": 0.0
  },
  {
@@ -33,5 +33,30 @@
   "code": "jaxoplanet (order=10)",
   "max_err": 4.635589578860788e-09,
   "median_err": 0.0
+ },
+ {
+  "code": "pizzetti",
+  "max_err": 5.403679725901611e-10,
+  "median_err": 0.0
+ },
+ {
+  "code": "pizzetti (series off)",
+  "max_err": 4.440892098500626e-16,
+  "median_err": 0.0
+ },
+ {
+  "code": "elome fp64 hybrid2",
+  "max_err": 2.220446049250313e-16,
+  "median_err": 0.0
+ },
+ {
+  "code": "elome fp32(GPU) hybrid2",
+  "max_err": 3.066368159387878e-08,
+  "median_err": 2.6442640299606524e-09
+ },
+ {
+  "code": "roadrunner hybrid2",
+  "max_err": 7.555022137228917e-06,
+  "median_err": 2.984157411178856e-07
  }
 ]

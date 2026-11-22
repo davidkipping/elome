@@ -3,6 +3,17 @@ so thermal state, JIT caches, and thread pools never leak between
 measurements. Writes speed.json incrementally (safe to re-run; completed
 measurements are skipped).
 
+    python benchmarks/bench_speed.py [--out FILE] [--codes CODE ...] [--rounds R] [--redo]
+
+``--out`` names the results file (default benchmarks/speed.json, this
+repository's measurements): a new file starts afresh, so on another machine
+pass one. ``--codes`` runs only those codes (elome_fp32, elome_fp64,
+elome_gpu, batman, pytransit, roadrunner, exoplanet, jaxoplanet, pizzetti;
+the hybrid2 law: elome_fp32_h2, elome_fp64_h2, elome_gpu_h2, roadrunner_h2).
+``--rounds R`` times each measurement in R separate processes and keeps the
+median. ``--redo`` measures the selected codes again, replacing their
+results.
+
 Axes on this machine (M2 Max):
   * CPU cores: thread counts 1/4/8/12 for codes that support threading
     (batman via OpenMP if its extension was built with it — probed;
@@ -15,6 +26,7 @@ Axes on this machine (M2 Max):
     76-core Ultra) is the only true GPU-core axis.
 """
 
+import argparse
 import json
 import os
 import subprocess
@@ -34,9 +46,14 @@ SINGLE = [
     ("roadrunner", [1, 12]),            # numba, its nthreads
     ("exoplanet", [1]),                 # single-threaded C++
     ("jaxoplanet", [0]),                # XLA CPU pool (all cores)
+    ("pizzetti", [1]),                  # single-threaded numba
+    # the hybrid2 law, for the codes that take it
+    ("elome_fp32_h2", [0]),
+    ("elome_fp64_h2", [0]),
+    ("roadrunner_h2", [1, 12]),
 ]
 BATCH = ["elome_gpu", "pytransit", "roadrunner", "jaxoplanet", "batman",
-         "exoplanet"]
+         "exoplanet", "pizzetti", "elome_gpu_h2", "roadrunner_h2"]
 # eccentric sweep: same codes, each solving Kepler's equation itself, so
 # the numbers include the orbit as well as the photometry.
 ECC_CODES = [
@@ -47,10 +64,15 @@ ECC_CODES = [
     ("roadrunner", [1]),
     ("exoplanet", [1]),
     ("jaxoplanet", [0]),
+    ("pizzetti", [1]),
+    ("elome_fp32_h2", [0]),
+    ("elome_fp64_h2", [0]),
+    ("roadrunner_h2", [1]),
 ]
 
 # value + gradient (the differentiable codes), at these N
-GRAD = [("elome_fp32", [0]), ("elome_fp64", [0]), ("jaxoplanet", [0])]
+GRAD = [("elome_fp32", [0]), ("elome_fp64", [0]), ("jaxoplanet", [0]),
+        ("elome_fp32_h2", [0]), ("elome_fp64_h2", [0])]
 GRAD_N = [10_000, 100_000]
 
 SLOW_SKIP_S = 20.0  # skip larger N once a code's median exceeds this
@@ -72,7 +94,16 @@ def have(rows, **kw):
     return any(all(r.get(k) == v for k, v in kw.items()) for r in rows)
 
 
-def run_one(code, mode, n, threads):
+def run_one(code, mode, n, threads, rounds=1):
+    if rounds > 1:
+        recs = [run_one(code, mode, n, threads) for _ in range(rounds)]
+        good = sorted((r for r in recs if "error" not in r), key=lambda r: r["median_s"])
+        if not good:
+            return recs[0]
+        rec = dict(good[(len(good) - 1) // 2])
+        rec["rounds"] = rounds
+        rec["round_medians_s"] = [r["median_s"] for r in good]
+        return rec
     env = dict(os.environ)
     t = threads if threads > 0 else 12
     env.update(BENCH_NTHREADS=str(threads if threads > 0 else 1),
@@ -90,8 +121,24 @@ def run_one(code, mode, n, threads):
 
 
 def main():
+    global OUT
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    ap.add_argument("--out", default=OUT, help="results file (a new one starts afresh)")
+    ap.add_argument("--codes", nargs="+", help="only these codes")
+    ap.add_argument("--rounds", type=int, default=1,
+                    help="processes per measurement, the median kept")
+    ap.add_argument("--redo", action="store_true", help="re-measure the selected codes")
+    a = ap.parse_args()
+    if a.redo and not a.codes:
+        ap.error("--redo needs --codes")
+    OUT = os.path.abspath(a.out)
+    keep = (lambda code: True) if not a.codes else (lambda code: code in a.codes)  # noqa: E731
     rows = load()
-    for code, thread_list in SINGLE:
+    if a.redo:
+        rows = [r for r in rows if not keep(r["code"])]
+    def measure(code, mode, n, threads):
+        return run_one(code, mode, n, threads, a.rounds)
+    for code, thread_list in [c for c in SINGLE if keep(c[0])]:
         for threads in thread_list:
             slow = False
             for n in N_SWEEP:
@@ -100,7 +147,7 @@ def main():
                     continue
                 if slow:
                     break
-                rec = run_one(code, "single", n, threads)
+                rec = measure(code, "single", n, threads)
                 rows.append(rec)
                 save(rows)
                 med = rec.get("median_s")
@@ -110,7 +157,7 @@ def main():
                 if rec.get("error") or (med and med > SLOW_SKIP_S):
                     slow = True
 
-    for code, thread_list in ECC_CODES:
+    for code, thread_list in [c for c in ECC_CODES if keep(c[0])]:
         for threads in thread_list:
             slow = False
             for n in N_SWEEP:
@@ -118,7 +165,7 @@ def main():
                     continue
                 if slow:
                     break
-                rec = run_one(code, "ecc", n, threads)
+                rec = measure(code, "ecc", n, threads)
                 rows.append(rec)
                 save(rows)
                 med = rec.get("median_s")
@@ -128,10 +175,10 @@ def main():
                 if rec.get("error") or (med and med > SLOW_SKIP_S):
                     slow = True
 
-    for code in BATCH:
+    for code in [c for c in BATCH if keep(c)]:
         if have(rows, code=code, mode="batch"):
             continue
-        rec = run_one(code, "batch", 0, 0)
+        rec = measure(code, "batch", 0, 0)
         rows.append(rec)
         save(rows)
         med = rec.get("median_s")
@@ -139,12 +186,12 @@ def main():
               f"{med if med is None else f'{med:10.3f} s'} "
               f"{rec.get('error', '')[:60]}", flush=True)
 
-    for code, thread_list in GRAD:
+    for code, thread_list in [c for c in GRAD if keep(c[0])]:
         for threads in thread_list:
             for n in GRAD_N:
                 if have(rows, code=code, mode="grad", n=n, threads=threads):
                     continue
-                rec = run_one(code, "grad", n, threads)
+                rec = measure(code, "grad", n, threads)
                 rows.append(rec)
                 save(rows)
                 med = rec.get("median_s")

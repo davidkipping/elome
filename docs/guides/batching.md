@@ -19,7 +19,7 @@ curve). The formula is good for orders of magnitude; the measured
 throughput varies by about 35% with the shape of the batch.
 
 Measured, for 10,000 parameter sets of a 1,000-point light curve
-(`benchmarks/verify_doc_claims.py`):
+([`benchmarks/verify_doc_claims.py`](https://github.com/davidkipping/elome/blob/main/benchmarks/verify_doc_claims.py)):
 
 | strategy | wall time | per light curve |
 |---|---:|---:|

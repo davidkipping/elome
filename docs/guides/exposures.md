@@ -43,7 +43,7 @@ fixed Gauss-Legendre order instead: an adaptive depth depends on the
 data, which would break batching and compilation, while a fixed rule is
 branchless and keeps the nodes' positions differentiable.
 
-A 29-minute exposure of a 0.126-day transit (`benchmarks/bench_exposure.py`):
+A 29-minute exposure of a 0.126-day transit ([`benchmarks/bench_exposure.py`](https://github.com/davidkipping/elome/blob/main/benchmarks/bench_exposure.py)):
 
 | method | evaluations per exposure | maximum error |
 |---|---:|---:|
@@ -80,7 +80,7 @@ its fused kernel, as the sampler API does below.
 
 A 29-minute exposure of a hot Jupiter's eclipse ($P = 3.45$ d,
 $a = 8.84$, $r_p = 0.115$, $b = 0.3$), with the largest error as a
-fraction of the eclipse depth (`benchmarks/bench_eclipse_exposure.py`):
+fraction of the eclipse depth ([`benchmarks/bench_eclipse_exposure.py`](https://github.com/davidkipping/elome/blob/main/benchmarks/bench_eclipse_exposure.py)):
 
 | method | spherical | spherical, $e = 0.3$ | oblate, $f = 0.2$ |
 |---|---:|---:|---:|

@@ -139,7 +139,8 @@ def _table(text, after):
         if not line.startswith("|"):
             break
         cells = [c.strip() for c in line.strip().strip("|").split("|")]
-        rows[cells[0]] = cells[1:]
+        # a label marked for styling, [label]{.class}, is its label
+        rows[re.sub(r"^\[(.*)\]\{[^}]*\}$", r"\1", cells[0])] = cells[1:]
     return rows
 
 
@@ -235,15 +236,15 @@ def check_kernels():
                                  ("contact", "contact rule (`n_gl = 5`)"))}
     pages = {
         "guides/sampler-api.md": (
-            {"(`benchmarks/bench_tau_kernel.py`": tau_rows,
-             "(`benchmarks/bench_hybrid.py`)": hy_rows},
+            {"([`benchmarks/bench_tau_kernel.py`](https://github.com/davidkipping/elome/blob/main/benchmarks/bench_tau_kernel.py)": tau_rows,
+             "([`benchmarks/bench_hybrid.py`](https://github.com/davidkipping/elome/blob/main/benchmarks/bench_hybrid.py))": hy_rows},
             [(r"also (about \S+) times more accurate", es / ec),
              (r"more accurate than the first \((\$[^$]+\$) against", ec),
              (r"more accurate than the first \(\$[^$]+\$ against (\$[^$]+\$)\)", es),
              (r"would need about (\S+) sub-exposures", tk["n_sub_for_1em6"]),
              (r"would ask for (about \S+ GB)", tk["full_width_gb"] * 1e3)]),
         "oblate/accuracy-and-cost.md": (
-            {"(`benchmarks/bench_oblate.py`": ob_rows}, []),
+            {"([`benchmarks/bench_oblate.py`](https://github.com/davidkipping/elome/blob/main/benchmarks/bench_oblate.py)": ob_rows}, []),
         "oblate/fitting.md": ({}, [
             (r"evaluation costs (\d+)–\d+ times a spherical", min(ratio["none"])),
             (r"evaluation costs \d+–(\d+) times a spherical", max(ratio["none"])),
@@ -295,7 +296,7 @@ def check_spots():
                                         r["value_grad_ms"] / v0]
     c = sp["cpu_1000_points_two_spots"]
     pages = {"spots/accuracy-and-fitting.md": (
-        {"(`benchmarks/bench_spots.py`": rows},
+        {"([`benchmarks/bench_spots.py`](https://github.com/davidkipping/elome/blob/main/benchmarks/bench_spots.py)": rows},
         [(r"two spots takes (\S+ s) for its value", c["none"]["forward_s"]),
          (r"for its value and (\S+ s) with its gradient", c["none"]["value_grad_s"]),
          (r"under the contact rule (\S+ s) and", c["contact"]["forward_s"]),
@@ -331,9 +332,9 @@ def check_eclipses():
             label += ", float32" if r["float32"] else ""
             acc.setdefault(label, [None] * 3)[col] = r["max_err_depth"]
     pages = {"guides/sampler-api.md": (
-        {"(`benchmarks/bench_eclipse.py`": rows}, []),
+        {"([`benchmarks/bench_eclipse.py`](https://github.com/davidkipping/elome/blob/main/benchmarks/bench_eclipse.py)": rows}, []),
              "guides/exposures.md": (
-        {"(`benchmarks/bench_eclipse_exposure.py`": acc}, [])}
+        {"([`benchmarks/bench_eclipse_exposure.py`](https://github.com/davidkipping/elome/blob/main/benchmarks/bench_eclipse_exposure.py)": acc}, [])}
     n, bad = _check_pages(pages)
     return n, bad, set(pages)
 
@@ -349,7 +350,8 @@ def check_comparisons():
     rg = load("ring_compare", "results_ring.json")
     spc = load("spot_compare", "results_spot.json")
 
-    thr = {"batman": 1, "pytransit": 1, "exoplanet": 1, "roadrunner": 1}
+    thr = {"batman": 1, "pytransit": 1, "exoplanet": 1, "roadrunner": 1, "pizzetti": 1,
+           "roadrunner_h2": 1}
 
     def sp(code, mode, n=0, key="median_s"):
         # code "name@k" is name on k threads
@@ -362,26 +364,40 @@ def check_comparisons():
     def batch_ratio(res, gpu):
         return min(v for c, v in res.items() if not c.startswith("elome")) / res[gpu]
 
-    sph_codes = {"Elómë, float32 (GPU)": "elome_fp32", "Elómë, float64 (CPU)": "elome_fp64",
-                 "batman": "batman", "jaxoplanet": "jaxoplanet",
-                 "exoplanet-core": "exoplanet",
-                 "PyTransit (quadratic model)": "pytransit",
-                 "PyTransit (RoadRunner)": "roadrunner",
-                 "PyTransit (RoadRunner), 12 threads": "roadrunner@12"}
-    sph_batch = {"Elómë, float32 (GPU), one call": "elome_gpu",
-                 "PyTransit (RoadRunner), native arrays": "roadrunner",
-                 "PyTransit (quadratic model), native arrays": "pytransit",
-                 "jaxoplanet (`jax.vmap`, CPU)": "jaxoplanet",
-                 "exoplanet-core (loop)": "exoplanet", "batman (loop)": "batman"}
+    # every row names its law: the quadratic law for every code, hybrid2
+    # where a code takes it (Elómë; RoadRunner, tabulating it)
+    Q, H = ", quadratic", ", hybrid2"
+    sph_codes = {"Elómë, float32 (GPU)" + Q: "elome_fp32", "Elómë, float32 (GPU)" + H: "elome_fp32_h2",
+                 "pizzetti" + Q: "pizzetti",
+                 "PyTransit (RoadRunner), 12 threads" + Q: "roadrunner@12",
+                 "PyTransit (RoadRunner), 12 threads" + H: "roadrunner_h2@12",
+                 "PyTransit (RoadRunner)" + Q: "roadrunner", "PyTransit (RoadRunner)" + H: "roadrunner_h2",
+                 "batman" + Q: "batman", "jaxoplanet" + Q: "jaxoplanet",
+                 "exoplanet-core" + Q: "exoplanet", "PyTransit (closed form)" + Q: "pytransit",
+                 "Elómë, float64 (CPU)" + Q: "elome_fp64", "Elómë, float64 (CPU)" + H: "elome_fp64_h2"}
+    sph_batch = {"Elómë, float32 (GPU), one call" + Q: "elome_gpu",
+                 "Elómë, float32 (GPU), one call" + H: "elome_gpu_h2",
+                 "PyTransit (RoadRunner), native arrays" + Q: "roadrunner",
+                 "PyTransit (RoadRunner), native arrays" + H: "roadrunner_h2",
+                 "PyTransit (closed form), native arrays" + Q: "pytransit",
+                 "pizzetti (loop)" + Q: "pizzetti",
+                 "jaxoplanet (`jax.vmap`, CPU)" + Q: "jaxoplanet",
+                 "exoplanet-core (loop)" + Q: "exoplanet", "batman (loop)" + Q: "batman"}
+    acc = lambda key, key_e=None: [circ[key], ecc[key_e or key]]    # noqa: E731
     sph_tables = {
         "**Accuracy**": {
-            "Elómë, float64": [circ["elome fp64"], ecc["elome fp64"]],
-            "exoplanet-core": [circ["exoplanet-core"], ecc["exoplanet-core"]],
-            "jaxoplanet": [circ["jaxoplanet (order=50)"], ecc["jaxoplanet (order=10)"]],
-            "batman": [circ["batman"], ecc["batman"]],
-            "PyTransit (quadratic model)": [circ["pytransit (exact)"], ecc["pytransit (exact)"]],
-            "Elómë, float32 (GPU)": [circ["elome fp32(GPU)"], ecc["elome fp32(GPU)"]],
-            "PyTransit (RoadRunner)": [circ["roadrunner"], ecc["roadrunner"]]},
+            "Elómë, float32 (GPU)" + Q: acc("elome fp32(GPU)"),
+            "Elómë, float32 (GPU)" + H: acc("elome fp32(GPU) hybrid2"),
+            "exoplanet-core" + Q: acc("exoplanet-core"),
+            "pizzetti (series off)" + Q: acc("pizzetti (series off)"),
+            "jaxoplanet" + Q: acc("jaxoplanet (order=50)", "jaxoplanet (order=10)"),
+            "pizzetti" + Q: acc("pizzetti"),
+            "batman" + Q: acc("batman"),
+            "PyTransit (closed form)" + Q: acc("pytransit (exact)"),
+            "PyTransit (RoadRunner)" + Q: acc("roadrunner"),
+            "PyTransit (RoadRunner)" + H: acc("roadrunner hybrid2"),
+            "Elómë, float64 (CPU)" + Q: acc("elome fp64"),
+            "Elómë, float64 (CPU)" + H: acc("elome fp64 hybrid2")},
         "**One light curve**": {
             label: [sp(c, "single", n) for n in (10**3, 10**5, 10**6, 10**7)]
             for label, c in sph_codes.items()},
@@ -390,15 +406,19 @@ def check_comparisons():
             for label, c in sph_batch.items()},
         "**Value and gradient**": {
             label: [sp(c, "grad", n) for n in (10**4, 10**5)]
-            for label, c in (("Elómë, float32 (GPU)", "elome_fp32"),
-                             ("jaxoplanet (CPU)", "jaxoplanet"),
-                             ("Elómë, float64 (CPU)", "elome_fp64"))},
+            for label, c in (("Elómë, float32 (GPU)" + Q, "elome_fp32"),
+                             ("Elómë, float32 (GPU)" + H, "elome_fp32_h2"),
+                             ("jaxoplanet (CPU)" + Q, "jaxoplanet"),
+                             ("Elómë, float64 (CPU)" + Q, "elome_fp64"),
+                             ("Elómë, float64 (CPU)" + H, "elome_fp64_h2"))},
         "**Memory**": {
             label: [sp(c, "single", n, "peak_mb") for n in (10**5, 10**7)]
             for label, c in sph_codes.items()},
     }
-    sph_cpu_e7 = min(sp(c, "ecc", 10**7) for c in sph_codes.values()
-                     if not c.startswith("elome") and "@" not in c)
+    # the CPU codes on one thread, under the law every code has
+    cpu1 = [c for c in sph_codes.values()
+            if not c.startswith("elome") and "@" not in c and not c.endswith("_h2")]
+    sph_cpu_e7 = min(sp(c, "ecc", 10**7) for c in cpu1)
     sph_prose = [
         (r"take Elómë's GPU path to (\S+ ms) at \$10\^7\$ points", sp("elome_fp32", "ecc", 10**7)),
         (r"against (\S+ ms) for the fastest CPU code", sph_cpu_e7),
@@ -412,13 +432,13 @@ def check_comparisons():
     big = str(max(lc["n_sweep"]))
     cols = ("power2", "hybrid2", "nonlinear", "hybrid4", "hybrid5")
     law_rows = {"Elómë, float64 (CPU)": "elome_fp64", "Elómë, float32 (GPU)": "elome_fp32",
-                "batman": "batman"}
+                "batman": "batman", "pizzetti": "pizzetti"}
 
     def rel(code, law):
         s = lc["speed"][code]
         return s[law][big] / s["quadratic"][big] if law in s else None
 
-    sph_tables["(`benchmarks/bench_law_cost.py`"] = {
+    sph_tables["([`benchmarks/bench_law_cost.py`](https://github.com/davidkipping/elome/blob/main/benchmarks/bench_law_cost.py)"] = {
         label: [rel(c, law) for law in cols] for label, c in law_rows.items()}
     sph_tables["against a 30-digit integral of the same law"] = {
         label: [lc["accuracy"][c].get(law) for law in ("quadratic",) + cols]
@@ -427,12 +447,11 @@ def check_comparisons():
         (r"float64 hybrid2 takes (\S+ s) at", lc["speed"]["elome_fp64"]["hybrid2"][big]),
         (r"against batman's quadratic law at (\S+ s)", lc["speed"]["batman"]["quadratic"][big]),
     ]
-    cpu1 = [c for c in sph_codes.values() if not c.startswith("elome") and "@" not in c]
     sph_claims = [(
         "spherical/accuracy-and-cost.md",
-        "RoadRunner is the fastest CPU code from 10^4 points up",
-        all(min(cpu1, key=lambda c: sp(c, "single", n)) == "roadrunner"
-            for n in (10**4, 10**5, 10**6, 10**7)))]
+        "pizzetti is the fastest CPU code at every size",
+        all(min(cpu1, key=lambda c: sp(c, "single", n)) == "pizzetti"
+            for n in (10**3, 10**4, 10**5, 10**6, 10**7)))]
 
     def compare_table(r, cols, rows):
         """rows: label -> (results key path below each code, or a callable)."""
@@ -536,8 +555,8 @@ def check_comparisons():
          fastest(rg)),
         ("reference/performance.md", "spots: faster than jaxoplanet and spotter at every resolution",
          sp_fastest()),
-        ("reference/performance.md", "float32, 10^7 points, under 300 MB for each planet type",
-         max(fp32_e7) < 300),
+        ("reference/performance.md", "float32, 10^7 points, under 400 MB for each planet type",
+         max(fp32_e7) < 400),
     ] + sph_claims
 
     n, bad = _check_pages(pages, claims)

@@ -3,6 +3,28 @@
 All notable changes to Elómë. Versioning: semantic-ish (MAJOR.MINOR.PATCH);
 every release is tagged `vX.Y.Z` in git.
 
+## [Unreleased]
+
+### Documentation
+- **pizzetti in the spherical comparison**, and the comparison under a
+  two-parameter law: the quadratic law for every code and hybrid2 for
+  the codes that take it (Elómë, and PyTransit's RoadRunner tabulating
+  it), each row naming its law and each against a 30-digit integral of
+  its own law. Elómë's float64 path comes last in each table, set back:
+  it is the CPU fallback and the kernels' reference.
+- **Benchmarks** (new reference page): the machine, every script and its
+  results, and how to run them on your own machine, with
+  `benchmarks/requirements.txt`; every mention of a benchmark script
+  links to it. `bench_speed.py` takes `--out`, `--codes`, `--rounds` and
+  `--redo`, `bench_law_cost.py` `--codes`, `make_report.py` `--speed` and
+  `--out`. Each timed call is preceded by half a second of warm-up calls,
+  so the GPU works at its own clock (macOS slows it after a second idle);
+  Elómë's float32 times below $10^6$ points are remeasured so.
+- **Linux on the front page**: built for Apple silicon, the float32
+  kernels need it; elsewhere both precisions run as MLX graphs on the
+  CPU.
+- **The landing page's path cards** are links again, on phones too.
+
 ## [0.23.1] — 2026-11-22
 
 ### Changed

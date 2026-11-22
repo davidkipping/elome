@@ -27,7 +27,7 @@ flux = elome.TransitModel(p, t).light_curve(p)        # float64: exact
 
 ## Accuracy
 
-The largest error in the flux, by law (`benchmarks/bench_large_occultor.py`).
+The largest error in the flux, by law ([`benchmarks/bench_large_occultor.py`](https://github.com/davidkipping/elome/blob/main/benchmarks/bench_large_occultor.py)).
 
 float64, against a 30-digit direct integral of the occulted intensity,
 at 41 separations for each radius, in total occultation, partial overlap

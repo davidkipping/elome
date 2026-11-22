@@ -17,6 +17,12 @@ CPU. Both run through [MLX](https://github.com/ml-explore/mlx).
   parameter sets are batched.
 - **Differentiable.** Every parameter, including the limb darkening,
   the eccentricity and the planet's shape, has an analytic gradient.
+- **Built for Apple silicon, runs on Linux too.** The fused float32
+  kernels need a Mac with Apple silicon, and that is where Elómë is
+  fast. Elsewhere both precisions run as MLX graphs on the CPU, with the
+  same light curves and gradients but without the kernels' speed; the
+  test suite passes on Linux (ARM, MLX's CPU backend). See
+  {doc}`getting-started/installation`.
 - **Spherical, oblate and ringed planets, spotted stars, and moons.** A
   flattened planet's light curve, a ringed one's, a spotted star's and a
   planet's with its moon stay elementary with the *hybrid*
@@ -246,6 +252,7 @@ tutorials/04_starspots_on_hat_p_11
 reference/api
 reference/hybrid-laws
 reference/performance
+reference/benchmarks
 reference/how-it-works
 ```
 

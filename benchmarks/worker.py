@@ -28,7 +28,7 @@ def main():
     code, mode, n = sys.argv[1], sys.argv[2], int(sys.argv[3])
     max_reps = int(sys.argv[4]) if len(sys.argv) > 4 else 15
     nthreads = int(os.environ.get("BENCH_NTHREADS", "1"))
-    for mod in adapters.IMPORTS[code.split("_")[0]]:
+    for mod in adapters.IMPORTS.get(code, adapters.IMPORTS[code.split("_")[0]]):
         importlib.import_module(mod)    # not counted in the memory
     watch = MemWatch()
 
@@ -49,6 +49,13 @@ def main():
         run = getattr(adapters, f"{code}_grad_run")
     else:
         raise SystemExit(f"unknown mode {mode}")
+
+    # warm-up outside the timed region: half a second of calls, so the
+    # device works at its own clock (macOS clocks the GPU down after about
+    # a second idle, which adds ~0.4 ms to a GPU call below 1e6 points)
+    t_end = time.perf_counter() + 0.5
+    while time.perf_counter() < t_end:
+        run(state)
 
     # adaptive repetitions: at least 3, stop when total > 1.5 s or max_reps
     ts = []

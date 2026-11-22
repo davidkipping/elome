@@ -227,7 +227,7 @@ any error:
    transforms impose such bounds for you; emcee does not.
 2. **Compile the likelihood.** `mx.compile` fuses the reduction. The same
    likelihood run eagerly is about 1.5 times as slow at 1024 × 65,536
-   points (29.3 against 19.7 ms, `benchmarks/bench_vjp.py`).
+   points (29.3 against 19.7 ms, [`benchmarks/bench_vjp.py`](https://github.com/davidkipping/elome/blob/main/benchmarks/bench_vjp.py)).
 3. **Use `ChunkedGaussianLogLike`, not a bare `mx.sum`.** A single
    float32 sum over a long light curve accumulates rounding towards the
    scale of a Metropolis decision. The chunked tree (16,384-point chunks
@@ -249,7 +249,7 @@ time grows linearly with the number of chains.
 ChEES-HMC adapts its step size but is given a ceiling on the trajectory
 length, `max_leapfrog`. That ceiling matters a great deal, and in
 opposite directions on the two models. With 256 chains, 300 warmup and
-200 samples on 20,000 points (`benchmarks/bench_leapfrog_cap.py`):
+200 samples on 20,000 points ([`benchmarks/bench_leapfrog_cap.py`](https://github.com/davidkipping/elome/blob/main/benchmarks/bench_leapfrog_cap.py)):
 
 | `max_leapfrog` | circular, 8 parameters | eccentric, 10 parameters |
 |---:|---|---|
@@ -270,7 +270,7 @@ for your problem: it is two lines of configuration.
 ### What to expect from the eccentric model
 
 From the reference run (`examples/chees_ecc.py`, measured by
-`benchmarks/ecc_sampling_geometry.py`):
+[`benchmarks/ecc_sampling_geometry.py`](https://github.com/davidkipping/elome/blob/main/benchmarks/ecc_sampling_geometry.py)):
 
 1. **Give it a long warmup.** ChEES produced about 1% divergences after
    200 warmup iterations and none after 400–600. They come from the

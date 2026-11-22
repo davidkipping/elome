@@ -27,3 +27,7 @@ html[data-theme="dark"] .sd-card.path-card::before { opacity: 0.85; }
 .path-ringed::before { background-image: url("cards/ringed.svg"); }
 .path-spots::before { background-image: url("cards/spots.svg"); }
 .path-moons::before { background-image: url("cards/moons.svg"); }
+/* a table row marked [label]{.fallback} -- Elómë's float64 path in the
+   cross-code comparisons, its CPU fallback and reference: set back */
+tr:has(.fallback) { opacity: 0.45; }
+tr:has(.fallback) td { font-style: italic; }

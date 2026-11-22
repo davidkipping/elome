@@ -37,11 +37,13 @@ can start at exactly 0.
 
 ## Cost
 
+Measured on an Apple M2 Max; each table names the script that produced it, and {doc}`../reference/benchmarks` says how to run them on your own machine.
+
 Every outline -- the planet and both ring edges -- is integrated, and
 each splits into arcs where it crosses the others, so a ringed planet
 costs about 10–20 times an oblate one. Fused float32 kernels, 512 chains
 × 5,000 points around a transit, a spherical planet with a ring
-(`benchmarks/bench_rings.py`, M2 Max):
+([`benchmarks/bench_rings.py`](https://github.com/davidkipping/elome/blob/main/benchmarks/bench_rings.py), M2 Max):
 
 | | forward | vs oblate | value + gradient | vs oblate |
 |---|---:|---:|---:|---:|
@@ -82,7 +84,7 @@ with a ring from 1.4 to 2.6 planet radii, `ring_f = 0.7` and its long
 axis at 25° to the motion, so the ring crosses the planet's disc; and
 the one limb-darkening profile every code expresses exactly,
 $I(\mu) = 1 - 0.5\,(1 - \mu^2)$. The reference is an independent float64
-ray integral (`benchmarks/ring_compare/`):
+ray integral ([`benchmarks/ring_compare/`](https://github.com/davidkipping/elome/tree/main/benchmarks/ring_compare)):
 
 | | Elómë float32 (GPU) | pyPplusS | squishyplanet | JoJo | pryngles | Elómë float64 (CPU) |
 |---|---:|---:|---:|---:|---:|---:|
