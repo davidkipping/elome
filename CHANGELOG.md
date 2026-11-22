@@ -3,7 +3,7 @@
 All notable changes to Elómë. Versioning: semantic-ish (MAJOR.MINOR.PATCH);
 every release is tagged `vX.Y.Z` in git.
 
-## [Unreleased]
+## [0.23.2] — 2026-11-22
 
 ### Documentation
 - **pizzetti in the spherical comparison**, and the comparison under a
