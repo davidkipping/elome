@@ -111,7 +111,7 @@ a spherical planet, and a moon orbits one.
 | transit timing variations | ✓ | ✓ | ✓ | ✓ | the moon's |
 | batches of parameter sets | ✓ | ✓ | ✓ | ✓ | ✓ |
 | gradients in every parameter | ✓ | ✓ | ✓ | ✓ | ✓ |
-| float32 GPU kernels | ✓ | ✓ | ✓ | ✓ | ✗ |
+| float32 GPU kernels | ✓ | ✓ | ✓ | ✓ | the photometry |
 | occultor larger than the star | ✓ | ✗ | ✓ | ✓ | ✗ |
 | `anvil` fitting target | ✓ | ✗ | ✗ | ✓ | ✓ |
 
@@ -138,8 +138,9 @@ a spherical planet, and a moon orbits one.
   exact for each disc and take a closure where the two overlap on the
   star (see {doc}`moons/accuracy-and-fitting`). The planet's transit
   times and durations vary as it circles the barycentre with its moon;
-  the barycentre itself follows one linear ephemeris. float32 runs the
-  same graph as float64, on the GPU.
+  the barycentre itself follows one linear ephemeris. In float32 each
+  disc and the overlap run in Metal kernels, the orbits as MLX
+  operations around them.
 - **`anvil` fitting target** (`make_transit_target`): the quadratic or a
   hybrid law; finite exposures with a hybrid law, an eclipse or a moon.
 

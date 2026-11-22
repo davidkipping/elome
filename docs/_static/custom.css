@@ -14,7 +14,9 @@ table.docutils td, table.docutils th { padding: 0.25rem 0.6rem; }
   mask-image: linear-gradient(to right, transparent 45%, #000 72%);
 }
 html[data-theme="dark"] .sd-card.path-card::before { opacity: 0.85; }
-.sd-card.path-card > * { position: relative; }
+/* the text above the image; not the stretched link, whose overlay must
+   cover the whole card (positioned, it would cover only itself) */
+.sd-card.path-card > *:not(.sd-stretched-link) { position: relative; }
 /* the theme paints the card body opaque: paint the card instead */
 .bd-content .sd-card.path-card { background-color: var(--pst-color-on-background); }
 .bd-content .sd-card.path-card .sd-card-body {
