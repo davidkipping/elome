@@ -3,7 +3,7 @@
 All notable changes to Elómë. Versioning: semantic-ish (MAJOR.MINOR.PATCH);
 every release is tagged `vX.Y.Z` in git.
 
-## [Unreleased]
+## [0.25.0] — 2026-11-23
 
 ### Fixed
 - **float32 light curves keep their accuracy over any baseline.** A
