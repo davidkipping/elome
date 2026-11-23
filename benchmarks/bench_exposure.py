@@ -12,6 +12,7 @@ import os
 import numpy as np
 
 import elome
+import mlx.core as mx
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 T = np.linspace(-0.13, 0.13, 261)
@@ -22,7 +23,7 @@ def model(**kw):
     p = elome.TransitParams()
     p.t0, p.per, p.rp, p.a, p.inc = 0.0, 3.456, 0.1, 8.8, 87.07
     p.ecc, p.w, p.u, p.limb_dark = 0.0, 90.0, [0.4, 0.25], "quadratic"
-    return elome.TransitModel(p, T, **kw), p
+    return elome.TransitModel(p, T, dtype=mx.float64, **kw), p
 
 
 def main():

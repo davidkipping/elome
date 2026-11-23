@@ -98,25 +98,38 @@ dtype, is differentiable, and compiles.
 (long-baselines)=
 ## Long baselines in float32
 
-In float32, the orbital phase loses precision when the data span many
-orbits. The frontend re-centres the times on their midpoint in float64,
-and moves `t0` by whole periods to the transit nearest that midpoint, so
-absolute times and a distant `t0` cost nothing, but float32 still
-sees times up to half the data's span. Measured through the frontend
-for $P = 10$ days and $r_p = 0.1$ on a circular orbit, with transits at
-both ends of the span ([`benchmarks/verify_doc_claims.py`](https://github.com/davidkipping/elome/blob/main/benchmarks/verify_doc_claims.py)), the maximum
-flux error is $2.7\times10^{-7}$ for a span of one orbit,
-$1.6\times10^{-5}$ for 100, and $2.6\times10^{-4}$ for 1,000. For
-long baselines in float32, use the models below, or float64.
+A float32 time far from `t0` carries a large rounding error, and so does
+the period, once multiplied by the number of orbits in between. So a
+float32 `TransitModel` splits each time, in float64 on the host, into
+its orbit number $k$ and its residual from that orbit's transit, using
+the `t0` and `per` it was built with. A call with a new `t0` or `per`
+moves each residual by $k$ times the change in period, also formed
+exactly, so float32 only ever sees times within about half a period of a
+transit, however long the baseline and however large the times (BJD
+included). Measured through the frontend for $P = 10$ days and
+$r_p = 0.1$ on a circular orbit, with transits at both ends of the span
+([`benchmarks/verify_doc_claims.py`](https://github.com/davidkipping/elome/blob/main/benchmarks/verify_doc_claims.py)),
+the maximum flux error is $1.8\times10^{-7}$ for a span of one orbit,
+and the same for 100 and for 1,000 orbits. The gradients in `t0` and
+`per` stay differentiable through the split, `light_curves` splits each
+set the same way, and a call whose period has moved so far that
+$k$ times the change would pass a quarter period re-splits the times on
+its own ephemeris (a period that is being differentiated cannot be read,
+so there the split stays, and precision degrades gradually instead).
 
-The fix is to split each time, in float64 on the host, into an orbit
-number and a residual within the orbit, which is what
-`elome.orbit.epoch_center_times` does. The anvil models and
-`make_transit_target` take times in that form, and are then good to
-about $10^{-7}$ in flux for circular orbits and $10^{-6}$ for eccentric
-ones up to $e = 0.999$. For per-transit models, `flux_dev_from_tau` takes
-the time since each point's own mid-transit, which is small by
-construction.
+The split needs a signal that repeats with the period: primary transits
+and secondary eclipses, circular or eccentric, and oblate, ringed and
+tidally locked planets. A spotted star turns with `prot`, not `per`, so
+its model keeps times re-centred on their midpoint, and its float32
+error grows with the span as it did before (to $3\times10^{-5}$ over
+2,000 days for a 3-day orbit); use float64 there. A planet with
+a moon has epoch references of its own and is fine at any baseline.
+
+The anvil models and `make_transit_target` take times already split by
+`elome.orbit.epoch_center_times`, and are good to about $10^{-7}$ in
+flux for circular orbits and $10^{-6}$ for eccentric ones up to
+$e = 0.999$. For per-transit models, `flux_dev_from_tau` takes the time
+since each point's own mid-transit, which is small by construction.
 
 ## Eccentricity near zero
 

@@ -81,10 +81,10 @@ computes the orbit and the photometry together, and under the contact
 rule the exposure too. (The polynomial law has no kernel and runs as an
 MLX graph.) It is accurate to about
 $2\times10^{-7}$ in flux and computes $10^7$ points in about 10 ms.
-Absolute mission times (BJD, BTJD) are fine in both precisions: in
-float32 the model re-centres the times on the host, in float64, before
-anything reaches the GPU. Over a baseline of hundreds of orbits the
-float32 orbital phase itself loses precision; see {ref}`long-baselines`.
+Absolute mission times (BJD, BTJD) are fine in both precisions, over any
+baseline: in float32 the model splits each time on the host, in float64,
+into its orbit number and its time from that orbit's transit, before
+anything reaches the GPU; see {ref}`long-baselines`.
 
 ## Eccentric orbits
 

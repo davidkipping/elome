@@ -73,8 +73,7 @@ def check():
             f"{round(claims['lcs_vs_loop']['speedup'], -2):.0f} times faster",
             "several\nhundred times faster with array-valued fields"],
         "guides/gradients-and-precision.md": [
-            f"${_latex(w['1'])}$ for a span of one orbit",
-            f"${_latex(w['100'])}$ for 100", f"${_latex(w['1000'])}$ for 1,000"],
+            f"${_latex(w['1'])}$ for a span of one orbit, and the same for 100"],
     }
     bad = []
     for page, needles in expect.items():
@@ -82,6 +81,9 @@ def check():
         text = " ".join(open(os.path.join(DOCS, page)).read().split())
         bad += [f"{page}: missing {n!r}" for n in needles
                 if " ".join(n.split()) not in text]
+    if not w["1"] == w["100"] == w["1000"]:
+        bad.append("guides/gradients-and-precision.md: the float32 error is no "
+                   f"longer the same at every span ({w})")
     if not 200 <= claims["lcs_vs_loop"]["speedup_arrays"] < 1000:
         bad.append("guides/batching.md: 'several hundred times' no longer holds "
                    f"({claims['lcs_vs_loop']['speedup_arrays']})")
@@ -642,7 +644,7 @@ if want("fp32_baseline_flux_error"):
         win = np.linspace(-0.15, 0.15, 4001)
         t = np.concatenate([win, n_orbits * per + win])
         f32 = TransitModel(p, t, dtype=mx.float32).light_curve(p)
-        f64 = TransitModel(p, t).light_curve(p)
+        f64 = TransitModel(p, t, dtype=mx.float64).light_curve(p)
         wrap[str(n_orbits)] = float(np.abs(f32 - f64).max())
     out["fp32_baseline_flux_error"] = {k: f"{v:.1e}" for k, v in wrap.items()}
     print("fp32_baseline_flux_error:", out["fp32_baseline_flux_error"], flush=True)

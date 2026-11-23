@@ -103,7 +103,7 @@ def cpu_worker(rule, grad, reps):
     p.spots, p.prot = [list(s) for s in SPOTS[:2]], PROT
     t = np.linspace(-0.14, 0.14, 1000)
     kw = dict(exp_time=EXP, integration="contact", n_gl=5) if rule == "contact" else {}
-    m = elome.TransitModel(p, t, **kw)
+    m = elome.TransitModel(p, t, dtype=mx.float64, **kw)
     ct = mx.array(np.random.default_rng(3).normal(size=t.size), dtype=mx.float64)
 
     def loss(spots, prot, istar, lam):

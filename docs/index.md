@@ -60,8 +60,8 @@ and secondary eclipses, and so do batman's orbit helpers
 `get_true_anomaly`); its `max_err`, `nthreads` and `fac` are accepted and
 ignored, since every law here is a closed form. On a Mac with Apple
 Silicon the light curve is computed on the GPU, in float32, to about
-$10^{-7}$ of the flux; `dtype=mx.float64` gives the exact float64 path on
-the CPU. On an Apple M2 Max, under the quadratic law, against batman on one
+$10^{-7}$ of the flux, with absolute times (BJD, BTJD) over any baseline;
+`dtype=mx.float64` gives the exact float64 path on the CPU. On an Apple M2 Max, under the quadratic law, against batman on one
 thread:
 
 | | batman | Elómë (GPU) |

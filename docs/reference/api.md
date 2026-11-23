@@ -77,18 +77,23 @@ Args:
     params: TransitParams (validated here; values may change between
         light_curve calls, but the limb-darkening *law* and the
         transit type are fixed per model).
-    t: times, same units as params.t0/per (absolute values are fine:
-        they are re-centred on the host in float64 first).
+    t: times, same units as params.t0/per (absolute values are fine,
+        over any baseline: they are reduced on the host in float64
+        first).
     transittype: "primary" or "secondary".
     supersample_factor: average this many samples over exp_time.
     exp_time: exposure time (same units as t).
     dtype: mx.float32 (the GPU kernels, about 1e-7 in flux) or
         mx.float64 (the CPU, exact to rounding). None (default): float32
         where the Metal kernels run -- a Mac with Apple Silicon, MLX's
-        default device the GPU -- and float64 elsewhere. In float32 the
-        times are re-centred on the host in float64 first, so absolute
-        mission times are fine; over hundreds of orbits the float32
-        phase loses precision.
+        default device the GPU -- and float64 elsewhere. In float32 each
+        time is split on the host, in float64, into its orbit number and
+        its residual from that orbit's transit (of the t0 and per given
+        here), so absolute mission times keep float32's accuracy over
+        any baseline, and a later call's t0 and per move the residuals
+        exactly. A spotted star, which turns with prot rather than per,
+        keeps times re-centred on their midpoint instead, and loses
+        float32 precision over hundreds of orbits.
     integration: "supersample" (batman's rule) or "contact"
         (Gauss-Legendre on windows split at the contact times).
     n_gl: Gauss-Legendre nodes per piece for "contact" (7 here; the

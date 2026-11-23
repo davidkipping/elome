@@ -3,6 +3,23 @@
 All notable changes to Elómë. Versioning: semantic-ish (MAJOR.MINOR.PATCH);
 every release is tagged `vX.Y.Z` in git.
 
+## [Unreleased]
+
+### Fixed
+- **float32 light curves keep their accuracy over any baseline.** A
+  float32 `TransitModel` now splits each time, in float64 on the host,
+  into its orbit number and its residual from that orbit's transit, and
+  a call with a new `t0` or `per` moves the residuals exactly (and
+  differentiably). The error no longer grows with the span of the data:
+  over 2,000 days of absolute times it was $3\times10^{-5}$ to
+  $9\times10^{-5}$ of the flux and is now within $3\times10^{-7}$, the
+  same as next to `t0`, for primary transits and secondary eclipses,
+  circular or eccentric, every law and exposure rule, and oblate, ringed
+  and tidally locked planets, in `light_curve`, `light_curves` and
+  `light_curve_mx`. A spotted star, which turns with `prot` rather than
+  `per`, keeps the earlier behaviour; a planet with a moon was already
+  fine. float64 is unchanged.
+
 ## [0.24.1] — 2026-11-22
 
 ### Documentation

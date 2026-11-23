@@ -402,6 +402,21 @@ def _scalar_value(x):
         return None
 
 
+def _host_ephemeris(params):
+    """(t0, per) as host floats, for a float32 model's epoch fold, or None
+    where either cannot be read or is no ephemeris (TransitModel._set_fold)."""
+    vals = []
+    for x in (params.t0, params.per):
+        try:
+            v = _scalar_value(x) if isinstance(x, mx.array) else float(x)
+        except (TypeError, ValueError):
+            return None
+        if v is None or not math.isfinite(v):
+            return None
+        vals.append(v)
+    return tuple(vals) if vals[1] > 0.0 else None
+
+
 class _nullcontext:
     def __enter__(self):
         return None
@@ -575,18 +590,23 @@ class TransitModel:
         params: TransitParams (validated here; values may change between
             light_curve calls, but the limb-darkening *law* and the
             transit type are fixed per model).
-        t: times, same units as params.t0/per (absolute values are fine:
-            they are re-centred on the host in float64 first).
+        t: times, same units as params.t0/per (absolute values are fine,
+            over any baseline: they are reduced on the host in float64
+            first).
         transittype: "primary" or "secondary".
         supersample_factor: average this many samples over exp_time.
         exp_time: exposure time (same units as t).
         dtype: mx.float32 (the GPU kernels, about 1e-7 in flux) or
             mx.float64 (the CPU, exact to rounding). None (default): float32
             where the Metal kernels run -- a Mac with Apple Silicon, MLX's
-            default device the GPU -- and float64 elsewhere. In float32 the
-            times are re-centred on the host in float64 first, so absolute
-            mission times are fine; over hundreds of orbits the float32
-            phase loses precision.
+            default device the GPU -- and float64 elsewhere. In float32 each
+            time is split on the host, in float64, into its orbit number and
+            its residual from that orbit's transit (of the t0 and per given
+            here), so absolute mission times keep float32's accuracy over
+            any baseline, and a later call's t0 and per move the residuals
+            exactly. A spotted star, which turns with prot rather than per,
+            keeps times re-centred on their midpoint instead, and loses
+            float32 precision over hundreds of orbits.
         integration: "supersample" (batman's rule) or "contact"
             (Gauss-Legendre on windows split at the contact times).
         n_gl: Gauss-Legendre nodes per piece for "contact" (7 here; the
@@ -747,6 +767,17 @@ class TransitModel:
         # own count; an mx.array one (which may be traced) by this one,
         # from the parameters the model was built with.
         self._n_fold = 0
+        # (7) A periodic model's float32 times are then folded per point
+        # (_set_fold): each time is replaced by its residual from its own
+        # transit of the build ephemeris, so the device never sees more
+        # than half a period, however long the baseline. Not where the
+        # signal is not periodic in per: a spotted star turns with prot,
+        # and a moon's route keeps its own references (_moon_setup).
+        self._fold = None
+        if self._t_ref != 0.0 and not (self._spotted or self._mooned):
+            ref = _host_ephemeris(params)
+            if ref is not None:
+                self._set_fold(*ref)
         if self._t_ref != 0.0:
             try:
                 n = round((float(params.t0) - self._t_ref) / float(params.per))
@@ -756,6 +787,83 @@ class TransitModel:
         self._compiled_sets = {}
         self._large = None
         self._moon_ref = self._moon_setup(params) if self._mooned else None
+
+    # -- the per-point epoch fold of a float32 model ----------------------
+    #
+    # Every float32 route sees time only through (t - t0) modulo the
+    # period. So with the build ephemeris (t0_b, per_b) each time is held
+    # as t = t0_b + k per_b + d, k its orbit number (exact in float32 below
+    # 2^24) and d its residual (|d| <= per_b / 2), split in float64 on the
+    # host. A call at (t0, per) is then evaluated at the time
+    #     d - k (per - per_b),  with t0 - t0_b (less whole periods) for t0,
+    # which differs from t - t0 by whole periods of per. Both terms are
+    # small, so float32 resolves them as it resolves a time near t0 -- the
+    # anvil data contract (orbit.epoch_center_times). per - per_b is formed
+    # in float64 for a host period (k multiplies its error) and exactly in
+    # float32 for a float32 array, which is differentiable (_fold_offset).
+    # The fused model kernel takes (d, k) and per - per_b natively.
+
+    _REFOLD = 0.25     # refold when |k (per - per_b)| could pass this many periods
+
+    def _set_fold(self, t0_b, per_b):
+        """Fold this model's times on the ephemeris (t0_b, per_b): host
+        float64 throughout. False (and nothing changed) where it cannot."""
+        k = np.round((self._t_super - t0_b) / per_b)
+        if not np.all(np.isfinite(k)) or np.max(np.abs(k)) >= 2 ** 24:
+            return False
+        d = self._t_super - t0_b - k * per_b
+        self._fold = (float(t0_b), float(per_b))
+        self._k_max = float(np.max(np.abs(k)))
+        self._t_ref = float(t0_b)           # _prep folds t0 - t0_b by periods
+        self._t_np = self._t_super - self._t_ref
+        self._t_mx = mx.array(d, dtype=self.dtype)
+        self._k_mx = mx.array(k, dtype=self.dtype)
+        self._xdat = mx.stack([self._t_mx, self._k_mx])
+        hi = float(np.float32(per_b))
+        self._per_hi, self._per_lo = hi, float(np.float32(per_b - hi))
+        # the model kernel holds per_b as a constant: graphs traced on an
+        # earlier fold must go
+        self._compiled_sets = {}
+        return True
+
+    def _refold(self, t0, per):
+        """Refold on host values (t0, per) when the call's period is so far
+        from the fold's that k (per - per_b) would grow past _REFOLD
+        periods, and float32 would carry it into every phase."""
+        if self._fold is None:
+            return
+        try:
+            t0, per = float(t0), float(per)
+        except (TypeError, ValueError):
+            return
+        per_b = self._fold[1]
+        if not (math.isfinite(t0) and math.isfinite(per) and per > 0.0):
+            return
+        if self._k_max * abs(per - per_b) > self._REFOLD * per_b:
+            self._set_fold(t0, per)
+
+    def _fold_offset(self, per_in, is_arr):
+        """per - per_b in the model dtype, or None where it is exactly 0:
+        float64 on the host for a host period, and for a float32 array
+        (per - hi) - lo, hi + lo = per_b: per - hi is exact (Sterbenz), so
+        the difference is exact to rounding and stays in the graph."""
+        per_b = self._fold[1]
+        if not is_arr(per_in):
+            off = float(per_in) - per_b
+            return None if off == 0.0 else mx.array(off, dtype=self.dtype)
+        if per_in.dtype == mx.float64:
+            with mx.stream(mx.cpu):
+                return (per_in - per_b).astype(self.dtype)
+        p = per_in.astype(self.dtype)
+        return (p - self._per_hi) - self._per_lo
+
+    def _dev_times(self, per_in, is_arr):
+        """The times a single-set route evaluates: self._t_mx, less
+        k (per - per_b) on a folded model."""
+        if self._fold is None:
+            return self._t_mx
+        off = self._fold_offset(per_in, is_arr)
+        return self._t_mx if off is None else self._t_mx - self._k_mx * off
 
     def _moon_setup(self, params):
         """The moon route's host data: references (t0, per, moon_per) taken
@@ -949,6 +1057,14 @@ class TransitModel:
             return False
         return metal_available() and _gpu_stream_active()
 
+    def _model_kernel(self, ew: bool = False) -> bool:
+        """Does _get_compiled serve this model with the fused *model*
+        kernel? Primary transits with a quadratic-family law, on the (k, h)
+        or circular graph, without the contact rule, where a kernel can
+        run (see _get_compiled)."""
+        return (not ew and not self._n_vec and self.transittype == "primary"
+                and self.integration != "contact" and self._kernel_usable())
+
     def _get_compiled(self, circular: bool, ew: bool = False):
         """The compiled model graph, (t, *params) -> flux with ``t`` the
         times (self._t_mx, or the subset _event_view selects). ``ew``
@@ -972,9 +1088,7 @@ class TransitModel:
         # (quadratic or hybrid) through _photom, decided inside the trace,
         # which mx.compile keeps per stream: no key needed.
         contact = self.integration == "contact"
-        kernel_branch = (not ew and not vec and self.transittype == "primary"
-                         and not contact)
-        kern = kernel_branch and self._kernel_usable()
+        kern = self._model_kernel(ew)
         key = "ew" if ew else (circular, kern)
         fn = self._compiled.get(key)
         if fn is not None:
@@ -1060,11 +1174,13 @@ class TransitModel:
             # for why period_ref is 0 and the period rides p_off.
             from .anchored import pack_orbit_constants
             from .metal import make_model_core_metal
-            core = make_model_core_metal(0.0)
+            fold = self._fold
+            core = make_model_core_metal(0.0 if fold is None else fold[1])
 
             def raw(t, t0, per, a, b, rp, u1, u2, fp):
-                m = t.shape[0]
-                xdat = mx.stack([t, mx.zeros_like(t)])
+                # folded (_set_fold): t is (d, k) and per is per - per_b
+                xdat = t if fold is not None else mx.stack([t, mx.zeros_like(t)])
+                m = xdat.shape[1]
 
                 def col(v):
                     return mx.reshape(v, (1,))
@@ -1099,11 +1215,13 @@ class TransitModel:
             # dphi/dP for k = 0.
             from .anchored import pack_orbit_constants
             from .metal import make_model_core_metal
-            core = make_model_core_metal(0.0)
+            fold = self._fold
+            core = make_model_core_metal(0.0 if fold is None else fold[1])
 
             def raw(t, t0, per, a, k, h, ci, rp, u1, u2, fp):
-                m = t.shape[0]
-                xdat = mx.stack([t, mx.zeros_like(t)])
+                # folded (_set_fold): t is (d, k) and per is per - per_b
+                xdat = t if fold is not None else mx.stack([t, mx.zeros_like(t)])
+                m = xdat.shape[1]
 
                 def col(v):
                     return mx.reshape(v, (1,))
@@ -1312,6 +1430,7 @@ class TransitModel:
             return cast(math.radians(float(x)))   # on the host, in fp64
 
         self._require(lambda k: getattr(params, k), self._required_fields())
+        self._refold(params.t0, params.per)
         if self._mooned:
             return self._moon_eval(params, uv, cast, rad, is_arr)
         if self._spotted:
@@ -1331,10 +1450,10 @@ class TransitModel:
 
         route = self._ecc_route(params, cast, rad, is_arr)
         view = self._event_view(params)
-        t = self._t_mx if view is None else view[0]
+        t = self._dev_times(params.per, is_arr) if view is None else view[0]
         graph_first = route[0] == "circ" and not grad and self._circ_graph_faster()
         if route[0] != "ew" and self._tau_kernels() and not graph_first:
-            head = (self._t_mx, t0_off, per, a)
+            head = (t, t0_off, per, a)
             last = (fp,) if self.transittype == "secondary" else ld
             if route[0] == "circ":
                 b = (a * ci if is_arr(params.a) or is_arr(params.inc)
@@ -1345,6 +1464,10 @@ class TransitModel:
                 b = contact_geometry(a, cast(ev), h * sq, ci)[1]  # e sin w = h sqrt(e)
                 f = self._sph_tau_fn("kh")(*head, b, rp, *last, k, h)
             return self._apply_masks(f, gmask)
+        if self._fold is not None and route[0] != "ew" and self._model_kernel():
+            # the model kernel folds natively: (d, k) and per - per_b
+            off = self._fold_offset(params.per, is_arr)
+            t, per = self._xdat, (mx.zeros((), dtype=dt) if off is None else off)
         if route[0] == "ew":
             _, e, wr, emask = route
             f = self._get_compiled(False, ew=True)(
@@ -1674,7 +1797,8 @@ class TransitModel:
         f = cast(params.tidal_q if self._tidal else params.f)
         th = rad(0.0 if params.theta is None else params.theta)
         view = self._event_view(params)
-        head = (self._t_mx if view is None else view[0], t0_off, per, a)
+        head = (self._dev_times(params.per, is_arr) if view is None else view[0],
+                t0_off, per, a)
         mu = ()
         if self._tidal:
             mu = (cast(0.0 if params.mass_ratio is None else params.mass_ratio),)
@@ -1753,7 +1877,8 @@ class TransitModel:
                 cast(params.ring_in), cast(params.ring_out),
                 cast(params.ring_f), cast(tau))
         view = self._event_view(params)
-        head = (self._t_mx if view is None else view[0], t0_off, per, a)
+        head = (self._dev_times(params.per, is_arr) if view is None else view[0],
+                t0_off, per, a)
         route = self._ecc_route(params, cast, rad, is_arr)
         if route[0] == "ew":
             _, e, wr, emask = route
@@ -2227,8 +2352,22 @@ class TransitModel:
                               cols["ecc"], cols["w"], self._view_extent(
                                   cols["rp"], cols.get("f"),
                                   cols.get("ring_out")))
+        off = None
+        if self._fold is not None:
+            # the epoch fold (_set_fold), refolded on the sets' median
+            # period where one set's would grow past _REFOLD periods
+            per_b = self._fold[1]
+            if (self._k_max * np.max(np.abs(cols["per"] - per_b))
+                    > self._REFOLD * per_b):
+                self._set_fold(float(cols["t0"][0]), float(np.median(cols["per"])))
+            off = cols["per"] - self._fold[1]
+            off = off if np.any(off != 0.0) else None
         with ctx, large_occultors(self._large):
             tt = (self._t_mx if view is None else view[0])[None, :]
+            pof = None
+            if off is not None:
+                pof = col(off)
+                tt = tt - self._k_mx[None, :] * pof
             # t0 - t_ref folded by whole periods, as in _prep
             d0 = cols["t0"] - self._t_ref
             if self._t_ref != 0.0:
@@ -2314,7 +2453,7 @@ class TransitModel:
                     sqrt=np.sqrt, maximum=np.maximum)[1]
                 last = ((fp,) if self.transittype == "secondary"
                         else (uvec,) if self._n_vec else (u1, u2))
-                args = (self._t_mx[None, :], t0, per, a, col(b_np), rp, *last)
+                args = (tt, t0, per, a, col(b_np), rp, *last)
                 if bool(np.any(ecc > 0.0)):
                     out = self._sph_tau_fn("kh")(*args, k, h)
                 else:
@@ -2335,7 +2474,11 @@ class TransitModel:
                 # light_curve's bit for bit.
                 b_circ = col(cols["a"] * np.cos(inc))
                 ci_k = mx.where(col(ecc == 0.0) > 0, b_circ / a, ci)
-                out = self._batch_kernel_fn()(t0, per, rp, a, k, h, ci_k,
+                # folded, the kernel takes per - per_b (_batch_kernel_fn)
+                p_k = per
+                if self._fold is not None:
+                    p_k = pof if pof is not None else mx.zeros_like(per)
+                out = self._batch_kernel_fn()(t0, p_k, rp, a, k, h, ci_k,
                                               u1, u2)
             else:
                 ld = (uvec,) if self._n_vec else (u1, u2)
@@ -2402,9 +2545,15 @@ class TransitModel:
         if fn is None:
             from .anchored import pack_orbit_constants
             from .metal import make_model_core_metal
-            core = make_model_core_metal(0.0)
-            tt = self._t_mx
-            xdat = mx.stack([tt, mx.zeros_like(tt)])
+            # folded (_set_fold): the times are (d, k) on the fold's
+            # period, and ``per`` is per - per_b
+            if self._fold is None:
+                core = make_model_core_metal(0.0)
+                tt = self._t_mx
+                xdat = mx.stack([tt, mx.zeros_like(tt)])
+            else:
+                core = make_model_core_metal(self._fold[1])
+                xdat = self._xdat
 
             def raw(t0, per, rp, a, k, h, ci, u1, u2):
                 n = t0.shape[0]

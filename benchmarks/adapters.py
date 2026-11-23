@@ -52,8 +52,9 @@ def _mp_params(law="quadratic"):
 
 def elome_fp64_prepare(n, law="quadratic"):
     import elome
+    import mlx.core as mx
     p = _mp_params(law)
-    m = elome.TransitModel(p, time_grid(n))
+    m = elome.TransitModel(p, time_grid(n), dtype=mx.float64)
     m.light_curve(p)  # warm
     return (m, p)
 
@@ -486,8 +487,9 @@ def _mp_params_ecc(law="quadratic"):
 
 def elome_fp64_ecc_prepare(n):
     import elome
+    import mlx.core as mx
     p = _mp_params_ecc()
-    m = elome.TransitModel(p, time_grid_ecc(n))
+    m = elome.TransitModel(p, time_grid_ecc(n), dtype=mx.float64)
     m.light_curve(p)
     return (m, p)
 
@@ -638,8 +640,9 @@ def elome_fp32_h2_prepare(n):
 
 def elome_fp64_h2_ecc_prepare(n):
     import elome
+    import mlx.core as mx
     p = _mp_params_ecc("hybrid2")
-    m = elome.TransitModel(p, time_grid_ecc(n))
+    m = elome.TransitModel(p, time_grid_ecc(n), dtype=mx.float64)
     m.light_curve(p)
     return (m, p)
 
